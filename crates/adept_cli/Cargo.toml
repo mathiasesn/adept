@@ -1,0 +1,17 @@
+[package]
+name = "adept_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CLI binary (`adept`) for linting, formatting, and scoring Agent Skills. Owned by the CLI agent."
+
+[[bin]]
+name = "adept"
+path = "src/main.rs"
+
+[dependencies]
+adept = { workspace = true }
+adept_fmt = { workspace = true }
+adept_score = { workspace = true }

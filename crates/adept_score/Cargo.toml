@@ -1,0 +1,11 @@
+[package]
+name = "adept_score"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "LLM-assisted scoring (triggering accuracy, overlap detection) for Agent Skills. Owned by the scorer agent."
+
+[dependencies]
+adept = { workspace = true }

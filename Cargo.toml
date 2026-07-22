@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/adept",
+    "crates/adept_fmt",
+    "crates/adept_score",
+    "crates/adept_cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mathiasesn1/adept"
+rust-version = "1.85"
+
+[workspace.dependencies]
+adept = { path = "crates/adept" }
+adept_fmt = { path = "crates/adept_fmt" }
+adept_score = { path = "crates/adept_score" }
+
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+walkdir = "2"
+pulldown-cmark = "0.12"
+tiktoken-rs = "0.12"
+clap = { version = "4", features = ["derive"] }
+insta = "1"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+anstyle = "1"
+owo-colors = "4"

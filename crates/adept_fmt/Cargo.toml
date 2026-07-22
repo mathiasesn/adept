@@ -1,0 +1,11 @@
+[package]
+name = "adept_fmt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Prettier-style formatter for SKILL.md (Agent Skills). Owned by the formatter agent."
+
+[dependencies]
+adept = { workspace = true }
