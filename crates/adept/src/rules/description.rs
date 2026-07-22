@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 use crate::token::TokenCounter;
 
-use super::{LintConfig, Rule, SkillRule};
+use super::{impl_rule, LintConfig, Rule, SkillRule};
 
 const TRIGGER_PHRASES: &[&str] = &[
     "use when",
@@ -31,17 +31,7 @@ const NEGATIVE_PHRASES: &[&str] = &[
 /// [`LintConfig::description_min_tokens`].
 pub struct TooShort;
 
-impl Rule for TooShort {
-    fn code(&self) -> &'static str {
-        "SL201"
-    }
-    fn name(&self) -> &'static str {
-        "description-too-short"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(TooShort, "SL201", "description-too-short", Warning);
 
 impl SkillRule for TooShort {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {
@@ -75,7 +65,7 @@ impl SkillRule for TooShort {
 // (`description-tokens-over-budget`) exactly, both firing on
 // `description_max_tokens` for the same input with no distinct meaning.
 // `SL3xx` is the token-budget family per the spec, so `SL301` is the
-// surviving rule; see `docs/rules.md` for the rationale. The code `SL202`
+// surviving rule; see `docs/RULES.md` for the rationale. The code `SL202`
 // is retired, not reused, so historical configs referencing it don't
 // silently start meaning something else.
 
@@ -84,17 +74,12 @@ impl SkillRule for TooShort {
 /// "when the user", "triggers on").
 pub struct MissingTriggerPhrase;
 
-impl Rule for MissingTriggerPhrase {
-    fn code(&self) -> &'static str {
-        "SL203"
-    }
-    fn name(&self) -> &'static str {
-        "missing-trigger-phrase"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(
+    MissingTriggerPhrase,
+    "SL203",
+    "missing-trigger-phrase",
+    Warning
+);
 
 impl SkillRule for MissingTriggerPhrase {
     fn check(
@@ -128,17 +113,7 @@ impl SkillRule for MissingTriggerPhrase {
 /// person ("I will...", "I can...") instead of third person.
 pub struct FirstPerson;
 
-impl Rule for FirstPerson {
-    fn code(&self) -> &'static str {
-        "SL204"
-    }
-    fn name(&self) -> &'static str {
-        "first-person-description"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(FirstPerson, "SL204", "first-person-description", Warning);
 
 impl SkillRule for FirstPerson {
     fn check(
@@ -178,17 +153,7 @@ impl SkillRule for FirstPerson {
 /// reworded, with no additional information about behavior or triggering.
 pub struct RestatesName;
 
-impl Rule for RestatesName {
-    fn code(&self) -> &'static str {
-        "SL205"
-    }
-    fn name(&self) -> &'static str {
-        "description-restates-name"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(RestatesName, "SL205", "description-restates-name", Warning);
 
 impl SkillRule for RestatesName {
     fn check(
@@ -245,17 +210,7 @@ impl SkillRule for RestatesName {
 /// since not every skill needs negative guidance.
 pub struct NoNegativeGuidance;
 
-impl Rule for NoNegativeGuidance {
-    fn code(&self) -> &'static str {
-        "SL206"
-    }
-    fn name(&self) -> &'static str {
-        "no-negative-guidance"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Info
-    }
-}
+impl_rule!(NoNegativeGuidance, "SL206", "no-negative-guidance", Info);
 
 impl SkillRule for NoNegativeGuidance {
     fn check(

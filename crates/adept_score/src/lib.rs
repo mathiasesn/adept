@@ -78,6 +78,28 @@ pub struct ScoreOptions {
     pub tokenizer: adept::Tokenizer,
 }
 
+impl ScoreOptions {
+    /// The default options for scoring with `model`.
+    ///
+    /// The model name has to reach both [`ScoreOptions::model`] and
+    /// [`TriggeringOptions::model`]; this is the one place that wiring
+    /// lives, so the `score` CLI and the MCP `score_skill` tool can't drift
+    /// apart on defaults.
+    #[must_use]
+    pub fn for_model(model: impl Into<String>, tokenizer: adept::Tokenizer) -> Self {
+        let model = model.into();
+        Self {
+            triggering: Some(TriggeringOptions {
+                model: model.clone(),
+                ..TriggeringOptions::default()
+            }),
+            model,
+            tokenizer,
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for ScoreOptions {
     fn default() -> Self {
         Self {

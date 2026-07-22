@@ -3,23 +3,13 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 
-use super::{LintConfig, Rule, SkillRule};
+use super::{impl_rule, LintConfig, Rule, SkillRule};
 
 /// `SL101` `empty-body`: the markdown body (everything after the
 /// frontmatter) is empty or whitespace-only.
 pub struct EmptyBody;
 
-impl Rule for EmptyBody {
-    fn code(&self) -> &'static str {
-        "SL101"
-    }
-    fn name(&self) -> &'static str {
-        "empty-body"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(EmptyBody, "SL101", "empty-body", Error);
 
 impl SkillRule for EmptyBody {
     fn check(
@@ -47,17 +37,7 @@ impl SkillRule for EmptyBody {
 /// `SL102` `missing-h1`: the body has no top-level (`#`) heading.
 pub struct MissingH1;
 
-impl Rule for MissingH1 {
-    fn code(&self) -> &'static str {
-        "SL102"
-    }
-    fn name(&self) -> &'static str {
-        "missing-h1"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(MissingH1, "SL102", "missing-h1", Warning);
 
 impl SkillRule for MissingH1 {
     fn check(
@@ -91,17 +71,7 @@ impl SkillRule for MissingH1 {
 /// `h1` followed directly by an `h3` with no intervening `h2`.
 pub struct HeadingLevelSkip;
 
-impl Rule for HeadingLevelSkip {
-    fn code(&self) -> &'static str {
-        "SL103"
-    }
-    fn name(&self) -> &'static str {
-        "heading-skip"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(HeadingLevelSkip, "SL103", "heading-skip", Warning);
 
 impl SkillRule for HeadingLevelSkip {
     fn check(
@@ -142,17 +112,7 @@ impl SkillRule for HeadingLevelSkip {
 /// mentioned in the body does not exist on disk next to SKILL.md.
 pub struct BrokenFileReference;
 
-impl Rule for BrokenFileReference {
-    fn code(&self) -> &'static str {
-        "SL104"
-    }
-    fn name(&self) -> &'static str {
-        "broken-file-reference"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(BrokenFileReference, "SL104", "broken-file-reference", Error);
 
 impl SkillRule for BrokenFileReference {
     fn check(

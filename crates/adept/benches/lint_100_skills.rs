@@ -1,5 +1,5 @@
 //! Benchmarks linting 100 generated skills. The doc's target
-//! (`docs/adept-mvp.md`) is under 1 second.
+//! (`docs/MVP.md`) is under 1 second.
 
 use std::fs;
 

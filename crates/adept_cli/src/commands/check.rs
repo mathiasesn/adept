@@ -50,9 +50,7 @@ pub fn run(args: &CheckArgs, config: &AdeptConfig, color: bool, quiet: bool) -> 
         return EXIT_USAGE_ERROR;
     }
 
-    all_diagnostics.sort_by(|a, b| {
-        (&a.path, a.line, a.column, a.code).cmp(&(&b.path, b.line, b.column, b.code))
-    });
+    adept::sort_diagnostics(&mut all_diagnostics);
 
     match args.format {
         OutputFormat::Human => {

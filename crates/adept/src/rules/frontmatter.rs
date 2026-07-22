@@ -8,7 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 
-use super::{LintConfig, Rule, SkillRule};
+use super::{impl_rule, LintConfig, Rule, SkillRule};
 
 /// `SL001` `missing-description`: the `description` frontmatter field is
 /// present but empty (or whitespace-only).
@@ -17,17 +17,7 @@ use super::{LintConfig, Rule, SkillRule};
 /// the parse error path, since parsing requires the field to be present.
 pub struct MissingDescription;
 
-impl Rule for MissingDescription {
-    fn code(&self) -> &'static str {
-        "SL001"
-    }
-    fn name(&self) -> &'static str {
-        "missing-description"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(MissingDescription, "SL001", "missing-description", Error);
 
 impl SkillRule for MissingDescription {
     fn check(
@@ -58,17 +48,7 @@ impl SkillRule for MissingDescription {
 /// (or whitespace-only).
 pub struct MissingName;
 
-impl Rule for MissingName {
-    fn code(&self) -> &'static str {
-        "SL002"
-    }
-    fn name(&self) -> &'static str {
-        "missing-name"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(MissingName, "SL002", "missing-name", Error);
 
 impl SkillRule for MissingName {
     fn check(
@@ -97,17 +77,7 @@ impl SkillRule for MissingName {
 /// of the directory containing SKILL.md.
 pub struct NameMismatch;
 
-impl Rule for NameMismatch {
-    fn code(&self) -> &'static str {
-        "SL004"
-    }
-    fn name(&self) -> &'static str {
-        "name-mismatch"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(NameMismatch, "SL004", "name-mismatch", Warning);
 
 impl SkillRule for NameMismatch {
     fn check(
@@ -149,17 +119,7 @@ impl SkillRule for NameMismatch {
 /// lowercase ASCII letters, digits, and hyphens).
 pub struct InvalidNameFormat;
 
-impl Rule for InvalidNameFormat {
-    fn code(&self) -> &'static str {
-        "SL005"
-    }
-    fn name(&self) -> &'static str {
-        "invalid-name-format"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(InvalidNameFormat, "SL005", "invalid-name-format", Error);
 
 impl SkillRule for InvalidNameFormat {
     fn check(

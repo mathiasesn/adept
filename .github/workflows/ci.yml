@@ -40,7 +40,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Performance smoke test (lint 100 skills)
-        # Acceptance criterion (docs/adept-mvp.md): `check` lints 100
+        # Acceptance criterion (docs/MVP.md): `check` lints 100
         # skills in under 1 second on a typical dev machine. Measured
         # performance is ~23ms; a 500ms threshold catches an
         # order-of-magnitude regression without being flaky on noisy CI

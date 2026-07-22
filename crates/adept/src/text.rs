@@ -17,21 +17,32 @@ use std::collections::HashSet;
 /// two pieces of text (e.g. two skills' descriptions).
 #[must_use]
 pub fn word_bag(text: &str) -> HashSet<String> {
+    words(text).collect()
+}
+
+/// Tokenize `text` into lowercased alphanumeric words, in order.
+///
+/// The ordered counterpart to [`word_bag`], for callers that need adjacency
+/// (e.g. `SL403`'s shingles). Both share this definition of a "word" so the
+/// rules can't drift apart on tokenization.
+pub fn words(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(str::to_lowercase)
-        .collect()
 }
 
 /// Jaccard similarity between two sets: `|intersection| / |union|`, or
 /// `0.0` if both sets are empty (rather than dividing zero by zero).
 #[must_use]
 pub fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
-    let union = a.union(b).count();
+    // `|union| = |a| + |b| - |intersection|`, so one intersection pass is
+    // enough — `union().count()` would walk both sets a second time.
+    let intersection = a.intersection(b).count();
+    let union = a.len() + b.len() - intersection;
     if union == 0 {
         0.0
     } else {
-        a.intersection(b).count() as f64 / union as f64
+        intersection as f64 / union as f64
     }
 }
 

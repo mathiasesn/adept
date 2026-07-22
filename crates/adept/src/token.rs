@@ -32,8 +32,41 @@ impl std::fmt::Display for Tokenizer {
 /// Defaults to `o200k_base`; construct with [`TokenCounter::new`] and
 /// [`Tokenizer::Cl100kBase`] to count against an older encoding instead.
 pub struct TokenCounter {
-    bpe: CoreBPE,
+    bpe: &'static CoreBPE,
     tokenizer: Tokenizer,
+}
+
+/// Process-wide cache of the loaded BPE tables.
+///
+/// Loading `o200k_base` parses ~200k merge entries from an embedded blob, so
+/// it is far too expensive to repeat per `TokenCounter`. Constructing a
+/// counter is on the hot path for the long-lived MCP server (once per tool
+/// call) and for `score` (once per skill), so the tables are loaded at most
+/// once each and shared. The load `Result` is cached too, so a failure is
+/// reported to every caller rather than being retried forever.
+fn load_bpe(tokenizer: Tokenizer) -> Result<&'static CoreBPE, AdeptError> {
+    use std::sync::OnceLock;
+
+    static O200K: OnceLock<Result<CoreBPE, String>> = OnceLock::new();
+    static CL100K: OnceLock<Result<CoreBPE, String>> = OnceLock::new();
+
+    let cell = match tokenizer {
+        Tokenizer::O200kBase => &O200K,
+        Tokenizer::Cl100kBase => &CL100K,
+    };
+    let loaded = cell.get_or_init(|| {
+        match tokenizer {
+            Tokenizer::O200kBase => tiktoken_rs::o200k_base(),
+            Tokenizer::Cl100kBase => tiktoken_rs::cl100k_base(),
+        }
+        .map_err(|e| e.to_string())
+    });
+    loaded
+        .as_ref()
+        .map_err(|message| AdeptError::TokenizerLoad {
+            tokenizer,
+            message: message.clone(),
+        })
 }
 
 impl TokenCounter {
@@ -43,15 +76,10 @@ impl TokenCounter {
     /// Returns [`AdeptError::TokenizerLoad`] if the underlying `tiktoken-rs`
     /// encoding tables fail to load.
     pub fn new(tokenizer: Tokenizer) -> Result<Self, AdeptError> {
-        let bpe = match tokenizer {
-            Tokenizer::O200kBase => tiktoken_rs::o200k_base(),
-            Tokenizer::Cl100kBase => tiktoken_rs::cl100k_base(),
-        }
-        .map_err(|e| AdeptError::TokenizerLoad {
+        Ok(Self {
+            bpe: load_bpe(tokenizer)?,
             tokenizer,
-            message: e.to_string(),
-        })?;
-        Ok(Self { bpe, tokenizer })
+        })
     }
 
     /// Which tokenizer this counter uses.

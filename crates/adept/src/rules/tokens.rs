@@ -11,23 +11,18 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 use crate::token::TokenCounter;
 
-use super::{LintConfig, Rule, SkillRule};
+use super::{impl_rule, LintConfig, Rule, SkillRule};
 
 /// `SL301` `description-tokens-over-budget`: the description exceeds
 /// [`LintConfig::description_max_tokens`].
 pub struct DescriptionTokenBudget;
 
-impl Rule for DescriptionTokenBudget {
-    fn code(&self) -> &'static str {
-        "SL301"
-    }
-    fn name(&self) -> &'static str {
-        "description-tokens-over-budget"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(
+    DescriptionTokenBudget,
+    "SL301",
+    "description-tokens-over-budget",
+    Error
+);
 
 impl SkillRule for DescriptionTokenBudget {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {
@@ -55,17 +50,7 @@ impl SkillRule for DescriptionTokenBudget {
 /// [`LintConfig::body_max_tokens`].
 pub struct BodyTokenBudget;
 
-impl Rule for BodyTokenBudget {
-    fn code(&self) -> &'static str {
-        "SL302"
-    }
-    fn name(&self) -> &'static str {
-        "body-tokens-over-budget"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(BodyTokenBudget, "SL302", "body-tokens-over-budget", Error);
 
 impl SkillRule for BodyTokenBudget {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {
@@ -96,17 +81,7 @@ impl SkillRule for BodyTokenBudget {
 /// [`LintConfig::companion_file_max_tokens`].
 pub struct CompanionFileBloat;
 
-impl Rule for CompanionFileBloat {
-    fn code(&self) -> &'static str {
-        "SL303"
-    }
-    fn name(&self) -> &'static str {
-        "companion-file-bloat"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(CompanionFileBloat, "SL303", "companion-file-bloat", Warning);
 
 impl SkillRule for CompanionFileBloat {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {

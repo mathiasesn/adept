@@ -29,6 +29,45 @@ Documented in `crates/adept_fmt`, each visible as an unexpected diff to users:
 - Text escaping covers a conservative subset rather than every line-start
   ambiguity.
 
+### Markdown parsing is implemented twice
+`crates/adept/src/rules/structure.rs` hand-rolls a line scanner for ATX
+headings, fence tracking, and `](...)` link extraction — three times within
+the one file — while `crates/adept_fmt/src/markdown/build.rs` already has a
+`pulldown-cmark`-backed AST with correct fence, indented-code, nested-bracket
+and reference-link handling. So `SL102`/`SL103`/`SL104` and `adept fmt` hold
+two different definitions of "heading" and "link", and the formatter can
+rewrite a link the linter cannot see.
+
+The fix is to move block/inline extraction into the core crate (or a shared
+`adept_md`) and have both consumers use it — a crate-layout change, which is
+why it wasn't done as part of cleanup. Cost of waiting: every new
+markdown-aware rule copy-pastes fence tracking again.
+
+Note that SL104's *heuristic filters* (URL schemes, globs, `~`, `@scope/name`)
+are not the problem and should stay — they are genuine domain judgements
+about what a repo-relative path looks like. It's the lexing beneath them
+that's duplicated.
+
+### Parse errors bypass the rule pipeline
+`SL001`/`SL002`/`SL003` are synthesized by a `match` on `AdeptError` in
+`Linter::lint_set`, which re-inlines the enable/severity logic that
+`LintConfig` already owns. A third rule flavor (`ParseErrorRule`) in the same
+`Registry` would share dispatch. Until then, a custom `SkillParser` has no
+seam to contribute its own error codes — the `match` is closed over
+`AdeptError`.
+
+## Performance
+
+Deliberately not done, since `check` runs ~21ms against a 1s target:
+
+- Skill discovery/parsing and the per-skill lint loop are sequential and
+  embarrassingly parallel (`rayon` would cut wall time ~Ncores).
+- `SL402`/`SL403` are each O(n²) pairwise Jaccard. Fine at 100 skills; at
+  1000 it's 500k pairs and will dominate. Hashing words to `u64` would remove
+  the per-word `String` allocation.
+- `Skill` retains both `source` and `body`, ~2× file bytes per skill.
+  `source` plus a body offset would halve it.
+
 ## Test coverage
 
 - **Prose reflow is the least-covered high-risk path.** The proptest excludes

@@ -2,8 +2,7 @@
 
 use adept::{Skill, SkillSet};
 use adept_score::{
-    LlmClient, LlmConfig, OpenAiCompatClient, ScoreOptions, TriggeringOptions, ENV_API_KEY,
-    ENV_BASE_URL, ENV_MODEL,
+    LlmConfig, OpenAiCompatClient, ScoreOptions, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
 };
 
 use crate::cli::{OutputFormat, ScoreArgs};
@@ -88,27 +87,19 @@ pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
 }
 
 fn build_options(args: &ScoreArgs, model: &str, tokenizer: adept::Tokenizer) -> ScoreOptions {
-    let mut triggering = TriggeringOptions {
-        model: model.to_string(),
-        ..TriggeringOptions::default()
-    };
-    if let Some(n) = args.num_prompts {
-        triggering.num_prompts = n;
+    let mut options = ScoreOptions::for_model(model, tokenizer);
+    if let Some(triggering) = options.triggering.as_mut() {
+        if let Some(n) = args.num_prompts {
+            triggering.num_prompts = n;
+        }
+        if let Some(seed) = args.seed {
+            triggering.seed = Some(seed);
+        }
+        if let Some(samples) = args.judge_samples {
+            triggering.judge_samples = samples;
+        }
     }
-    if let Some(seed) = args.seed {
-        triggering.seed = Some(seed);
-    }
-    if let Some(samples) = args.judge_samples {
-        triggering.judge_samples = samples;
-    }
-
-    ScoreOptions {
-        model: model.to_string(),
-        triggering: Some(triggering),
-        token_bloat: true,
-        overlap_similarity_threshold: adept_score::DEFAULT_SIMILARITY_THRESHOLD,
-        tokenizer,
-    }
+    options
 }
 
 fn load_skill_and_set(path: &std::path::Path) -> Result<(Skill, Vec<Skill>), String> {
@@ -137,9 +128,9 @@ fn load_skill_and_set(path: &std::path::Path) -> Result<(Skill, Vec<Skill>), Str
 /// [`LlmClient`] (e.g. [`adept_score::MockLlmClient`]) instead of a real
 /// network client, exercising the same options-building and
 /// report-rendering logic used by [`run`].
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn run_with_client(
-    client: &dyn LlmClient,
+    client: &dyn adept_score::LlmClient,
     skill: &Skill,
     skillset: &[Skill],
     options: &ScoreOptions,
@@ -194,18 +185,8 @@ mod tests {
         ]);
 
         let skill = sample_skill();
-        let mut triggering = TriggeringOptions {
-            num_prompts: 2,
-            ..Default::default()
-        };
-        triggering.model = "test-model".to_string();
-        let options = ScoreOptions {
-            model: "test-model".to_string(),
-            triggering: Some(triggering),
-            token_bloat: true,
-            overlap_similarity_threshold: adept_score::DEFAULT_SIMILARITY_THRESHOLD,
-            tokenizer: adept::Tokenizer::default(),
-        };
+        let mut options = ScoreOptions::for_model("test-model", adept::Tokenizer::default());
+        options.triggering.as_mut().unwrap().num_prompts = 2;
 
         let rendered = run_with_client(&mock, &skill, &[], &options).await.unwrap();
         assert!(rendered.contains("Score report for skill: pdf-filler"));

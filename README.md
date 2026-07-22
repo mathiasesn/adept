@@ -211,7 +211,7 @@ Precedence: CLI flag > config file value > built-in default.
 
 ## Rules
 
-See [`docs/rules.md`](docs/rules.md) for the full table of rule codes
+See [`docs/RULES.md`](docs/RULES.md) for the full table of rule codes
 (`SL001`–`SL403`), what each one flags, and how to fix it.
 
 ## Development

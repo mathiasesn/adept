@@ -34,7 +34,9 @@ pub use diagnostic::{Diagnostic, Severity};
 pub use error::AdeptError;
 pub use frontmatter::{ExtraField, Frontmatter};
 pub use parser::{AnthropicSkillParser, SkillParser};
-pub use rules::{LintConfig, Linter, Registry, Rule, RuleMeta, SetRule, SkillRule};
+pub use rules::{
+    sort_diagnostics, LintConfig, Linter, Registry, Rule, RuleMeta, SetRule, SkillRule,
+};
 pub use skill::Skill;
 pub use skillset::SkillSet;
 pub use token::{TokenCounter, Tokenizer};

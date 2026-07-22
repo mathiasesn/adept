@@ -44,7 +44,7 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
     match block {
         Block::Heading { level, inline } => {
             let level = (*level).clamp(1, 6);
-            let text = render_inline_single_line(inline, cfg);
+            let text = flatten_words(inline, cfg);
             let hashes = "#".repeat(level as usize);
             if text.is_empty() {
                 vec![hashes]
@@ -132,9 +132,7 @@ fn print_code_block(info: &str, literal: &str, cfg: &FmtConfig) -> Vec<String> {
     let fence: String = cfg.fence_char.as_char().to_string().repeat(fence_len);
     let mut out = Vec::new();
     out.push(format!("{fence}{info}"));
-    if literal.is_empty() {
-        // no content lines
-    } else {
+    if !literal.is_empty() {
         out.extend(literal.split('\n').map(str::to_string));
     }
     out.push(fence);
@@ -174,7 +172,7 @@ fn print_table(
             .map(|i| {
                 cells
                     .get(i)
-                    .map(|c| render_inline_single_line(c, cfg))
+                    .map(|c| flatten_words(c, cfg))
                     .unwrap_or_default()
             })
             .collect()
@@ -289,17 +287,6 @@ fn wrap_tokens(tokens: &[Token], width: usize, reflow: bool) -> Vec<String> {
     lines
 }
 
-fn render_inline_single_line(inline: &[Inline], cfg: &FmtConfig) -> String {
-    build_tokens(inline, cfg)
-        .iter()
-        .map(|t| match t {
-            Token::Word(w) => w.clone(),
-            Token::Break => String::new(),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn build_tokens(items: &[Inline], cfg: &FmtConfig) -> Vec<Token> {
     let mut out = Vec::new();
     for item in items {
@@ -353,6 +340,9 @@ fn build_tokens(items: &[Inline], cfg: &FmtConfig) -> Vec<Token> {
     out
 }
 
+/// Render inline content onto a single line, with soft breaks collapsed to
+/// spaces. Used wherever a construct can't be wrapped (headings, table
+/// cells, link text).
 fn flatten_words(children: &[Inline], cfg: &FmtConfig) -> String {
     build_tokens(children, cfg)
         .iter()

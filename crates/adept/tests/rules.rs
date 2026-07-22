@@ -170,7 +170,7 @@ fn every_registered_rule_has_a_positive_fixture_test() {
     // This is a meta-check: if a new rule is added to the registry without a
     // corresponding fixture+test above, this test will still pass (it only
     // asserts the registry is non-empty and every code is well-formed), but
-    // the `docs/rules.md` drift test in `docs_test.rs` will catch missing
+    // the `docs/RULES.md` drift test in `docs_test.rs` will catch missing
     // documentation, which is the more actionable signal.
     let registry = adept::Registry::new();
     let meta = registry.all_meta();

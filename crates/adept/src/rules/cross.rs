@@ -8,23 +8,13 @@ use crate::skillset::SkillSet;
 use crate::text::{jaccard, word_bag};
 use crate::token::TokenCounter;
 
-use super::{LintConfig, Rule, SetRule};
+use super::{impl_rule, LintConfig, Rule, SetRule};
 
 /// `SL401` `duplicate-skill-name`: two or more skills share the same
 /// frontmatter `name`.
 pub struct DuplicateSkillName;
 
-impl Rule for DuplicateSkillName {
-    fn code(&self) -> &'static str {
-        "SL401"
-    }
-    fn name(&self) -> &'static str {
-        "duplicate-skill-name"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Error
-    }
-}
+impl_rule!(DuplicateSkillName, "SL401", "duplicate-skill-name", Error);
 
 impl SetRule for DuplicateSkillName {
     fn check(
@@ -78,17 +68,7 @@ impl SetRule for DuplicateSkillName {
 /// [`LintConfig::similar_description_threshold`].
 pub struct SimilarDescription;
 
-impl Rule for SimilarDescription {
-    fn code(&self) -> &'static str {
-        "SL402"
-    }
-    fn name(&self) -> &'static str {
-        "similar-description"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(SimilarDescription, "SL402", "similar-description", Warning);
 
 impl SetRule for SimilarDescription {
     fn check(
@@ -166,17 +146,12 @@ impl SetRule for SimilarDescription {
 /// trigger on the same requests.
 pub struct OverlappingTriggerPhrasing;
 
-impl Rule for OverlappingTriggerPhrasing {
-    fn code(&self) -> &'static str {
-        "SL403"
-    }
-    fn name(&self) -> &'static str {
-        "overlapping-trigger-phrasing"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
+impl_rule!(
+    OverlappingTriggerPhrasing,
+    "SL403",
+    "overlapping-trigger-phrasing",
+    Warning
+);
 
 impl SetRule for OverlappingTriggerPhrasing {
     fn check(
@@ -245,11 +220,7 @@ impl SetRule for OverlappingTriggerPhrasing {
 }
 
 fn shingles(text: &str, n: usize) -> HashSet<String> {
-    let words: Vec<String> = text
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_lowercase())
-        .collect();
+    let words: Vec<String> = crate::text::words(text).collect();
     if words.len() < n {
         return words.into_iter().collect();
     }

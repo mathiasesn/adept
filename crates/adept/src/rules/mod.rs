@@ -21,7 +21,12 @@ use crate::token::TokenCounter;
 
 /// Shared metadata every rule exposes, regardless of whether it checks a
 /// single [`Skill`] or a whole [`SkillSet`].
-pub trait Rule {
+///
+/// Rules are stateless, so they are required to be `Send + Sync`: that lets
+/// a [`Registry`] (and therefore a [`Linter`]) be shared across threads or
+/// held in a `static`, which the long-lived MCP server relies on to avoid
+/// rebuilding the linter per request.
+pub trait Rule: Send + Sync {
     /// The stable rule code, e.g. `"SL001"`.
     fn code(&self) -> &'static str;
     /// The kebab-case rule name, e.g. `"missing-description"`.
@@ -46,6 +51,30 @@ pub trait SetRule: Rule {
     fn check(&self, set: &SkillSet, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic>;
 }
 
+/// Implement [`Rule`] for a rule type: its code, kebab-case name, and
+/// default [`Severity`].
+///
+/// Every rule's `impl Rule` is these same three constant accessors, so they
+/// are generated rather than restated ~19 times. This also keeps a rule's
+/// identity on one line next to its `struct`, instead of spread over a
+/// dozen lines of boilerplate.
+macro_rules! impl_rule {
+    ($ty:ty, $code:literal, $name:literal, $severity:ident) => {
+        impl Rule for $ty {
+            fn code(&self) -> &'static str {
+                $code
+            }
+            fn name(&self) -> &'static str {
+                $name
+            }
+            fn default_severity(&self) -> Severity {
+                Severity::$severity
+            }
+        }
+    };
+}
+pub(crate) use impl_rule;
+
 /// Static metadata about a registered rule, independent of how (or whether)
 /// it is directly invocable — used for listing, docs, and config lookups.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,51 +98,50 @@ pub struct RuleMeta {
 pub struct Registry {
     skill_rules: Vec<Box<dyn SkillRule>>,
     set_rules: Vec<Box<dyn SetRule>>,
-    parse_error_meta: Vec<RuleMeta>,
 }
+
+/// Metadata for the rules synthesized from parse failures rather than run as
+/// [`SkillRule`]s. Fixed, so it lives in the binary rather than in each
+/// [`Registry`].
+const PARSE_ERROR_META: [RuleMeta; 1] = [RuleMeta {
+    code: "SL003",
+    name: "malformed-frontmatter",
+    default_severity: Severity::Error,
+}];
 
 impl Registry {
     /// Build the registry containing every built-in rule.
     #[must_use]
-    #[allow(clippy::vec_init_then_push)]
     pub fn new() -> Self {
-        let mut skill_rules: Vec<Box<dyn SkillRule>> = Vec::new();
-        skill_rules.push(Box::new(frontmatter::MissingDescription));
-        skill_rules.push(Box::new(frontmatter::MissingName));
-        skill_rules.push(Box::new(frontmatter::NameMismatch));
-        skill_rules.push(Box::new(frontmatter::InvalidNameFormat));
+        let skill_rules: Vec<Box<dyn SkillRule>> = vec![
+            Box::new(frontmatter::MissingDescription),
+            Box::new(frontmatter::MissingName),
+            Box::new(frontmatter::NameMismatch),
+            Box::new(frontmatter::InvalidNameFormat),
+            Box::new(structure::EmptyBody),
+            Box::new(structure::MissingH1),
+            Box::new(structure::HeadingLevelSkip),
+            Box::new(structure::BrokenFileReference),
+            Box::new(description::TooShort),
+            // SL202 (description-too-long) is retired: see rules/description.rs.
+            Box::new(description::MissingTriggerPhrase),
+            Box::new(description::FirstPerson),
+            Box::new(description::RestatesName),
+            Box::new(description::NoNegativeGuidance),
+            Box::new(tokens::DescriptionTokenBudget),
+            Box::new(tokens::BodyTokenBudget),
+            Box::new(tokens::CompanionFileBloat),
+        ];
 
-        skill_rules.push(Box::new(structure::EmptyBody));
-        skill_rules.push(Box::new(structure::MissingH1));
-        skill_rules.push(Box::new(structure::HeadingLevelSkip));
-        skill_rules.push(Box::new(structure::BrokenFileReference));
-
-        skill_rules.push(Box::new(description::TooShort));
-        // SL202 (description-too-long) is retired: see rules/description.rs.
-        skill_rules.push(Box::new(description::MissingTriggerPhrase));
-        skill_rules.push(Box::new(description::FirstPerson));
-        skill_rules.push(Box::new(description::RestatesName));
-        skill_rules.push(Box::new(description::NoNegativeGuidance));
-
-        skill_rules.push(Box::new(tokens::DescriptionTokenBudget));
-        skill_rules.push(Box::new(tokens::BodyTokenBudget));
-        skill_rules.push(Box::new(tokens::CompanionFileBloat));
-
-        let mut set_rules: Vec<Box<dyn SetRule>> = Vec::new();
-        set_rules.push(Box::new(cross::DuplicateSkillName));
-        set_rules.push(Box::new(cross::SimilarDescription));
-        set_rules.push(Box::new(cross::OverlappingTriggerPhrasing));
-
-        let parse_error_meta = vec![RuleMeta {
-            code: "SL003",
-            name: "malformed-frontmatter",
-            default_severity: Severity::Error,
-        }];
+        let set_rules: Vec<Box<dyn SetRule>> = vec![
+            Box::new(cross::DuplicateSkillName),
+            Box::new(cross::SimilarDescription),
+            Box::new(cross::OverlappingTriggerPhrasing),
+        ];
 
         Self {
             skill_rules,
             set_rules,
-            parse_error_meta,
         }
     }
 
@@ -133,33 +161,39 @@ impl Registry {
     /// directly-invocable check), sorted by code.
     #[must_use]
     pub fn all_meta(&self) -> Vec<RuleMeta> {
-        let mut meta: Vec<RuleMeta> = self
-            .skill_rules
-            .iter()
-            .map(|r| RuleMeta {
-                code: r.code(),
-                name: r.name(),
-                default_severity: r.default_severity(),
-            })
-            .chain(self.set_rules.iter().map(|r| RuleMeta {
-                code: r.code(),
-                name: r.name(),
-                default_severity: r.default_severity(),
-            }))
-            .chain(self.parse_error_meta.iter().copied())
-            .collect();
+        let mut meta: Vec<RuleMeta> = self.meta_iter().collect();
         meta.sort_by_key(|m| m.code);
         meta
     }
 
+    /// Metadata for every registered rule, in registration order.
+    ///
+    /// The unsorted, non-allocating basis for [`Registry::all_meta`] and the
+    /// `by_*` lookups, so a single `--select SL001` doesn't build and sort
+    /// the whole table.
+    fn meta_iter(&self) -> impl Iterator<Item = RuleMeta> + '_ {
+        fn meta(r: &dyn Rule) -> RuleMeta {
+            RuleMeta {
+                code: r.code(),
+                name: r.name(),
+                default_severity: r.default_severity(),
+            }
+        }
+        self.skill_rules
+            .iter()
+            .map(|r| meta(r.as_ref()))
+            .chain(self.set_rules.iter().map(|r| meta(r.as_ref())))
+            .chain(PARSE_ERROR_META)
+    }
+
     /// Look up a rule's metadata by its code (e.g. `"SL001"`).
     pub fn by_code(&self, code: &str) -> Option<RuleMeta> {
-        self.all_meta().into_iter().find(|m| m.code == code)
+        self.meta_iter().find(|m| m.code == code)
     }
 
     /// Look up a rule's metadata by its kebab-case name.
     pub fn by_name(&self, name: &str) -> Option<RuleMeta> {
-        self.all_meta().into_iter().find(|m| m.name == name)
+        self.meta_iter().find(|m| m.name == name)
     }
 }
 
@@ -379,7 +413,10 @@ impl Linter {
     }
 }
 
-fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
+/// Sort diagnostics into `adept`'s output order: by path, then position,
+/// then rule code. This is the CLI's user-visible ordering contract, so it
+/// lives here rather than being restated at each call site.
+pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
     diagnostics.sort_by(|a, b| {
         (&a.path, a.line, a.column, a.code).cmp(&(&b.path, b.line, b.column, b.code))
     });

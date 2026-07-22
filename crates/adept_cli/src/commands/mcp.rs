@@ -13,11 +13,12 @@
 //! anything itself; [`serve`] is the only place that writes to stdout.
 
 use std::io::{BufRead, Write};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use adept::{AnthropicSkillParser, LintConfig, Linter, SkillParser};
 use adept_fmt::{format_str, FmtConfig};
-use adept_score::{LlmConfig, OpenAiCompatClient, ScoreOptions, TriggeringOptions};
+use adept_score::{LlmConfig, OpenAiCompatClient, ScoreOptions};
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -244,9 +245,15 @@ fn check_skill_tool(arguments: &Value) -> (String, bool) {
         Err(err) => return (json!({ "error": err.to_string() }).to_string(), true),
     };
 
-    let linter = match Linter::new(LintConfig::default()) {
+    // Built once for the life of the server: `Linter::new` loads the
+    // tiktoken BPE tables, which is far more expensive than the lint itself
+    // and must not be repeated on every tool call.
+    static LINTER: OnceLock<Result<Linter, String>> = OnceLock::new();
+    let linter = match LINTER
+        .get_or_init(|| Linter::new(LintConfig::default()).map_err(|e| e.to_string()))
+    {
         Ok(linter) => linter,
-        Err(err) => return (json!({ "error": err.to_string() }).to_string(), true),
+        Err(err) => return (json!({ "error": err }).to_string(), true),
     };
     let diagnostics = linter.lint_skill(&skill);
     match adept::reporting::render_json(&diagnostics) {
@@ -326,16 +333,7 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
     };
 
     let client = OpenAiCompatClient::new(resolved.clone());
-    let options = ScoreOptions {
-        model: resolved.model.clone(),
-        triggering: Some(TriggeringOptions {
-            model: resolved.model.clone(),
-            ..TriggeringOptions::default()
-        }),
-        token_bloat: true,
-        overlap_similarity_threshold: adept_score::DEFAULT_SIMILARITY_THRESHOLD,
-        tokenizer: adept::Tokenizer::default(),
-    };
+    let options = ScoreOptions::for_model(&resolved.model, adept::Tokenizer::default());
     let skillset = [skill.clone()];
 
     let runtime = match tokio::runtime::Runtime::new() {

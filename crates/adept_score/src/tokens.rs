@@ -37,14 +37,10 @@ struct RawSuggestions {
     suggestions: Vec<String>,
 }
 
-/// Discover companion files for `skill`. Re-exported from this module for
-/// backwards compatibility; delegates to the shared
-/// [`adept::discover_companion_files`] (previously this crate had its own,
-/// subtly different implementation).
-#[must_use]
-pub fn discover_companion_files(skill: &Skill) -> Vec<PathBuf> {
-    adept::discover_companion_files(skill)
-}
+/// Companion-file discovery, shared with `adept`'s `SL303` so the two can't
+/// disagree about what counts as a companion file. Re-exported here because
+/// this module's token-bloat analysis is its main consumer.
+pub use adept::discover_companion_files;
 
 fn relative_to(dir: &Path, path: &Path) -> PathBuf {
     path.strip_prefix(dir).unwrap_or(path).to_path_buf()
