@@ -1,0 +1,20 @@
+---
+source: crates/adept_score/src/report.rs
+assertion_line: 184
+expression: sample_report().render()
+---
+Score report for skill: pdf-filler
+(prompt set version: adept_score-prompts-v1)
+
+== Triggering accuracy ==
+precision: 1.00  recall: 0.50  f1: 0.67  (3/4 correct)
+  [OK] (should-trigger, agreement 100%) predicted=true :: Fill out this W-9 PDF for me
+  [OK] (should-not-trigger, agreement 100%) predicted=false :: What's the weather today?
+
+== Token bloat ==
+description: 12 tokens, body: 340 tokens, companions: 88 tokens, total: 440 tokens
+  - Move the reference table to a companion file
+
+== Overlap/conflict detection ==
+  [overlap] pdf-filler <-> pdf-writer (similarity 0.42): Both fill PDF forms
+      suggestion: Narrow pdf-writer to non-form documents

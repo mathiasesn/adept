@@ -9,3 +9,12 @@ description = "LLM-assisted scoring (triggering accuracy, overlap detection) for
 
 [dependencies]
 adept = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"
+
+[dev-dependencies]
+insta = { workspace = true, features = ["json"] }
