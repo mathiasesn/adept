@@ -1,9 +1,9 @@
 //! `SL3xx` token budget rules.
 //!
-//! Where [`super::description::TooLong`] (`SL202`) flags an overlong
-//! description as a *quality* concern (`Warning`), [`DescriptionTokenBudget`]
-//! (`SL301`) flags the same condition as a hard budget breach (`Error`) so
-//! CI can gate on it independently of the softer style rules.
+//! `SL301` (`DescriptionTokenBudget`) is the sole rule for an overlong
+//! `description`: an earlier `SL202` duplicated it exactly (same condition,
+//! same default threshold) and has been retired. See
+//! `rules/description.rs` for that history.
 
 use std::fs;
 
@@ -14,8 +14,7 @@ use crate::token::TokenCounter;
 use super::{LintConfig, Rule, SkillRule};
 
 /// `SL301` `description-tokens-over-budget`: the description exceeds
-/// [`LintConfig::description_max_tokens`]. See the module docs for how this
-/// differs from `SL202`.
+/// [`LintConfig::description_max_tokens`].
 pub struct DescriptionTokenBudget;
 
 impl Rule for DescriptionTokenBudget {
@@ -111,19 +110,8 @@ impl Rule for CompanionFileBloat {
 
 impl SkillRule for CompanionFileBloat {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {
-        let Some(dir) = skill.path.parent() else {
-            return Vec::new();
-        };
-        let Ok(entries) = fs::read_dir(dir) else {
-            return Vec::new();
-        };
-
         let mut diagnostics = Vec::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() || path == skill.path {
-                continue;
-            }
+        for path in crate::companion::discover_companion_files(skill) {
             let Ok(contents) = fs::read_to_string(&path) else {
                 continue; // binary or unreadable companion file; not a token-budget concern
             };

@@ -54,6 +54,7 @@ pub struct Diagnostic {
 
 impl Diagnostic {
     /// Construct a new diagnostic with no fix suggestion.
+    #[must_use]
     pub fn new(
         code: &'static str,
         message: impl Into<String>,

@@ -1,0 +1,10 @@
+---
+source: crates/adept/tests/rules.rs
+expression: "lint_fixture(\"sl303_companion_bloat\")"
+---
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl303_companion_bloat/SKILL.md:1:1: SL303 companion file "reference.md" is 8000 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl303_companion_bloat/SKILL.md:2:1: SL004 frontmatter `name` ("sl303-companion-bloat") does not match the containing directory name ("sl303_companion_bloat")
+  fix: rename the `name` field to "sl303_companion_bloat", or rename the directory to "sl303-companion-bloat"
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl303_companion_bloat/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering

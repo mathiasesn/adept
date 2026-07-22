@@ -5,6 +5,7 @@ use std::iter::Peekable;
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
 
 use super::ast::{Alignment, Block, Inline, ListItem};
+use super::MAX_NESTING_DEPTH;
 
 /// Parse a Markdown document body into a sequence of top-level [`Block`]s.
 pub fn parse_document(source: &str) -> Vec<Block> {
@@ -15,12 +16,46 @@ pub fn parse_document(source: &str) -> Vec<Block> {
     options.insert(Options::ENABLE_TASKLISTS);
     let parser = Parser::new_ext(source, options);
     let mut iter = parser.peekable();
-    collect_blocks(&mut iter)
+    collect_blocks(&mut iter, 0)
 }
 
 type EventIter<'a> = Peekable<Parser<'a>>;
 
-fn collect_blocks(iter: &mut EventIter<'_>) -> Vec<Block> {
+/// Consume events until the matching `Event::End` for a container whose
+/// `Start` has already been consumed (`depth` starts at 1 for that
+/// container), flattening all text-bearing events encountered into a
+/// single string. Used once nesting exceeds [`MAX_NESTING_DEPTH`], as a
+/// non-recursive fallback that can never overflow the stack regardless of
+/// how deeply the input is (mis)nested.
+fn collect_raw_until_end(iter: &mut EventIter<'_>) -> String {
+    let mut depth = 1usize;
+    let mut text = String::new();
+    while depth > 0 {
+        match iter.next() {
+            None => break,
+            Some(Event::Start(_)) => depth += 1,
+            Some(Event::End(_)) => depth -= 1,
+            Some(
+                Event::Text(t)
+                | Event::Code(t)
+                | Event::InlineHtml(t)
+                | Event::Html(t)
+                | Event::InlineMath(t)
+                | Event::DisplayMath(t),
+            ) => {
+                text.push_str(&t);
+            }
+            Some(Event::SoftBreak | Event::HardBreak) => text.push(' '),
+            Some(Event::FootnoteReference(label)) => {
+                text.push_str(&format!("[^{label}]"));
+            }
+            Some(Event::Rule | Event::TaskListMarker(_)) => {}
+        }
+    }
+    text
+}
+
+fn collect_blocks(iter: &mut EventIter<'_>, depth: usize) -> Vec<Block> {
     let mut out = Vec::new();
     loop {
         match iter.peek() {
@@ -37,7 +72,7 @@ fn collect_blocks(iter: &mut EventIter<'_>) -> Vec<Block> {
                 let Some(Event::Start(tag)) = iter.next() else {
                     unreachable!()
                 };
-                if let Some(block) = build_block(tag, iter) {
+                if let Some(block) = build_block(tag, iter, depth) {
                     out.push(block);
                 }
             }
@@ -87,7 +122,7 @@ fn is_inline_tag(tag: &Tag<'_>) -> bool {
 /// is "tight" (a single paragraph's worth of bare inline content, with no
 /// blank line before any following block) so the printer can preserve
 /// tight-list formatting instead of always inserting blank lines.
-fn collect_item_blocks(iter: &mut EventIter<'_>) -> (Vec<Block>, bool) {
+fn collect_item_blocks(iter: &mut EventIter<'_>, depth: usize) -> (Vec<Block>, bool) {
     let mut blocks = Vec::new();
     let mut leading_bare_inline = false;
     match iter.peek() {
@@ -110,7 +145,7 @@ fn collect_item_blocks(iter: &mut EventIter<'_>) -> (Vec<Block>, bool) {
         }
         _ => {}
     }
-    blocks.extend(collect_blocks(iter));
+    blocks.extend(collect_blocks(iter, depth));
     let tight = leading_bare_inline && blocks.len() == 1;
     (blocks, tight)
 }
@@ -121,7 +156,7 @@ fn expect_end(iter: &mut EventIter<'_>) {
     }
 }
 
-fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>) -> Option<Block> {
+fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>, depth: usize) -> Option<Block> {
     match tag {
         Tag::Paragraph => {
             let inline = collect_inlines(iter);
@@ -137,7 +172,10 @@ fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>) -> Option<Block> {
             })
         }
         Tag::BlockQuote(_) => {
-            let blocks = collect_blocks(iter);
+            if depth >= MAX_NESTING_DEPTH {
+                return Some(Block::Raw(collect_raw_until_end(iter)));
+            }
+            let blocks = collect_blocks(iter, depth + 1);
             expect_end(iter);
             Some(Block::BlockQuote(blocks))
         }
@@ -158,6 +196,9 @@ fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>) -> Option<Block> {
             Some(Block::CodeBlock { info, literal })
         }
         Tag::List(start) => {
+            if depth >= MAX_NESTING_DEPTH {
+                return Some(Block::Raw(collect_raw_until_end(iter)));
+            }
             let ordered = start.is_some();
             let start_num = start.unwrap_or(1);
             let mut items = Vec::new();
@@ -170,7 +211,7 @@ fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>) -> Option<Block> {
                 } else {
                     None
                 };
-                let (blocks, item_tight) = collect_item_blocks(iter);
+                let (blocks, item_tight) = collect_item_blocks(iter, depth + 1);
                 expect_end(iter);
                 items.push((ListItem { checked, blocks }, item_tight));
             }
@@ -206,7 +247,10 @@ fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>) -> Option<Block> {
             })
         }
         Tag::FootnoteDefinition(label) => {
-            let blocks = collect_blocks(iter);
+            if depth >= MAX_NESTING_DEPTH {
+                return Some(Block::Raw(collect_raw_until_end(iter)));
+            }
+            let blocks = collect_blocks(iter, depth + 1);
             expect_end(iter);
             Some(Block::FootnoteDefinition {
                 label: label.to_string(),
@@ -225,8 +269,12 @@ fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>) -> Option<Block> {
         // Unsupported/unreachable-at-this-level containers: skip their
         // content but don't fail the whole document.
         _ => {
-            let _ = collect_blocks(iter);
-            expect_end(iter);
+            if depth >= MAX_NESTING_DEPTH {
+                let _ = collect_raw_until_end(iter);
+            } else {
+                let _ = collect_blocks(iter, depth + 1);
+                expect_end(iter);
+            }
             None
         }
     }

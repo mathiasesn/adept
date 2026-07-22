@@ -43,6 +43,25 @@ pub enum OutputFormat {
     Json,
 }
 
+/// CLI-facing mirror of [`adept::Tokenizer`] (clap's `ValueEnum` can't be
+/// derived on a type owned by another crate).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TokenizerArg {
+    /// The `o200k_base` encoding (GPT-4o family). The default.
+    O200kBase,
+    /// The `cl100k_base` encoding (GPT-4/GPT-3.5 era).
+    Cl100kBase,
+}
+
+impl From<TokenizerArg> for adept::Tokenizer {
+    fn from(value: TokenizerArg) -> Self {
+        match value {
+            TokenizerArg::O200kBase => adept::Tokenizer::O200kBase,
+            TokenizerArg::Cl100kBase => adept::Tokenizer::Cl100kBase,
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 pub struct CheckArgs {
     /// Files or directories to check.
@@ -71,6 +90,11 @@ pub struct CheckArgs {
     /// Always exit 0, even if diagnostics were found.
     #[arg(long)]
     pub exit_zero: bool,
+
+    /// Which `tiktoken-rs` BPE encoding to count tokens with (default
+    /// `o200k-base`; overrides the config file's `[lint] tokenizer`).
+    #[arg(long, value_enum)]
+    pub tokenizer: Option<TokenizerArg>,
 }
 
 #[derive(Debug, Parser)]
@@ -121,4 +145,10 @@ pub struct ScoreArgs {
     /// Number of independent judge samples per prompt (majority vote).
     #[arg(long)]
     pub judge_samples: Option<usize>,
+
+    /// Which `tiktoken-rs` BPE encoding to use for token-bloat analysis
+    /// (default `o200k-base`; overrides the config file's `[score]
+    /// tokenizer`).
+    #[arg(long, value_enum)]
+    pub tokenizer: Option<TokenizerArg>,
 }

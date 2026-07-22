@@ -37,30 +37,13 @@ struct RawSuggestions {
     suggestions: Vec<String>,
 }
 
-/// Discover companion files: every regular file in the skill's directory
-/// other than `SKILL.md` itself. Non-recursive, since companion files live
-/// alongside SKILL.md by convention.
-///
-/// Returns an empty map if the skill's directory cannot be read (e.g. the
-/// skill was parsed from a path with no accessible parent); this is a soft
-/// degradation, not a hard error, since token-bloat analysis of the
-/// description/body alone is still meaningful.
+/// Discover companion files for `skill`. Re-exported from this module for
+/// backwards compatibility; delegates to the shared
+/// [`adept::discover_companion_files`] (previously this crate had its own,
+/// subtly different implementation).
+#[must_use]
 pub fn discover_companion_files(skill: &Skill) -> Vec<PathBuf> {
-    let Some(dir) = skill.path.parent() else {
-        return Vec::new();
-    };
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut files = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_file() && path.file_name() != skill.path.file_name() {
-            files.push(path);
-        }
-    }
-    files.sort();
-    files
+    adept::discover_companion_files(skill)
 }
 
 fn relative_to(dir: &Path, path: &Path) -> PathBuf {

@@ -17,6 +17,7 @@
 //! - [`AdeptError`]: the shared error type for hard failures (I/O, malformed
 //!   input) as opposed to lint findings.
 
+mod companion;
 mod diagnostic;
 mod error;
 mod frontmatter;
@@ -25,8 +26,10 @@ pub mod reporting;
 mod rules;
 mod skill;
 mod skillset;
+pub mod text;
 mod token;
 
+pub use companion::discover_companion_files;
 pub use diagnostic::{Diagnostic, Severity};
 pub use error::AdeptError;
 pub use frontmatter::{ExtraField, Frontmatter};

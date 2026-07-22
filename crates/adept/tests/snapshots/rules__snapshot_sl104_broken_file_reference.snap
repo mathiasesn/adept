@@ -1,0 +1,10 @@
+---
+source: crates/adept/tests/rules.rs
+expression: "lint_fixture(\"sl104_broken_ref\")"
+---
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl104_broken_ref/SKILL.md:2:1: SL004 frontmatter `name` ("sl104-broken-ref") does not match the containing directory name ("sl104_broken_ref")
+  fix: rename the `name` field to "sl104_broken_ref", or rename the directory to "sl104-broken-ref"
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl104_broken_ref/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl104_broken_ref/SKILL.md:7:1: SL104 referenced file "scripts/helper.py" does not exist
+  fix: fix the path, or add the missing file next to SKILL.md

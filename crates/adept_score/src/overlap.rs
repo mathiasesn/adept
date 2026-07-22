@@ -7,8 +7,6 @@
 //! to the `adept` core crate (e.g. an `SL4xx` rule) — `adept_score` does
 //! not depend on that.
 
-use std::collections::BTreeSet;
-
 use adept::Skill;
 use serde::{Deserialize, Serialize};
 
@@ -52,33 +50,27 @@ pub struct OverlapAdjudication {
     pub disambiguation: String,
 }
 
-/// Tokenize `text` into a lowercased set of alphanumeric words, for cheap
-/// offline Jaccard similarity.
-fn word_set(text: &str) -> BTreeSet<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_lowercase())
-        .collect()
-}
-
-/// Jaccard similarity between the name+description word sets of two skills:
-/// `|intersection| / |union|`. `0.0` if both sets are empty.
+/// Jaccard similarity between the name+description word sets of two skills.
+///
+/// Uses the shared [`adept::text::word_bag`]/[`adept::text::jaccard`]
+/// tokenizer, but deliberately different *input* and *threshold* than
+/// `adept`'s own `SL402` (`similar-description`) rule: this shortlists
+/// candidate pairs for (expensive) LLM adjudication, so it combines
+/// name+description and uses a low threshold
+/// ([`DEFAULT_SIMILARITY_THRESHOLD`], 0.25) to cast a wide net; `SL402` is a
+/// standalone static lint, so it uses description alone at a higher
+/// threshold (0.6) tuned to flag near-duplicates without an LLM pass to
+/// filter out false positives.
 pub fn description_similarity(a: &Skill, b: &Skill) -> f64 {
     let text_a = format!("{} {}", a.frontmatter.name, a.frontmatter.description);
     let text_b = format!("{} {}", b.frontmatter.name, b.frontmatter.description);
-    let set_a = word_set(&text_a);
-    let set_b = word_set(&text_b);
+    let set_a = adept::text::word_bag(&text_a);
+    let set_b = adept::text::word_bag(&text_b);
 
     if set_a.is_empty() && set_b.is_empty() {
         return 0.0;
     }
-    let intersection = set_a.intersection(&set_b).count();
-    let union = set_a.union(&set_b).count();
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f64 / union as f64
-    }
+    adept::text::jaccard(&set_a, &set_b)
 }
 
 /// Shortlist all pairs of `skills` whose [`description_similarity`] meets or
@@ -176,23 +168,17 @@ mod tests {
 
     #[test]
     fn identical_descriptions_are_fully_similar() {
-        let set = word_set("Fills PDF forms automatically");
+        let set = adept::text::word_bag("Fills PDF forms automatically");
         assert!(set.contains("fills"));
-        let sim = jaccard(&set, &set);
+        let sim = adept::text::jaccard(&set, &set);
         assert_eq!(sim, 1.0);
-    }
-
-    fn jaccard(a: &BTreeSet<String>, b: &BTreeSet<String>) -> f64 {
-        let intersection = a.intersection(b).count();
-        let union = a.union(b).count();
-        intersection as f64 / union as f64
     }
 
     #[test]
     fn unrelated_descriptions_have_low_similarity() {
-        let a = word_set("Fills PDF forms automatically for tax filing");
-        let b = word_set("Generates weather forecasts from satellite data");
-        assert!(jaccard(&a, &b) < 0.2);
+        let a = adept::text::word_bag("Fills PDF forms automatically for tax filing");
+        let b = adept::text::word_bag("Generates weather forecasts from satellite data");
+        assert!(adept::text::jaccard(&a, &b) < 0.2);
     }
 
     #[tokio::test]

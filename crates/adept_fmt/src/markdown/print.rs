@@ -3,6 +3,7 @@
 use crate::config::FmtConfig;
 
 use super::ast::{Alignment, Block, Inline, ListItem};
+use super::MAX_NESTING_DEPTH;
 
 /// A single reflow-able output token: either an atomic word (which may
 /// itself be a whole inline code span, link, or image — never split
@@ -15,24 +16,31 @@ enum Token {
 /// Print a full sequence of top-level blocks to a document string, ending
 /// in exactly one trailing newline.
 pub fn print_document(blocks: &[Block], cfg: &FmtConfig) -> String {
-    let lines = print_blocks(blocks, cfg);
+    let lines = print_blocks(blocks, cfg, 0);
     let mut out = lines.join("\n");
     out.push('\n');
     out
 }
 
-fn print_blocks(blocks: &[Block], cfg: &FmtConfig) -> Vec<String> {
+fn print_blocks(blocks: &[Block], cfg: &FmtConfig, depth: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for (i, b) in blocks.iter().enumerate() {
         if i > 0 {
             lines.push(String::new());
         }
-        lines.extend(print_block(b, cfg));
+        lines.extend(print_block(b, cfg, depth));
     }
     lines
 }
 
-fn print_block(block: &Block, cfg: &FmtConfig) -> Vec<String> {
+/// Print a single block. `depth` counts container nesting (block quotes,
+/// lists, footnote definitions) seen so far; once it reaches
+/// [`MAX_NESTING_DEPTH`] we stop recursing into further containers
+/// regardless of what the AST actually contains, so this function's own
+/// call stack can never exceed that bound even given a pathologically
+/// deep, hand-built [`Block`] tree (the normal `build` path never produces
+/// one this deep in the first place, see [`super::build`]).
+fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
     match block {
         Block::Heading { level, inline } => {
             let level = (*level).clamp(1, 6);
@@ -46,7 +54,10 @@ fn print_block(block: &Block, cfg: &FmtConfig) -> Vec<String> {
         }
         Block::Paragraph(inline) => wrap_paragraph(inline, cfg),
         Block::BlockQuote(inner) => {
-            let content = print_blocks(inner, cfg);
+            if depth >= MAX_NESTING_DEPTH {
+                return vec!["> [nesting too deep, content omitted]".to_string()];
+            }
+            let content = print_blocks(inner, cfg, depth + 1);
             indent_block(&content, "> ", "> ")
         }
         Block::List {
@@ -54,7 +65,12 @@ fn print_block(block: &Block, cfg: &FmtConfig) -> Vec<String> {
             start,
             tight,
             items,
-        } => print_list(*ordered, *start, *tight, items, cfg),
+        } => {
+            if depth >= MAX_NESTING_DEPTH {
+                return vec!["- [nesting too deep, content omitted]".to_string()];
+            }
+            print_list(*ordered, *start, *tight, items, cfg, depth)
+        }
         Block::CodeBlock { info, literal } => print_code_block(info, literal, cfg),
         Block::ThematicBreak => vec!["---".to_string()],
         Block::Table {
@@ -63,8 +79,12 @@ fn print_block(block: &Block, cfg: &FmtConfig) -> Vec<String> {
             rows,
         } => print_table(alignments, header, rows, cfg),
         Block::HtmlBlock(raw) => raw.lines().map(str::to_string).collect(),
+        Block::Raw(raw) => raw.lines().map(str::to_string).collect(),
         Block::FootnoteDefinition { label, blocks } => {
-            let content = print_blocks(blocks, cfg);
+            if depth >= MAX_NESTING_DEPTH {
+                return vec![format!("[^{label}]: [nesting too deep, content omitted]")];
+            }
+            let content = print_blocks(blocks, cfg, depth + 1);
             let first_prefix = format!("[^{label}]: ");
             let rest_prefix = " ".repeat(first_prefix.chars().count());
             indent_block(&content, &first_prefix, &rest_prefix)
@@ -78,6 +98,7 @@ fn print_list(
     tight: bool,
     items: &[ListItem],
     cfg: &FmtConfig,
+    depth: usize,
 ) -> Vec<String> {
     let mut out = Vec::new();
     for (i, (num, item)) in (start..).zip(items.iter()).enumerate() {
@@ -91,7 +112,7 @@ fn print_list(
         };
         let rest_prefix = " ".repeat(first_prefix.chars().count());
 
-        let mut content = print_blocks(&item.blocks, cfg);
+        let mut content = print_blocks(&item.blocks, cfg, depth + 1);
         if let Some(checked) = item.checked {
             let box_str = if checked { "[x] " } else { "[ ] " };
             if content.is_empty() {

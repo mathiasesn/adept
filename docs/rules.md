@@ -53,9 +53,19 @@ directly by an `h3` with no intervening `h2`.
 headings.
 
 ### SL104 `broken-file-reference` (Error)
-Flags a relative path or markdown link mentioned in the body (via
-`[text](path)` or backtick-quoted paths) that does not exist on disk next to
-SKILL.md.
+Flags a markdown link/image destination (`[text](path)` / `![alt](path)`),
+or a backtick-quoted span that is either an explicit relative path (`./x`,
+`../x`) or contains a `/` and ends in a known file extension (e.g.
+`` `scripts/run.py` ``), that does not exist on disk next to SKILL.md.
+
+Deliberately conservative to avoid false positives on things that merely
+look path-like: it skips anything with a URL scheme (`https://...`,
+`mailto:...`), an in-page anchor (`#section`), a `~`-relative or absolute
+(`/...`) path, a glob metacharacter (`*?[]{}`), a template placeholder
+(`{lang}`, `<VAR>`, `$VAR`), a scoped package name (`@scope/name`), or a
+bare filename with no directory component and no markdown-link context
+(e.g. a prose mention of `package.json`) — real companion-file references
+almost always come as a markdown link or an explicit relative path.
 **Fix:** fix the path, or add the missing file next to SKILL.md.
 
 ## SL2xx — description / triggering heuristics
@@ -66,11 +76,15 @@ Rationale: below this, a description can't state both what the skill does
 and when to use it.
 **Fix:** expand the description.
 
-### SL202 `description-too-long` (Warning)
-Flags a description over `description_max_tokens` (default **75**), as a
-style/quality concern. See also SL301, the hard-budget equivalent.
-Rationale: 75 `o200k_base` tokens is generously above two long sentences.
-**Fix:** trim the description to one or two sentences.
+### SL202 (retired)
+Originally `description-too-long`, flagging the same condition
+(`description_max_tokens` exceeded) as `SL301` below, at `Warning` instead
+of `Error`, with no other distinct meaning — every over-long description
+fired both codes for one defect. Resolved by retiring `SL202` in favor of
+`SL301`: token-budget breaches are an `SL3xx` concern per the rule taxonomy,
+so `SL301` is the sole rule for this condition now. The code `SL202` is not
+reused, so old configs referencing it fail closed rather than silently
+picking up a new meaning.
 
 ### SL203 `missing-trigger-phrase` (Warning)
 Flags a description with no recognizable trigger phrasing (e.g. "use when",
@@ -98,9 +112,8 @@ over-triggering.
 ## SL3xx — token budget
 
 ### SL301 `description-tokens-over-budget` (Error)
-Flags a description over `description_max_tokens` (default **75**), as a
-hard budget breach (`Error`) independent of the softer SL202 style rule, so
-CI can gate on it.
+Flags a description over `description_max_tokens` (default **75**). The
+sole rule for this condition; see `SL202` above for why.
 **Fix:** shorten the description below the configured token budget.
 
 ### SL302 `body-tokens-over-budget` (Error)

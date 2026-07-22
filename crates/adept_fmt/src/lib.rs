@@ -120,8 +120,10 @@ fn map_adept_error(err: AdeptError) -> FmtError {
             FmtError::InvalidField(field)
         }
         // `parse_str` (used by `format_str`) never produces `Io`, `WalkDir`,
-        // `NotFound`, or `Json` errors; keep this arm to stay exhaustive
-        // against future `AdeptError` variants without panicking.
-        _ => FmtError::InvalidField("unknown"),
+        // `NotFound`, or `Json` errors today, but keep this arm to stay
+        // exhaustive against future `AdeptError` variants without
+        // panicking. Preserve the real error message rather than fabricating
+        // a field name, so an unexpected case here stays diagnosable.
+        other => FmtError::Internal(other.to_string()),
     }
 }

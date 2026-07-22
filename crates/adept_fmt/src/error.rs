@@ -23,4 +23,12 @@ pub enum FmtError {
     /// or was not a string.
     #[error("missing or invalid required frontmatter field `{0}`")]
     InvalidField(&'static str),
+
+    /// An underlying error occurred that doesn't map to any of the other
+    /// `FmtError` variants (e.g. an I/O or JSON error surfaced from
+    /// [`adept::AdeptError`] in a context where none of those are expected).
+    /// Carries the original error's message so the failure stays
+    /// diagnosable instead of being reported as a fabricated field name.
+    #[error("internal error: {0}")]
+    Internal(String),
 }

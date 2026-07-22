@@ -71,44 +71,13 @@ impl SkillRule for TooShort {
     }
 }
 
-/// `SL202` `description-too-long`: the description exceeds
-/// [`LintConfig::description_max_tokens`].
-pub struct TooLong;
-
-impl Rule for TooLong {
-    fn code(&self) -> &'static str {
-        "SL202"
-    }
-    fn name(&self) -> &'static str {
-        "description-too-long"
-    }
-    fn default_severity(&self) -> Severity {
-        Severity::Warning
-    }
-}
-
-impl SkillRule for TooLong {
-    fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {
-        let desc = &skill.frontmatter.description;
-        let count = tokens.count(desc);
-        if count > config.description_max_tokens {
-            vec![Diagnostic::new(
-                self.code(),
-                format!(
-                    "description is {count} tokens, over the budget of {}",
-                    config.description_max_tokens
-                ),
-                self.default_severity(),
-                &skill.path,
-                skill.frontmatter.description_line,
-                1,
-            )
-            .with_fix_suggestion("trim the description to one or two sentences")]
-        } else {
-            Vec::new()
-        }
-    }
-}
+// `SL202` (`description-too-long`) is retired: it duplicated `SL301`
+// (`description-tokens-over-budget`) exactly, both firing on
+// `description_max_tokens` for the same input with no distinct meaning.
+// `SL3xx` is the token-budget family per the spec, so `SL301` is the
+// surviving rule; see `docs/rules.md` for the rationale. The code `SL202`
+// is retired, not reused, so historical configs referencing it don't
+// silently start meaning something else.
 
 /// `SL203` `missing-trigger-phrase`: the description does not state *when*
 /// to use the skill (no recognizable trigger phrasing such as "use when",

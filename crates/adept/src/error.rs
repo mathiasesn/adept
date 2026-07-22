@@ -80,4 +80,14 @@ pub enum AdeptError {
     /// A JSON serialization error, e.g. while rendering diagnostics.
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// The underlying `tiktoken-rs` BPE encoding tables failed to load for
+    /// a requested [`crate::token::Tokenizer`].
+    #[error("failed to load {tokenizer} tokenizer: {message}")]
+    TokenizerLoad {
+        /// Which tokenizer failed to load.
+        tokenizer: crate::token::Tokenizer,
+        /// The underlying error message from `tiktoken-rs`.
+        message: String,
+    },
 }

@@ -47,7 +47,12 @@ pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
         }
     };
 
-    let options = build_options(args, &resolved.model);
+    let tokenizer = args
+        .tokenizer
+        .map(adept::Tokenizer::from)
+        .or(config.score.tokenizer)
+        .unwrap_or_default();
+    let options = build_options(args, &resolved.model, tokenizer);
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -82,7 +87,7 @@ pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
     }
 }
 
-fn build_options(args: &ScoreArgs, model: &str) -> ScoreOptions {
+fn build_options(args: &ScoreArgs, model: &str, tokenizer: adept::Tokenizer) -> ScoreOptions {
     let mut triggering = TriggeringOptions {
         model: model.to_string(),
         ..TriggeringOptions::default()
@@ -102,6 +107,7 @@ fn build_options(args: &ScoreArgs, model: &str) -> ScoreOptions {
         triggering: Some(triggering),
         token_bloat: true,
         overlap_similarity_threshold: adept_score::DEFAULT_SIMILARITY_THRESHOLD,
+        tokenizer,
     }
 }
 
@@ -168,8 +174,9 @@ mod tests {
             num_prompts: Some(4),
             seed: Some(42),
             judge_samples: Some(3),
+            tokenizer: None,
         };
-        let options = build_options(&args, "test-model");
+        let options = build_options(&args, "test-model", adept::Tokenizer::default());
         assert_eq!(options.model, "test-model");
         let triggering = options.triggering.unwrap();
         assert_eq!(triggering.num_prompts, 4);
@@ -197,6 +204,7 @@ mod tests {
             triggering: Some(triggering),
             token_bloat: true,
             overlap_similarity_threshold: adept_score::DEFAULT_SIMILARITY_THRESHOLD,
+            tokenizer: adept::Tokenizer::default(),
         };
 
         let rendered = run_with_client(&mock, &skill, &[], &options).await.unwrap();

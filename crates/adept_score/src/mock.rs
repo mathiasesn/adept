@@ -28,6 +28,7 @@ pub struct MockLlmClient {
 
 impl MockLlmClient {
     /// Construct a mock that serves `responses` in order, one per call.
+    #[must_use]
     pub fn new(responses: Vec<Result<ChatResponse, LlmError>>) -> Self {
         Self {
             responses: Mutex::new(responses.into()),
@@ -37,6 +38,7 @@ impl MockLlmClient {
 
     /// Construct a mock that serves the given strings, each wrapped as a
     /// successful [`ChatResponse`], in order.
+    #[must_use]
     pub fn with_texts(texts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self::new(
             texts

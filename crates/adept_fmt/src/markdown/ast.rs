@@ -64,6 +64,11 @@ pub enum Block {
     },
     /// A raw HTML block, passed through verbatim.
     HtmlBlock(String),
+    /// Content nested deeper than [`crate::markdown::MAX_NESTING_DEPTH`]
+    /// (e.g. thousands of nested block quotes/lists), flattened to plain
+    /// text and passed through verbatim rather than being parsed into a
+    /// deeply nested tree. Never reformatted.
+    Raw(String),
     /// A footnote definition, containing further blocks.
     FootnoteDefinition {
         /// The footnote's label (without the `^`/brackets).

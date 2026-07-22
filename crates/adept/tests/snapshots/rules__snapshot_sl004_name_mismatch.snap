@@ -1,0 +1,8 @@
+---
+source: crates/adept/tests/rules.rs
+expression: "lint_fixture(\"sl004_name_mismatch\")"
+---
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl004_name_mismatch/SKILL.md:2:1: SL004 frontmatter `name` ("totally-different-name") does not match the containing directory name ("sl004_name_mismatch")
+  fix: rename the `name` field to "sl004_name_mismatch", or rename the directory to "totally-different-name"
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl004_name_mismatch/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering

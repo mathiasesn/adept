@@ -73,6 +73,7 @@ pub struct ChatRequest {
 impl ChatRequest {
     /// Construct a request with the given model and messages, temperature
     /// `0.0`, no seed, and no JSON response format requested.
+    #[must_use]
     pub fn new(model: impl Into<String>, messages: Vec<ChatMessage>) -> Self {
         Self {
             model: model.into(),
@@ -114,6 +115,7 @@ pub struct ChatResponse {
 
 impl ChatResponse {
     /// Construct a response with the given content.
+    #[must_use]
     pub fn new(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
@@ -295,11 +297,13 @@ struct RawResponseMessage {
 
 impl OpenAiCompatClient {
     /// Construct a client from fully resolved configuration.
+    #[must_use]
     pub fn new(config: ResolvedLlmConfig) -> Self {
         Self::with_timeout_and_retries(config, Duration::from_secs(60), 3)
     }
 
     /// Construct a client with an explicit timeout and retry budget.
+    #[must_use]
     pub fn with_timeout_and_retries(
         config: ResolvedLlmConfig,
         timeout: Duration,

@@ -2,25 +2,35 @@
 //!
 //! Implementation choice: this implements the JSON-RPC 2.0 stdio transport
 //! directly (newline-delimited JSON messages, per the MCP spec) rather than
-//! depending on the `rmcp` SDK crate. `adept mcp` only needs to expose two
-//! static, offline tools (`check_skill`, `format_skill`) behind
-//! `initialize` / `tools/list` / `tools/call`, which is a small enough
-//! surface that a direct implementation keeps the dependency footprint (and
-//! the risk of an unfamiliar SDK writing to stdout on our behalf) minimal.
+//! depending on the `rmcp` SDK crate. `adept mcp` exposes three tools
+//! (`check_skill`, `format_skill`, `score_skill`) behind `initialize` /
+//! `tools/list` / `tools/call`, which is a small enough surface that a
+//! direct implementation keeps the dependency footprint (and the risk of
+//! an unfamiliar SDK writing to stdout on our behalf) minimal.
 //!
 //! **Critical invariant**: stdout carries only JSON-RPC response messages.
 //! All logging/diagnostics go to stderr. [`handle_message`] never prints
 //! anything itself; [`serve`] is the only place that writes to stdout.
 
 use std::io::{BufRead, Write};
+use std::time::Duration;
 
 use adept::{AnthropicSkillParser, LintConfig, Linter, SkillParser};
 use adept_fmt::{format_str, FmtConfig};
+use adept_score::{LlmConfig, OpenAiCompatClient, ScoreOptions, TriggeringOptions};
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "adept";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Minimum/maximum accepted `line_width` for `format_skill`. Guards against
+/// `0` (degenerate one-word-per-line output) and unreasonably large values.
+const MIN_LINE_WIDTH: u64 = 20;
+const MAX_LINE_WIDTH: u64 = 500;
+
+/// How long `score_skill` will wait for the LLM backend before giving up.
+const SCORE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Run the MCP stdio server: read newline-delimited JSON-RPC requests from
 /// `stdin`, write newline-delimited JSON-RPC responses to `stdout`, and log
@@ -122,35 +132,60 @@ fn handle_initialize() -> Value {
 }
 
 fn handle_tools_list() -> Value {
-    json!({
-        "tools": [
-            {
-                "name": "check_skill",
-                "description": "Lint a SKILL.md file, given a filesystem path or raw content, returning structured diagnostics.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Path to a SKILL.md file or skill directory." },
-                        "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." }
-                    },
-                    "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
-                }
-            },
-            {
-                "name": "format_skill",
-                "description": "Format a SKILL.md file's content, given a filesystem path or raw content, returning the canonically formatted text.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Path to a SKILL.md file." },
-                        "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." },
-                        "line_width": { "type": "integer", "description": "Target line width for prose reflow (default 100)." }
-                    },
-                    "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
-                }
+    let mut tools = vec![
+        json!({
+            "name": "check_skill",
+            "description": "Lint a SKILL.md file, given a filesystem path or raw content, returning structured diagnostics.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a SKILL.md file or skill directory." },
+                    "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." }
+                },
+                "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
             }
-        ]
-    })
+        }),
+        json!({
+            "name": "format_skill",
+            "description": "Format a SKILL.md file's content, given a filesystem path or raw content, returning the canonically formatted text.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a SKILL.md file." },
+                    "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." },
+                    "line_width": {
+                        "type": "integer",
+                        "description": "Target line width for prose reflow (default 100; must be between 20 and 500).",
+                        "minimum": MIN_LINE_WIDTH,
+                        "maximum": MAX_LINE_WIDTH
+                    }
+                },
+                "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
+            }
+        }),
+    ];
+
+    // Only advertise `score_skill` when an LLM backend can actually be
+    // resolved (network-backed; requires `ADEPT_MODEL` etc.) so agents
+    // don't discover a tool that's guaranteed to fail.
+    if LlmConfig::default().resolve().is_ok() {
+        tools.push(json!({
+            "name": "score_skill",
+            "description": "Score a skill's triggering accuracy, token bloat, and overlap with sibling skills using an LLM. Requires ADEPT_MODEL (and optionally ADEPT_BASE_URL/ADEPT_API_KEY) to be configured; network-backed with a timeout.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a SKILL.md file or skill directory." },
+                    "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." },
+                    "model": { "type": "string", "description": "Override the model to score with (defaults to ADEPT_MODEL)." },
+                    "base_url": { "type": "string", "description": "Override the OpenAI-compatible base URL (defaults to ADEPT_BASE_URL or the OpenAI API)." }
+                },
+                "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
+            }
+        }));
+    }
+
+    json!({ "tools": tools })
 }
 
 fn handle_tools_call(params: &Value) -> Result<Value, (i64, String)> {
@@ -163,6 +198,7 @@ fn handle_tools_call(params: &Value) -> Result<Value, (i64, String)> {
     match name {
         "check_skill" => Ok(tool_result(check_skill_tool(&arguments))),
         "format_skill" => Ok(tool_result(format_skill_tool(&arguments))),
+        "score_skill" => Ok(tool_result(score_skill_tool(&arguments))),
         other => Err((-32602, format!("unknown tool: {other}"))),
     }
 }
@@ -208,7 +244,10 @@ fn check_skill_tool(arguments: &Value) -> (String, bool) {
         Err(err) => return (json!({ "error": err.to_string() }).to_string(), true),
     };
 
-    let linter = Linter::new(LintConfig::default());
+    let linter = match Linter::new(LintConfig::default()) {
+        Ok(linter) => linter,
+        Err(err) => return (json!({ "error": err.to_string() }).to_string(), true),
+    };
     let diagnostics = linter.lint_skill(&skill);
     match adept::reporting::render_json(&diagnostics) {
         Ok(json) => (json, false),
@@ -223,13 +262,108 @@ fn format_skill_tool(arguments: &Value) -> (String, bool) {
     };
 
     let mut config = FmtConfig::default();
-    if let Some(width) = arguments.get("line_width").and_then(Value::as_u64) {
+    if let Some(width_value) = arguments.get("line_width") {
+        let width = match width_value.as_u64() {
+            Some(width) if (MIN_LINE_WIDTH..=MAX_LINE_WIDTH).contains(&width) => width,
+            _ => {
+                return (
+                    format!(
+                        "invalid `line_width`: must be an integer between {MIN_LINE_WIDTH} and {MAX_LINE_WIDTH}"
+                    ),
+                    true,
+                );
+            }
+        };
         config.line_width = width as usize;
     }
 
     match format_str(&source, &config) {
         Ok(formatted) => (formatted, false),
         Err(err) => (err.to_string(), true),
+    }
+}
+
+/// `score_skill` MCP tool: runs LLM-assisted scoring, given a resolvable
+/// `ADEPT_MODEL`/`ADEPT_BASE_URL`/`ADEPT_API_KEY` (or `model`/`base_url`
+/// arguments). Never panics or hangs: a missing/unresolvable LLM config, a
+/// malformed skill, or a timed-out request all come back as a structured
+/// `(text, is_error=true)` result rather than propagating a panic.
+fn score_skill_tool(arguments: &Value) -> (String, bool) {
+    let (source, path) = match read_source(arguments) {
+        Ok(pair) => pair,
+        Err(message) => return (message, true),
+    };
+
+    let skill = match AnthropicSkillParser.parse_str(&path, &source) {
+        Ok(skill) => skill,
+        Err(err) => return (json!({ "error": err.to_string() }).to_string(), true),
+    };
+
+    let llm_config = LlmConfig {
+        base_url: arguments
+            .get("base_url")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        api_key: None,
+        model: arguments
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    let resolved = match llm_config.resolve() {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            return (
+                json!({
+                    "error": format!(
+                        "no LLM model configured for score_skill: {err} (set ADEPT_MODEL, or pass a `model` argument)"
+                    )
+                })
+                .to_string(),
+                true,
+            );
+        }
+    };
+
+    let client = OpenAiCompatClient::new(resolved.clone());
+    let options = ScoreOptions {
+        model: resolved.model.clone(),
+        triggering: Some(TriggeringOptions {
+            model: resolved.model.clone(),
+            ..TriggeringOptions::default()
+        }),
+        token_bloat: true,
+        overlap_similarity_threshold: adept_score::DEFAULT_SIMILARITY_THRESHOLD,
+        tokenizer: adept::Tokenizer::default(),
+    };
+    let skillset = [skill.clone()];
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return (
+                format!("failed to start async runtime for score_skill: {err}"),
+                true,
+            );
+        }
+    };
+
+    let outcome = runtime.block_on(tokio::time::timeout(
+        SCORE_TIMEOUT,
+        adept_score::score_skill(&client, &skill, &skillset, &options),
+    ));
+
+    match outcome {
+        Ok(Ok(report)) => match serde_json::to_string(&report) {
+            Ok(json) => (json, false),
+            Err(err) => (format!("failed to render score report: {err}"), true),
+        },
+        Ok(Err(err)) => (json!({ "error": err.to_string() }).to_string(), true),
+        Err(_elapsed) => (
+            json!({ "error": format!("score_skill timed out after {SCORE_TIMEOUT:?}") })
+                .to_string(),
+            true,
+        ),
     }
 }
 

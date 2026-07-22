@@ -173,6 +173,145 @@ fn score_without_model_exits_two_with_actionable_message() {
 }
 
 #[test]
+fn check_accepts_tokenizer_flag_for_both_values() {
+    for tokenizer in ["o200k-base", "cl100k-base"] {
+        let output = adept()
+            .arg("check")
+            .arg(fixture("clean-skill"))
+            .arg("--tokenizer")
+            .arg(tokenizer)
+            .arg("--format")
+            .arg("json")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&stdout)
+            .unwrap_or_else(|err| panic!("output was not valid JSON: {err}\n{stdout}"));
+        assert!(parsed.is_array());
+    }
+}
+
+#[test]
+fn check_rejects_invalid_tokenizer_value() {
+    adept()
+        .arg("check")
+        .arg(fixture("clean-skill"))
+        .arg("--tokenizer")
+        .arg("not-a-real-tokenizer")
+        .assert()
+        .failure();
+}
+
+#[test]
+fn score_help_documents_tokenizer_flag() {
+    adept()
+        .arg("score")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--tokenizer"));
+}
+
+#[test]
+fn mcp_score_skill_without_llm_config_returns_structured_error_not_hang_or_panic() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("adept"))
+        .arg("mcp")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+        )
+        .unwrap();
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "score_skill",
+                "arguments": { "content": "---\nname: sample\ndescription: does a thing. Use when the user asks for a thing.\n---\nBody.\n" }
+            }
+        });
+        writeln!(stdin, "{request}").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    let mut saw_score_error = false;
+    for line in stdout.lines() {
+        let parsed: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|err| panic!("stdout line was not valid JSON: {err}\nline={line}"));
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        if parsed["id"] == 2 {
+            // Either a structured tool-level error (isError: true) or a
+            // JSON-RPC-level error is acceptable, but it must not hang, and
+            // it must not be a bare panic message.
+            let is_tool_error = parsed["result"]["isError"] == true;
+            let is_rpc_error = parsed.get("error").is_some();
+            assert!(
+                is_tool_error || is_rpc_error,
+                "expected a structured error for score_skill without LLM config, got {parsed}"
+            );
+            saw_score_error = true;
+        }
+    }
+    assert!(saw_score_error, "expected a response for id=2");
+}
+
+#[test]
+fn mcp_format_skill_rejects_out_of_range_line_width() {
+    for bad_width in [0, 10_000] {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "format_skill",
+                "arguments": {
+                    "content": "---\nname: sample\ndescription: does a thing. Use when the user asks for a thing.\n---\nBody.\n",
+                    "line_width": bad_width
+                }
+            }
+        });
+
+        let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("adept"))
+            .arg("mcp")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        {
+            use std::io::Write;
+            writeln!(child.stdin.as_mut().unwrap(), "{request}").unwrap();
+        }
+        drop(child.stdin.take());
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let line = stdout.lines().next().expect("expected one response line");
+        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert_eq!(
+            parsed["result"]["isError"], true,
+            "line_width={bad_width} should be rejected, got {parsed}"
+        );
+    }
+}
+
+#[test]
 fn help_and_version_work() {
     adept().arg("--help").assert().success();
     adept().arg("--version").assert().success();

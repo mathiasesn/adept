@@ -34,6 +34,7 @@ pub struct ScoreReport {
 impl ScoreReport {
     /// Construct an empty report for `skill_name`, stamped with the current
     /// [`PROMPT_VERSION`]. Populate fields via struct-update syntax.
+    #[must_use]
     pub fn new(skill_name: impl Into<String>) -> Self {
         Self {
             prompt_version: PROMPT_VERSION.to_string(),

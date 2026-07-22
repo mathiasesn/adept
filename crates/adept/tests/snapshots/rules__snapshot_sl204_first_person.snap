@@ -1,0 +1,10 @@
+---
+source: crates/adept/tests/rules.rs
+expression: "lint_fixture(\"sl204_first_person\")"
+---
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl204_first_person/SKILL.md:2:1: SL004 frontmatter `name` ("sl204-first-person") does not match the containing directory name ("sl204_first_person")
+  fix: rename the `name` field to "sl204_first_person", or rename the directory to "sl204-first-person"
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl204_first_person/SKILL.md:3:1: SL204 description is written in first person; descriptions should be third person
+  fix: rewrite in third person, e.g. "Extracts..." instead of "I extract..."
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl204_first_person/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering

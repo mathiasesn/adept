@@ -1,0 +1,12 @@
+---
+source: crates/adept/tests/rules.rs
+expression: "lint_fixture(\"sl201_too_short\")"
+---
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl201_too_short/SKILL.md:2:1: SL004 frontmatter `name` ("sl201-too-short") does not match the containing directory name ("sl201_too_short")
+  fix: rename the `name` field to "sl201_too_short", or rename the directory to "sl201-too-short"
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl201_too_short/SKILL.md:3:1: SL201 description is only 3 tokens, below the minimum of 6
+  fix: expand the description to state both what the skill does and when to use it
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl201_too_short/SKILL.md:3:1: SL203 description does not state when the skill should be used
+  fix: add trigger phrasing, e.g. "Use when the user asks to..."
+/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl201_too_short/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering

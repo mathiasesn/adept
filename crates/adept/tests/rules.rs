@@ -15,14 +15,14 @@ fn fixture_dir(name: &str) -> PathBuf {
 fn lint_fixture(name: &str) -> String {
     let path = fixture_dir(name).join("SKILL.md");
     let skill = parse_skill(&path).expect("fixture should parse");
-    let linter = Linter::new(LintConfig::default());
+    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
     let diagnostics = linter.lint_skill(&skill);
     render_human_colored(&diagnostics, false)
 }
 
 fn lint_set_fixture(name: &str) -> String {
     let set = SkillSet::discover(fixture_dir(name)).expect("fixture set should discover");
-    let linter = Linter::new(LintConfig::default());
+    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
     let diagnostics = linter.lint_set(&set);
     render_human_colored(&diagnostics, false)
 }
@@ -71,7 +71,7 @@ fn sl003_malformed_frontmatter_fires() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/missing_frontmatter"),
     )
     .expect("should discover");
-    let linter = Linter::new(LintConfig::default());
+    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
     let rendered = render_human_colored(&linter.lint_set(&set), false);
     assert!(rendered.contains("SL003"), "got:\n{rendered}");
 }
@@ -111,10 +111,9 @@ fn sl201_description_too_short_fires() {
     assert_fires("sl201_too_short", "SL201");
 }
 
-#[test]
-fn sl202_description_too_long_fires() {
-    assert_fires("sl202_too_long", "SL202");
-}
+// SL202 (description-too-long) is retired; SL301
+// (description-tokens-over-budget) is the sole rule covering an overlong
+// description now. See `crates/adept/src/rules/description.rs`.
 
 #[test]
 fn sl203_missing_trigger_phrase_fires() {
@@ -194,11 +193,106 @@ fn snapshot_clean_skill() {
 }
 
 #[test]
-fn snapshot_sl202_too_long() {
-    insta::assert_snapshot!(lint_fixture("sl202_too_long"));
+fn snapshot_sl001_missing_description() {
+    insta::assert_snapshot!(lint_fixture("sl001_empty_description"));
+}
+
+#[test]
+fn snapshot_sl002_missing_name() {
+    insta::assert_snapshot!(lint_fixture("sl002_empty_name"));
+}
+
+#[test]
+fn snapshot_sl003_malformed_frontmatter() {
+    let set = SkillSet::discover(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/missing_frontmatter"),
+    )
+    .expect("should discover");
+    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
+    insta::assert_snapshot!(render_human_colored(&linter.lint_set(&set), false));
+}
+
+#[test]
+fn snapshot_sl004_name_mismatch() {
+    insta::assert_snapshot!(lint_fixture("sl004_name_mismatch"));
+}
+
+#[test]
+fn snapshot_sl005_invalid_name_format() {
+    insta::assert_snapshot!(lint_fixture("sl005_invalid_name_format"));
+}
+
+#[test]
+fn snapshot_sl101_empty_body() {
+    insta::assert_snapshot!(lint_fixture("sl101_empty_body"));
+}
+
+#[test]
+fn snapshot_sl102_missing_h1() {
+    insta::assert_snapshot!(lint_fixture("sl102_missing_h1"));
+}
+
+#[test]
+fn snapshot_sl103_heading_skip() {
+    insta::assert_snapshot!(lint_fixture("sl103_heading_skip"));
+}
+
+#[test]
+fn snapshot_sl104_broken_file_reference() {
+    insta::assert_snapshot!(lint_fixture("sl104_broken_ref"));
+}
+
+#[test]
+fn snapshot_sl201_description_too_short() {
+    insta::assert_snapshot!(lint_fixture("sl201_too_short"));
+}
+
+#[test]
+fn snapshot_sl203_missing_trigger_phrase() {
+    insta::assert_snapshot!(lint_fixture("sl203_no_trigger"));
+}
+
+#[test]
+fn snapshot_sl204_first_person() {
+    insta::assert_snapshot!(lint_fixture("sl204_first_person"));
+}
+
+#[test]
+fn snapshot_sl205_restates_name() {
+    insta::assert_snapshot!(lint_fixture("sl205_restates_name"));
+}
+
+#[test]
+fn snapshot_sl206_no_negative_guidance() {
+    insta::assert_snapshot!(lint_fixture("sl206_no_negative"));
+}
+
+#[test]
+fn snapshot_sl301_description_token_budget() {
+    insta::assert_snapshot!(lint_fixture("sl301_desc_budget"));
+}
+
+#[test]
+fn snapshot_sl302_body_token_budget() {
+    insta::assert_snapshot!(lint_fixture("sl302_body_budget"));
+}
+
+#[test]
+fn snapshot_sl303_companion_file_bloat() {
+    insta::assert_snapshot!(lint_fixture("sl303_companion_bloat"));
 }
 
 #[test]
 fn snapshot_cross_sl401() {
     insta::assert_snapshot!(lint_set_fixture("cross_sl401"));
+}
+
+#[test]
+fn snapshot_cross_sl402() {
+    insta::assert_snapshot!(lint_set_fixture("cross_sl402"));
+}
+
+#[test]
+fn snapshot_cross_sl403() {
+    insta::assert_snapshot!(lint_set_fixture("cross_sl403"));
 }

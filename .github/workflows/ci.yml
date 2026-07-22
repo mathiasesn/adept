@@ -38,3 +38,35 @@ jobs:
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
+
+      - name: Performance smoke test (lint 100 skills)
+        # Acceptance criterion (docs/adept-mvp.md): `check` lints 100
+        # skills in under 1 second on a typical dev machine. Measured
+        # performance is ~23ms; a 500ms threshold catches an
+        # order-of-magnitude regression without being flaky on noisy CI
+        # runners (criterion `--quick` keeps this cheap).
+        run: |
+          set -euo pipefail
+          output="$(cargo bench -p adept --bench lint_100_skills -- --quick 2>&1)"
+          echo "$output"
+          # Extract the middle (point-estimate) value from a criterion line like:
+          #   lint_100_skills   time:   [22.095 ms 23.102 ms 23.354 ms]
+          line="$(echo "$output" | grep -E '^lint_100_skills\s+time:' || true)"
+          if [ -z "$line" ]; then
+            echo "::error::could not find criterion timing output for lint_100_skills"
+            exit 1
+          fi
+          read -r value unit <<< "$(echo "$line" | sed -E 's/^lint_100_skills\s+time:\s+\[[0-9.]+ [a-z]+ ([0-9.]+) ([a-z]+) .*/\1 \2/')"
+          case "$unit" in
+            ns) ms=$(awk "BEGIN { print $value / 1000000 }") ;;
+            us) ms=$(awk "BEGIN { print $value / 1000 }") ;;
+            ms) ms="$value" ;;
+            s) ms=$(awk "BEGIN { print $value * 1000 }") ;;
+            *) echo "::error::unrecognized unit in criterion output: $unit"; exit 1 ;;
+          esac
+          echo "lint_100_skills point estimate: ${ms} ms"
+          over_threshold=$(awk "BEGIN { print ($ms > 500) ? 1 : 0 }")
+          if [ "$over_threshold" -eq 1 ]; then
+            echo "::error::lint_100_skills took ${ms}ms, exceeding the 500ms regression threshold (target: under 1000ms; typical: ~23ms)"
+            exit 1
+          fi

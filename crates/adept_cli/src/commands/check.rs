@@ -17,8 +17,17 @@ pub const EXIT_USAGE_ERROR: i32 = 2;
 pub fn run(args: &CheckArgs, config: &AdeptConfig, color: bool, quiet: bool) -> i32 {
     let mut lint_config = config.lint.clone();
     apply_select_ignore(&mut lint_config, &args.select, &args.ignore);
+    if let Some(tokenizer) = args.tokenizer {
+        lint_config.tokenizer = tokenizer.into();
+    }
 
-    let linter = Linter::new(lint_config);
+    let linter = match Linter::new(lint_config) {
+        Ok(linter) => linter,
+        Err(err) => {
+            eprintln!("adept: error: {err}");
+            return EXIT_USAGE_ERROR;
+        }
+    };
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
     let mut had_error = false;
 

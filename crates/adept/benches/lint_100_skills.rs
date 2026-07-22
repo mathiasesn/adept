@@ -23,7 +23,7 @@ fn bench_lint_100_skills(c: &mut Criterion) {
     generate_skills(tmp.path(), 100);
 
     let set = SkillSet::discover(tmp.path()).expect("should discover skills");
-    let linter = Linter::new(LintConfig::default());
+    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
 
     c.bench_function("lint_100_skills", |b| {
         b.iter(|| linter.lint_set(std::hint::black_box(&set)));

@@ -74,6 +74,7 @@ pub struct Registry {
 
 impl Registry {
     /// Build the registry containing every built-in rule.
+    #[must_use]
     #[allow(clippy::vec_init_then_push)]
     pub fn new() -> Self {
         let mut skill_rules: Vec<Box<dyn SkillRule>> = Vec::new();
@@ -88,7 +89,7 @@ impl Registry {
         skill_rules.push(Box::new(structure::BrokenFileReference));
 
         skill_rules.push(Box::new(description::TooShort));
-        skill_rules.push(Box::new(description::TooLong));
+        // SL202 (description-too-long) is retired: see rules/description.rs.
         skill_rules.push(Box::new(description::MissingTriggerPhrase));
         skill_rules.push(Box::new(description::FirstPerson));
         skill_rules.push(Box::new(description::RestatesName));
@@ -117,17 +118,20 @@ impl Registry {
     }
 
     /// The single-skill rules, in registration order.
+    #[must_use]
     pub fn skill_rules(&self) -> &[Box<dyn SkillRule>] {
         &self.skill_rules
     }
 
     /// The cross-skill rules, in registration order.
+    #[must_use]
     pub fn set_rules(&self) -> &[Box<dyn SetRule>] {
         &self.set_rules
     }
 
     /// Metadata for every registered rule (including `SL003`, which has no
     /// directly-invocable check), sorted by code.
+    #[must_use]
     pub fn all_meta(&self) -> Vec<RuleMeta> {
         let mut meta: Vec<RuleMeta> = self
             .skill_rules
@@ -230,6 +234,14 @@ pub struct LintConfig {
     /// 0.5 overlap between two skills' trigger vocabularies is a strong
     /// signal they'll compete to trigger on the same user requests.
     pub trigger_overlap_threshold: f64,
+
+    /// Which `tiktoken-rs` BPE encoding to count tokens with.
+    ///
+    /// Rationale: the spec calls for `o200k_base` (GPT-4o family) by
+    /// default with `cl100k_base` (GPT-4/GPT-3.5 era) selectable, since
+    /// different downstream models tokenize differently and a mismatched
+    /// tokenizer under- or over-counts against the real budget.
+    pub tokenizer: crate::token::Tokenizer,
 }
 
 impl Default for LintConfig {
@@ -243,6 +255,7 @@ impl Default for LintConfig {
             companion_file_max_tokens: 2000,
             similar_description_threshold: 0.6,
             trigger_overlap_threshold: 0.5,
+            tokenizer: crate::token::Tokenizer::default(),
         }
     }
 }
@@ -283,21 +296,28 @@ pub struct Linter {
 
 impl Linter {
     /// Construct a linter with the given configuration and the default rule
-    /// registry.
-    pub fn new(config: LintConfig) -> Self {
-        Self {
+    /// registry, building its [`TokenCounter`] from `config.tokenizer`.
+    ///
+    /// # Errors
+    /// Returns [`AdeptError::TokenizerLoad`] if the configured tokenizer's
+    /// `tiktoken-rs` encoding tables fail to load.
+    pub fn new(config: LintConfig) -> Result<Self, AdeptError> {
+        let token_counter = TokenCounter::new(config.tokenizer)?;
+        Ok(Self {
             config,
             registry: Registry::new(),
-            token_counter: TokenCounter::default(),
-        }
+            token_counter,
+        })
     }
 
     /// The rule registry this linter uses.
+    #[must_use]
     pub fn registry(&self) -> &Registry {
         &self.registry
     }
 
     /// The configuration this linter uses.
+    #[must_use]
     pub fn config(&self) -> &LintConfig {
         &self.config
     }
@@ -435,6 +455,7 @@ fn parse_error_diagnostic(path: &std::path::Path, err: &AdeptError) -> Option<Di
         | AdeptError::Io { .. }
         | AdeptError::WalkDir(_)
         | AdeptError::NotFound(_)
+        | AdeptError::TokenizerLoad { .. }
         | AdeptError::Json(_) => None,
     }
 }

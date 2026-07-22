@@ -52,6 +52,9 @@ Flags:
   (`description-too-short`); repeatable or comma-separated.
 - `--statistics` — print per-rule diagnostic counts.
 - `--exit-zero` — always exit `0`, even if diagnostics were found.
+- `--tokenizer o200k-base|cl100k-base` — which `tiktoken-rs` BPE encoding
+  to count tokens with (default `o200k-base`; overrides the config file's
+  `[lint] tokenizer`).
 
 **Exit codes**: `0` = no diagnostics found (or `--exit-zero`), `1` =
 diagnostics found, `2` = a usage or I/O error (bad path, unreadable file,
@@ -130,7 +133,9 @@ flags:
 | `ADEPT_BASE_URL`    | `--base-url`  | Base URL, default `https://api.openai.com/v1`. |
 | `ADEPT_API_KEY`     | *(none)*      | Bearer token, if the endpoint needs one.  |
 
-Also: `--num-prompts`, `--seed`, `--judge-samples`, `--format human|json`.
+Also: `--num-prompts`, `--seed`, `--judge-samples`, `--format human|json`,
+and `--tokenizer o200k-base|cl100k-base` (default `o200k-base`; overrides
+the config file's `[score] tokenizer`) for the token-bloat analysis.
 
 If no model can be resolved, `adept score` exits `2` with an actionable
 message instead of making a network call:
@@ -157,6 +162,27 @@ $ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | adept mcp
 ]}}
 ```
 
+A third tool, `score_skill`, runs LLM-assisted scoring. Since it's
+network-backed, it's only advertised in `tools/list` when an LLM backend
+can actually be resolved (`ADEPT_MODEL` etc. set, or `model`/`base_url`
+arguments passed); calling it directly without a resolvable config
+returns a structured tool error (`isError: true`) rather than hanging or
+panicking, and requests are bounded by an internal timeout.
+
+```console
+$ ADEPT_MODEL=gpt-4o-mini echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | adept mcp
+{"jsonrpc":"2.0","id":1,"result":{"tools":[
+  {"name":"check_skill", ...},
+  {"name":"format_skill", ...},
+  {"name":"score_skill", "description":"Score a skill's triggering accuracy, token bloat, and overlap with sibling skills using an LLM...", "inputSchema":{...}}
+]}}
+```
+
+`format_skill`'s `line_width` argument is validated to the range
+`20..=500`; out-of-range or zero values are rejected with a structured
+tool error instead of silently truncating or producing degenerate
+one-word-per-line output.
+
 Point any MCP-compatible client at `adept mcp` as a stdio server.
 
 ## Configuration
@@ -170,6 +196,7 @@ disabled = ["SL206"]
 description_min_tokens = 6
 description_max_tokens = 75
 body_max_tokens = 1500
+tokenizer = "o200k_base"  # or "cl100k_base"
 
 [fmt]
 line-width = 100
@@ -177,6 +204,7 @@ line-width = 100
 [score]
 model = "gpt-4o-mini"
 base-url = "https://api.openai.com/v1"
+tokenizer = "o200k_base"  # or "cl100k_base"
 ```
 
 Precedence: CLI flag > config file value > built-in default.

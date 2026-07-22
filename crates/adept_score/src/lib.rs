@@ -54,6 +54,11 @@ pub enum ScoreError {
     /// A response that should have been the documented JSON shape wasn't.
     #[error("malformed LLM response ({0})")]
     MalformedLlmJson(String),
+
+    /// The core crate failed to construct a [`adept::TokenCounter`] (its
+    /// `tiktoken-rs` encoding tables failed to load).
+    #[error(transparent)]
+    Adept(#[from] adept::AdeptError),
 }
 
 /// Options controlling which analyses [`score_skill`] runs and how.
@@ -68,6 +73,9 @@ pub struct ScoreOptions {
     /// The Jaccard-similarity threshold for shortlisting overlap
     /// candidates against `skillset`. Only used if `skillset` is non-empty.
     pub overlap_similarity_threshold: f64,
+    /// Which `tiktoken-rs` BPE encoding to use for token-bloat analysis.
+    /// Defaults to `o200k_base`; CLI-wireable to `cl100k_base`.
+    pub tokenizer: adept::Tokenizer,
 }
 
 impl Default for ScoreOptions {
@@ -77,6 +85,7 @@ impl Default for ScoreOptions {
             triggering: Some(TriggeringOptions::default()),
             token_bloat: true,
             overlap_similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
+            tokenizer: adept::Tokenizer::default(),
         }
     }
 }
@@ -107,7 +116,7 @@ pub async fn score_skill(
     }
 
     if options.token_bloat {
-        let counter = TokenCounter::default();
+        let counter = TokenCounter::new(options.tokenizer)?;
         report.token_bloat =
             Some(analyze_token_bloat(client, skill, &counter, &options.model).await?);
     }
@@ -194,6 +203,7 @@ mod tests {
             triggering: Some(trigger_options),
             token_bloat: true,
             overlap_similarity_threshold: DEFAULT_SIMILARITY_THRESHOLD,
+            tokenizer: adept::Tokenizer::default(),
         };
 
         let report = score_skill(&mock, &skill, &[], &options).await.unwrap();

@@ -19,6 +19,9 @@ const CONFIG_FILE_NAME: &str = "adept.toml";
 pub struct ScoreFileConfig {
     pub model: Option<String>,
     pub base_url: Option<String>,
+    /// Which `tiktoken-rs` BPE encoding to use for token-bloat analysis.
+    /// `None` falls back to [`adept::Tokenizer::default`] (`o200k_base`).
+    pub tokenizer: Option<adept::Tokenizer>,
 }
 
 /// The full deserialized shape of an `adept.toml` config file.

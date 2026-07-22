@@ -243,3 +243,107 @@ fn idempotency_holds_for_every_fixture_with_prose_reflow_disabled() {
         );
     }
 }
+
+/// Build a full SKILL.md source with the given Markdown `body`.
+fn skill_source(body: &str) -> String {
+    format!(
+        "---\nname: deep\ndescription: Use when testing deeply nested markdown to check parser robustness.\n---\n\n{body}"
+    )
+}
+
+// --- Regression tests for the unbounded-recursion stack overflow (nested
+// `Block::BlockQuote` / `Block::List` in `markdown::build`/`markdown::print`
+// had no depth bound). These must not abort the process; a panic would also
+// fail the test harness, so simply completing without crashing already
+// demonstrates the fix, but we additionally assert on the `Result` shape.
+
+#[test]
+fn deeply_nested_blockquote_does_not_crash() {
+    // 10,000 levels of nested blockquote is exactly the crashing repro from
+    // the bug report; comfortably larger than any real document and far
+    // beyond `MAX_NESTING_DEPTH`.
+    let body = format!("{} hi\n", ">".repeat(10_000));
+    let source = skill_source(&body);
+    let cfg = FmtConfig::default();
+
+    // The key assertion is simply that this call returns instead of
+    // aborting the process with a stack overflow.
+    let formatted = format_str(&source, &cfg).expect("depth-bombed blockquote should format");
+    assert!(
+        formatted.contains("hi"),
+        "the deeply nested content should not be silently dropped"
+    );
+
+    let checked = adept_fmt::check_str(&source, &cfg).expect("check_str should also not crash");
+    let _ = checked; // Ok(_) either way; not crashing is the assertion.
+}
+
+#[test]
+fn deeply_nested_list_does_not_crash() {
+    // A nested-list variant of the depth bomb: each level is one more
+    // indented `- ` marker wrapping the next, terminating in a leaf item.
+    let depth = 5_000;
+    let mut body = String::new();
+    for i in 0..depth {
+        body.push_str(&"  ".repeat(i));
+        body.push_str("- ");
+    }
+    body.push_str("leaf\n");
+    let source = skill_source(&body);
+    let cfg = FmtConfig::default();
+
+    let formatted = format_str(&source, &cfg).expect("depth-bombed list should format");
+    assert!(
+        formatted.contains("leaf"),
+        "the deeply nested content should not be silently dropped"
+    );
+}
+
+#[test]
+fn deeply_nested_but_within_limit_blockquote_is_correct_and_idempotent() {
+    // Comfortably under `MAX_NESTING_DEPTH` (100): should still be parsed
+    // into a fully structured, correctly indented nested-blockquote tree,
+    // and remain idempotent.
+    let depth = 40;
+    let body = format!("{} hi\n", ">".repeat(depth));
+    let source = skill_source(&body);
+    let cfg = FmtConfig::default();
+
+    let formatted = format_str(&source, &cfg).expect("within-limit blockquote should format");
+    let expected_prefix = "> ".repeat(depth);
+    assert!(
+        formatted.contains(&format!("{expected_prefix}hi")),
+        "expected a fully nested `> > > ... hi` line, got:\n{formatted}"
+    );
+
+    let formatted_twice = format_str(&formatted, &cfg).expect("re-formatting should also succeed");
+    assert_eq!(
+        formatted, formatted_twice,
+        "within-limit deeply nested blockquote should be idempotent"
+    );
+}
+
+#[test]
+fn deeply_nested_but_within_limit_list_is_correct_and_idempotent() {
+    let depth = 40;
+    let mut body = String::new();
+    for i in 0..depth {
+        body.push_str(&"  ".repeat(i));
+        body.push_str("- ");
+    }
+    body.push_str("leaf\n");
+    let source = skill_source(&body);
+    let cfg = FmtConfig::default();
+
+    let formatted = format_str(&source, &cfg).expect("within-limit nested list should format");
+    assert!(
+        formatted.contains("leaf"),
+        "leaf content should survive formatting"
+    );
+
+    let formatted_twice = format_str(&formatted, &cfg).expect("re-formatting should also succeed");
+    assert_eq!(
+        formatted, formatted_twice,
+        "within-limit deeply nested list should be idempotent"
+    );
+}

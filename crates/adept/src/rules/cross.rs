@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::skillset::SkillSet;
+use crate::text::{jaccard, word_bag};
 use crate::token::TokenCounter;
 
 use super::{LintConfig, Rule, SetRule};
@@ -101,6 +102,11 @@ impl SetRule for SimilarDescription {
             .iter()
             .map(|s| word_bag(&s.frontmatter.description))
             .collect();
+        // Note: this rule's input is the description alone, at
+        // `similar_description_threshold` (default 0.6) — distinct from
+        // `adept_score::description_similarity`, which uses name+description
+        // at its own (lower, shortlisting) threshold. See that function's
+        // docs.
 
         let mut diagnostics = Vec::new();
         for i in 0..set.skills.len() {
@@ -238,13 +244,6 @@ impl SetRule for OverlappingTriggerPhrasing {
     }
 }
 
-fn word_bag(text: &str) -> HashSet<String> {
-    text.split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .map(|w| w.to_lowercase())
-        .collect()
-}
-
 fn shingles(text: &str, n: usize) -> HashSet<String> {
     let words: Vec<String> = text
         .split(|c: char| !c.is_alphanumeric())
@@ -258,14 +257,4 @@ fn shingles(text: &str, n: usize) -> HashSet<String> {
         .windows(n)
         .map(|w| w.join(" "))
         .collect::<HashSet<_>>()
-}
-
-fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
-    let intersection = a.intersection(b).count();
-    let union = a.union(b).count();
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f64 / union as f64
-    }
 }
