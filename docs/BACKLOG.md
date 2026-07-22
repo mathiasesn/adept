@@ -1,6 +1,6 @@
 # Backlog
 
-Open items as of `130398d` (MVP baseline `9bf467a` → `2e29dff`, plus the
+Open items as of `877721f` (MVP baseline `9bf467a` → `2e29dff`, plus the
 markdown-parsing unification on top). Nothing here blocks the four shipped
 surfaces (`check`, `fmt`, `score`, `mcp`); these are known gaps, deliberate
 deferrals, and follow-ups surfaced by the two-axis review.
@@ -68,24 +68,56 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
 
 ## Test coverage
 
-- **Prose reflow is the least-covered high-risk path.** The proptest excludes
-  tables, fences, HTML, and emphasis, and the broad-corpus idempotency loop is
-  gated on `reflow_prose: false` — so the component the spec flagged as
-  highest-effort has the weakest guarantees.
+- **Prose reflow is partly covered.** The proptest still excludes tables,
+  fences, HTML, and emphasis, and the fixture idempotency loop is still gated on
+  `reflow_prose: false` — but the vendored corpus is now exercised at
+  `reflow_prose: true` (`idempotency_holds_for_corpus_with_prose_reflow_enabled`),
+  so real prose does reach the reflow path. 8 of 10 corpus skills pass; the two
+  that don't are the leaning-toothpick bug below.
 - **The criterion benchmark asserts nothing.** CI gates performance by parsing
   `--quick` output in a bash step (~23ms against a 500ms threshold). A native
   assertion in the bench would be less brittle than text parsing.
-- **No fixture exercises a real skills corpus.** The clean-ish acceptance
-  criterion was verified manually; a vendored mini-corpus would make it a test.
-  This bit during the markdown unification: proving that refactor changed no
-  behaviour meant cloning `anthropics/skills` by hand, building both revisions,
-  and diffing `--format json` output (result: all 66 diagnostics byte-identical).
-  That is exactly the check a vendored corpus plus a snapshot test would make
-  repeatable, and it will have to be redone by hand for the next such change.
+- ~~**No fixture exercises a real skills corpus.**~~ Done: 10 Apache-2.0 skills
+  are vendored under `crates/adept/tests/fixtures/corpus/` at upstream
+  `1f630fdf9259cec4a14913127dfd7c3b69ef72eb`, and `tests/corpus.rs` snapshots the
+  linter's output over them (36 diagnostics). The manual clone-build-diff ritual
+  is retired. What remains narrowed to the two items below.
+- **The corpus cannot cover the SL104 residuals.** `anthropics/skills` is not
+  uniformly licensed: `docx`, `pdf`, `pptx` and `xlsx` are source-available, not
+  open source, so they are not vendored — and they are exactly the skills whose
+  zip-internal paths and template filenames produce the 7 known SL104 false
+  positives. The corpus produces 3 SL104 findings, all
+  `skill-creator` → `evals/evals.json`. **The 7 residuals above remain manually
+  verified, not corpus-covered.** Three more skills (`canvas-design`,
+  `theme-factory`, `web-artifacts-builder`) are excluded for carrying binary
+  assets. Do not "helpfully" refresh the pin; see the corpus README.
 - **Setext handling has no real-world coverage.** The corpus contains no setext
-  headings at all, so `SL105` fires nowhere in it and the byte-identical corpus
-  result says nothing about the setext path. Its only evidence is the unit and
-  regression tests in `markdown/query.rs` and `tests/rules.rs`.
+  headings at all, so `SL105` fires nowhere in it. Its only evidence is the unit
+  and regression tests in `markdown/query.rs` and `tests/rules.rs`.
+- **Reflow can emit marker-like line starts ("leaning toothpick").**
+  `wrap_tokens`/`build_tokens` in `crates/adept_fmt/src/print.rs` choose break
+  points purely by width, never checking whether the resulting line-initial
+  token would re-parse as CommonMark block syntax — a `-`/`+`/`*` bullet, ATX
+  `#`, blockquote `>`, or ordered-list `N.`. This breaks
+  `format(format(x)) == format(x)` whenever prose has such a character
+  mid-sentence where the width limit happens to fall. Confirmed in two corpus
+  skills: `algorithmic-art` (a mid-sentence `-` wraps into a line read as a
+  nested list item, flipping the list from tight to loose) and `claude-api` (a
+  `+` inside a blockquote). Both sit on `KNOWN_NON_IDEMPOTENT` in
+  `crates/adept_fmt/tests/format_tests.rs`, with `#[ignore]`d minimized repros
+  ready to un-ignore. Likely fix: when a candidate break would put a
+  block-marker token at line start, force it onto the previous line even
+  over-width, or escape the leading character.
+- **`SL303` flags bundled `LICENSE.txt` files.** 9 of the corpus's 36
+  diagnostics are SL303 companion-file-bloat findings against the per-skill
+  Apache-2.0 license text every upstream skill ships. Bundled license text is
+  not bloat in any useful sense; the rule probably wants a license-filename
+  exemption. The current snapshot enshrines these as expected output.
+- **`adept::markdown::build::collect_inlines` never coalesces adjacent `Text`
+  events.** A backslash escape splits one word into several `Inline::Text`
+  nodes with nothing between them. `adept_fmt` now defends against this locally
+  (see the reflow fix in `877721f`), but the surprise is still in the shared
+  AST for any other consumer.
 
 ## API and consistency
 
