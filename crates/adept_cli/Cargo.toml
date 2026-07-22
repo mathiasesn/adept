@@ -15,3 +15,16 @@ path = "src/main.rs"
 adept = { workspace = true }
 adept_fmt = { workspace = true }
 adept_score = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+tokio = { workspace = true }
+anyhow = { workspace = true }
+owo-colors = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
