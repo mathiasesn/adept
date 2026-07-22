@@ -160,6 +160,100 @@ those destinations.
 
 _(none)_
 
+## Verification
+
+Recorded here rather than in a PR description, since this branch was merged
+locally (`c02f23e` → `da7c9e9`, fast-forward) and there is no remote.
+
+### Corpus: no behaviour change on real input
+
+The acceptance criterion asked that SL104 findings not increase above 7. The
+actual result is stronger — **every diagnostic is unchanged**, not just the
+SL104 count.
+
+Method: shallow-cloned `anthropics/skills` (18 `SKILL.md` files), built
+`c02f23e` and the merged `da7c9e9` in separate worktrees, and diffed
+`adept check --format json` output including line numbers and messages.
+
+| Code | Baseline `c02f23e` | Merged `da7c9e9` |
+|---|---|---|
+| SL004 | 1 | 1 |
+| SL102 | 3 | 3 |
+| **SL104** | **7** | **7** |
+| SL203 | 8 | 8 |
+| SL206 | 16 | 16 |
+| SL301 | 5 | 5 |
+| SL302 | 12 | 12 |
+| SL303 | 14 | 14 |
+| **Total** | **66** | **66** |
+
+Byte-identical. Re-run at three points (`1ad95ef`, `d3a4dc7`, `da7c9e9`) with
+the same result. The 7 SL104 survivors are the same 7 documented in
+`docs/BACKLOG.md` — 3× `word/document.xml`, 3× `evals/evals.json`, 1×
+`ppt/slides/slideN.xml`.
+
+**Caveat: the corpus contains no setext headings.** So `SL105` fires nowhere in
+it, and this result says nothing about the setext path — the headline behaviour
+change of this spec. That path's only evidence is the table below and the tests.
+
+### Behaviour changes, enumerated
+
+The Risks section required these be enumerated rather than asserted to be
+improvements. Observed on the corpus: **none of them fire**. Links inside
+emphasis, reference links, and nested-paren destinations all exist in the
+abstract but produced no diagnostic delta on real input. The changes are
+therefore evidenced only by the regression tests in
+`crates/adept/tests/rules.rs`, not by the corpus.
+
+### Setext classification
+
+Verified against the built binary, not by reasoning:
+
+| Input | `is_setext` | Note |
+|---|---|---|
+| `Title\n=====` | true | |
+| `# Regular ATX` | false | |
+| `   ### Indented` | false | 3-space indent |
+| `> Quoted\n> =====` | true | blockquote container |
+| `- Item\n  =====` | true | list container |
+| `#hashtag\n=======` | true | **was false** — see below |
+| `Title\n-----` | true | h2 via dashes |
+| `\# Escaped\n=====` | true | |
+
+The `#hashtag` case was a genuine bug found during review, not by the test
+suite: `is_setext` was derived from the *first* byte of the heading's source
+range, so a setext heading whose text begins with `#` was misread as ATX and
+`SL105` silently skipped it (`#hashtag` is not ATX — CommonMark requires a
+space after the `#` run). Fixed in `d3a4dc7` by discriminating on the *end* of
+the range instead. `SL102`/`SL103` were never affected, as they read only
+`level`.
+
+### Performance
+
+`cargo bench --bench lint_100_skills -- --quick`, baseline vs merged main on
+the same machine in the same session:
+
+| Run | `c02f23e` | merged |
+|---|---|---|
+| Pre-merge (at `8103b73`) | 18.4 ms | 18.1 ms |
+| Post-merge (at `da7c9e9`) | 21.2 ms | 19.3 ms |
+
+No regression; if anything marginally faster. Absolute values drift with
+machine load between sessions, so only the within-run comparison is meaningful.
+This holds despite the `SL1xx` rules now parsing each body five times (see
+`docs/BACKLOG.md`) — token counting dominates.
+
+### Invariants and suite
+
+- `grep -rn "Parser::new" crates/` → exactly one hit
+  (`crates/adept/src/markdown/mod.rs:41`).
+- `crates/adept/src/rules/structure.rs` contains no fence-tracking loop, no
+  `#`-counting heading scan, and no `](` byte scan.
+- 125 → **153 tests**, 14 suites. `cargo clippy --workspace --all-targets` and
+  `cargo fmt --all -- --check` clean.
+- No `adept_fmt` snapshot accepted or modified at any point; formatter output
+  byte-identical.
+
 ## Risks
 
 - **Silent lint behaviour change.** A correct parser sees headings and links the
