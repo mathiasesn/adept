@@ -13,7 +13,7 @@ use std::path::Path;
 
 use adept::{AnthropicSkillParser, SkillParser};
 use adept_fmt::{format_str, FmtConfig};
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, Tag};
 
 fn fixtures_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -54,12 +54,6 @@ fn tag_repr(tag: &Tag<'_>) -> String {
 /// document's CommonMark event stream, used to assert that formatting
 /// doesn't change a document's meaning.
 fn semantic_events(source: &str) -> Vec<String> {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    options.insert(Options::ENABLE_TASKLISTS);
-
     let mut out = Vec::new();
     let mut buf = String::new();
 
@@ -71,7 +65,7 @@ fn semantic_events(source: &str) -> Vec<String> {
         buf.clear();
     }
 
-    for event in Parser::new_ext(source, options) {
+    for event in adept::markdown::parser(source) {
         match event {
             Event::Text(t) => buf.push_str(&t),
             Event::SoftBreak => buf.push(' '),

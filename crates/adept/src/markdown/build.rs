@@ -2,20 +2,18 @@
 
 use std::iter::Peekable;
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, Parser, Tag};
 
 use super::ast::{Alignment, Block, Inline, ListItem};
 use super::MAX_NESTING_DEPTH;
 
 /// Parse a Markdown document body into a sequence of top-level [`Block`]s.
+///
+/// This is the span-free view of a document, used by the formatter. See
+/// [`super::parser`] for the shared parser construction, and
+/// [`super::headings`] and friends for the positioned view.
 pub fn parse_document(source: &str) -> Vec<Block> {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_TABLES);
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    options.insert(Options::ENABLE_FOOTNOTES);
-    options.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(source, options);
-    let mut iter = parser.peekable();
+    let mut iter = super::parser(source).peekable();
     collect_blocks(&mut iter, 0)
 }
 

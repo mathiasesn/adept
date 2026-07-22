@@ -9,12 +9,14 @@ description = "Prettier-style formatter for SKILL.md (Agent Skills). Owned by th
 
 [dependencies]
 adept = { workspace = true }
-pulldown-cmark = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 similar = "2"
 
 [dev-dependencies]
+# Only the formatter's test-side semantic oracle inspects raw events; the
+# parser itself lives in `adept::markdown`.
+pulldown-cmark = { workspace = true }
 insta = { workspace = true }
 proptest = "1"

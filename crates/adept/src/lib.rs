@@ -13,6 +13,8 @@
 //! - [`Diagnostic`] / [`Severity`] / [`reporting`]: the shared lint finding
 //!   type and its human/JSON renderers (rule implementations live in a
 //!   sibling crate, but this type is what they produce).
+//! - [`markdown`]: the shared `pulldown-cmark`-backed Markdown lexer, used
+//!   both by the `SL1xx` lint rules and by `adept_fmt`'s printer.
 //! - [`TokenCounter`]: token counting via `tiktoken-rs`.
 //! - [`AdeptError`]: the shared error type for hard failures (I/O, malformed
 //!   input) as opposed to lint findings.
@@ -21,6 +23,7 @@ mod companion;
 mod diagnostic;
 mod error;
 mod frontmatter;
+pub mod markdown;
 mod parser;
 pub mod reporting;
 mod rules;
