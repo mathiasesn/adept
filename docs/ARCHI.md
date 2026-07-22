@@ -1,6 +1,6 @@
 # adept Architecture Documentation
 
-> Generated: 2026-07-22 · Commit: `485672f` · Version: `0.1.0` (workspace-wide, unreleased)
+> Generated: 2026-07-22 · Commit: `5a2ceb4` · Version: `0.1.0` (workspace-wide, unreleased)
 > Re-read this file at the start of any session touching this codebase. Update it when the architecture changes (new major dependency, restructured layer, changed convention).
 
 ## 1. How to Read This Document
