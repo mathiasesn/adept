@@ -1,0 +1,13 @@
+---
+source: crates/adept_fmt/tests/format_tests.rs
+expression: formatted
+---
+---
+name: reorder-fixture
+description: description comes after name once canonicalized.
+license: MIT
+alpha: another-extra-value
+zeta: extra-value
+---
+
+Body text.

@@ -1,0 +1,12 @@
+---
+source: crates/adept_fmt/tests/format_tests.rs
+expression: formatted
+---
+---
+name: long-prose-fixture
+description: exercises prose reflow at the configured line width for adept_fmt tests.
+---
+
+This is a fairly long paragraph that contains a lot of words and irregular whitespace and should be
+reflowed to the configured line width consistently across every single run of the formatter no
+matter how many times it is invoked in a row.

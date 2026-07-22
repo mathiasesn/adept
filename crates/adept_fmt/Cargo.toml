@@ -9,3 +9,12 @@ description = "Prettier-style formatter for SKILL.md (Agent Skills). Owned by th
 
 [dependencies]
 adept = { workspace = true }
+pulldown-cmark = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+similar = "2"
+
+[dev-dependencies]
+insta = { workspace = true }
+proptest = "1"
