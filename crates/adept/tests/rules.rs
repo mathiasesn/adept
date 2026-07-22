@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use adept::reporting::render_human_colored;
-use adept::{parse_skill, LintConfig, Linter, SkillSet};
+use adept::{parse_skill, Diagnostic, LintConfig, Linter, Severity, SkillSet};
 
 fn fixture_dir(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -25,6 +25,36 @@ fn lint_set_fixture(name: &str) -> String {
     let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
     let diagnostics = linter.lint_set(&set);
     render_human_colored(&diagnostics, false)
+}
+
+/// The raw diagnostics for a fixture, so tests can assert on line numbers
+/// and severities rather than only on rendered text.
+fn diagnostics_for(name: &str) -> Vec<Diagnostic> {
+    let path = fixture_dir(name).join("SKILL.md");
+    let skill = parse_skill(&path).expect("fixture should parse");
+    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
+    linter.lint_skill(&skill)
+}
+
+/// The diagnostics for a fixture with a given code, in report order.
+fn diagnostics_with_code(name: &str, code: &str) -> Vec<Diagnostic> {
+    diagnostics_for(name)
+        .into_iter()
+        .filter(|d| d.code == code)
+        .collect()
+}
+
+/// Asserts a fixture produces no diagnostics at all for any of `codes`.
+/// Other codes (e.g. `SL206`) are irrelevant to markdown-lexing fixtures.
+fn assert_no_codes(name: &str, codes: &[&str]) {
+    let found: Vec<_> = diagnostics_for(name)
+        .into_iter()
+        .filter(|d| codes.contains(&d.code))
+        .collect();
+    assert!(
+        found.is_empty(),
+        "expected none of {codes:?} on fixture {name}, got:\n{found:#?}"
+    );
 }
 
 fn assert_fires(name: &str, code: &str) {
@@ -163,6 +193,97 @@ fn sl402_similar_description_fires() {
 #[test]
 fn sl403_overlapping_trigger_phrasing_fires() {
     assert_set_fires("cross_sl403", "SL403");
+}
+
+// --- Markdown-lexing regression tests -------------------------------------
+//
+// Each of these pins a case the old hand-rolled line scanner in
+// `rules/structure.rs` got wrong before the shared `adept::markdown` lexer
+// replaced it. They are integration-level: the whole rule set runs, and the
+// assertions target the SL10x codes plus their line numbers.
+
+#[test]
+fn mismatched_fence_characters_hide_their_contents() {
+    // Old scanner bug: it toggled a single `in_fence` flag on any line
+    // starting with ``` or ~~~, so a ``` block containing a ~~~ line was
+    // treated as *closed* there — and everything after it re-entered
+    // "prose", producing phantom SL102/SL103/SL104 findings.
+    assert_no_codes("md-mismatched-fence", &["SL102", "SL103", "SL104", "SL105"]);
+}
+
+#[test]
+fn fence_info_string_containing_hash_is_not_a_heading() {
+    // Old scanner bug: fence info strings were ignored entirely, and the
+    // `#`-counting heading scan ran over any line it thought was prose, so
+    // ``` ```bash # run this ``` and the comment inside could be read as
+    // headings and the link inside as a file reference.
+    assert_no_codes("md-fence-info-hash", &["SL102", "SL103", "SL104", "SL105"]);
+}
+
+#[test]
+fn indented_code_block_contents_are_not_lexed() {
+    // Old scanner bug: it never recognised 4-space indented code blocks at
+    // all, so heading-like and link-like text inside them was linted as
+    // prose (an h1 -> h3 skip plus a broken file reference here).
+    assert_no_codes("md-indented-code", &["SL103", "SL104", "SL105"]);
+}
+
+#[test]
+fn sl104_reports_full_destination_with_nested_parentheses() {
+    // Old scanner bug: `extract_link_targets` scanned from `](` to the
+    // *first* `)`, so `[x](./a(b).md)` yielded the truncated `./a(b` and the
+    // diagnostic quoted a path the user never wrote.
+    let found = diagnostics_with_code("md-nested-paren-link", "SL104");
+    assert_eq!(found.len(), 1, "got:\n{found:#?}");
+    assert!(
+        found[0].message.contains("./a(b).md"),
+        "diagnostic should quote the full destination, got: {}",
+        found[0].message
+    );
+    // File line 7: 4 frontmatter lines, `# Nested Paren Link`, blank, link.
+    assert_eq!(found[0].line, 7);
+}
+
+#[test]
+fn setext_h1_satisfies_sl102() {
+    // Old scanner bug: it counted `#` characters and so could not see
+    // setext headings, giving `Title\n=====` a bogus missing-h1 warning.
+    assert_no_codes("md-setext-headings", &["SL102"]);
+}
+
+#[test]
+fn setext_heading_participates_in_sl103_level_sequence() {
+    // Old scanner bug: with the setext h1 invisible, the following `###`
+    // had no preceding heading to skip from, so SL103 stayed silent.
+    let found = diagnostics_with_code("md-setext-headings", "SL103");
+    assert_eq!(found.len(), 1, "got:\n{found:#?}");
+    assert!(
+        found[0].message.contains("h1 to h3"),
+        "{}",
+        found[0].message
+    );
+    // File line 8: the `### Skipped Level` line.
+    assert_eq!(found[0].line, 8);
+}
+
+#[test]
+fn sl105_fires_on_setext_headings_only() {
+    // SL105 is new with the shared lexer; the old scanner could not see
+    // setext headings, so this rule was not expressible at all.
+    let found = diagnostics_with_code("md-setext-headings", "SL105");
+    assert_eq!(found.len(), 2, "got:\n{found:#?}");
+    // File lines 5 (`Title`, underlined on 6) and 10 (`Sub`, underlined on 11).
+    assert_eq!(found[0].line, 5);
+    assert!(found[0].message.contains("Title"), "{}", found[0].message);
+    assert_eq!(found[1].line, 10);
+    assert!(found[1].message.contains("Sub"), "{}", found[1].message);
+    for d in &found {
+        assert_eq!(d.severity, Severity::Info);
+    }
+
+    // ATX headings never produce SL105.
+    assert_no_codes("sl103_heading_skip", &["SL105"]);
+    assert_no_codes("pdf-extractor", &["SL105"]);
 }
 
 #[test]

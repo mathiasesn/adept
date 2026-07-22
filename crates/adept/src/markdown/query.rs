@@ -186,7 +186,14 @@ mod tests {
         let found = headings(src);
         let summary: Vec<_> = found
             .iter()
-            .map(|h| (h.value.level, h.value.text.as_str(), h.value.is_setext, h.line))
+            .map(|h| {
+                (
+                    h.value.level,
+                    h.value.text.as_str(),
+                    h.value.is_setext,
+                    h.line,
+                )
+            })
             .collect();
         assert_eq!(
             summary,

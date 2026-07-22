@@ -358,7 +358,10 @@ mod tests {
     #[test]
     fn broken_reference_line_points_at_the_link() {
         // Line 1 of the body is the file's line 5 (frontmatter is 4 lines).
-        let found = run(&BrokenFileReference, "intro\n\n[docs](missing/file_(v2).md)\n");
+        let found = run(
+            &BrokenFileReference,
+            "intro\n\n[docs](missing/file_(v2).md)\n",
+        );
         assert_eq!(found.len(), 1);
         assert!(found[0].message.contains("missing/file_(v2).md"));
         assert_eq!(found[0].line, 7);
