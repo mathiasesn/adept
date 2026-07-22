@@ -81,7 +81,7 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
   are vendored under `crates/adept/tests/fixtures/corpus/` at upstream
   `1f630fdf9259cec4a14913127dfd7c3b69ef72eb`, and `tests/corpus.rs` snapshots the
   linter's output over them (36 diagnostics). The manual clone-build-diff ritual
-  is retired. What remains narrowed to the two items below.
+  is retired. What remains narrowed to the items below.
 - **The corpus cannot cover the SL104 residuals.** `anthropics/skills` is not
   uniformly licensed: `docx`, `pdf`, `pptx` and `xlsx` are source-available, not
   open source, so they are not vendored — and they are exactly the skills whose
