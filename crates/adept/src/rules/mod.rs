@@ -122,6 +122,7 @@ impl Registry {
             Box::new(structure::MissingH1),
             Box::new(structure::HeadingLevelSkip),
             Box::new(structure::BrokenFileReference),
+            Box::new(structure::SetextHeading),
             Box::new(description::TooShort),
             // SL202 (description-too-long) is retired: see rules/description.rs.
             Box::new(description::MissingTriggerPhrase),
