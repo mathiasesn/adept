@@ -1,6 +1,6 @@
 # adept Architecture Documentation
 
-> Generated: 2026-07-22 · Commit: `c02f23e` · Version: `0.1.0` (workspace-wide, unreleased)
+> Generated: 2026-07-22 · Commit: `485672f` · Version: `0.1.0` (workspace-wide, unreleased)
 > Re-read this file at the start of any session touching this codebase. Update it when the architecture changes (new major dependency, restructured layer, changed convention).
 
 ## 1. How to Read This Document
@@ -54,7 +54,7 @@ Versions are declared once in the root `[workspace.dependencies]` and referenced
 | `serde` / `serde_yaml` / `serde_json` | 1 / 0.9 / 1 | Frontmatter YAML, diagnostic and report JSON, JSON-RPC, LLM payloads |
 | `thiserror` | 1 | All library error enums (`AdeptError`, `FmtError`, `ScoreError`, `ConfigLoadError`) |
 | `walkdir` | 2 | Skill discovery tree walk |
-| `pulldown-cmark` | 0.12 | CommonMark event stream feeding `adept_fmt`'s AST |
+| `pulldown-cmark` | 0.12 | CommonMark event stream behind `adept::markdown` (lint rules + formatter AST) |
 | `tiktoken-rs` | 0.12 | Token counting (`o200k_base` default, `cl100k_base` selectable) |
 | `clap` | 4 (derive) | CLI argument parsing |
 | `toml` | 0.8 | `adept.toml` config parsing (CLI only) |
@@ -88,22 +88,26 @@ crates/adept/              CORE LIBRARY — no dependency on any sibling crate
     token.rs               `TokenCounter`, `Tokenizer`, process-wide BPE table cache
     text.rs                `word_bag`, `words`, `jaccard` — shared similarity primitives
     companion.rs           `discover_companion_files` — shared by SL303 and adept_score
+    markdown/              THE SHARED MARKDOWN LEXER — one pulldown-cmark parser, two views
+      mod.rs               `parser()` (the only Parser construction site), MAX_NESTING_DEPTH
+      ast.rs               Block / Inline / ListItem / Alignment (span-free, for the formatter)
+      build.rs             events → AST (`parse_document`)
+      query.rs             positioned queries: headings / link_destinations / inline_code_spans
     rules/
       mod.rs               THE RULE ENGINE: Rule/SkillRule/SetRule, Registry, LintConfig, Linter
-      frontmatter.rs       SL00x  structure.rs  SL1xx  description.rs  SL2xx
+      frontmatter.rs       SL00x  structure.rs  SL1xx (SL101-SL105)  description.rs  SL2xx
       tokens.rs            SL3xx  cross.rs      SL4xx
   benches/lint_100_skills.rs   criterion benchmark gating the perf acceptance criterion
   tests/                   parsing, skillset, rules (insta snapshots), docs_test
 
-crates/adept_fmt/          FORMATTER — depends on adept for parsing only
+crates/adept_fmt/          FORMATTER — depends on adept for parsing and the markdown AST
   src/
     lib.rs                 format_str / format_skill / check_str / check_skill
     config.rs              FmtConfig + marker enums (bullet, emphasis, strong, fence, heading)
     frontmatter.rs         Canonical YAML emission (hand-rolled scalar quoting)
     diff.rs                CheckResult + unified diff
     markdown/
-      ast.rs               Block / Inline / ListItem / Alignment
-      build.rs             pulldown-cmark event stream → AST
+      mod.rs               Re-exports adept::markdown's ast / parse_document
       print.rs             AST → canonical Markdown (the deterministic printer)
 
 crates/adept_score/        LLM SCORING — depends on adept; async throughout
@@ -235,7 +239,7 @@ Each command module re-declares its own `EXIT_*` consts. Conventions per command
 
 ## 9. Core Library Surface (`adept`)
 
-Everything public is re-exported from `lib.rs`; there are no public submodules except `reporting` and `text`. Adding a type means adding it to that re-export list.
+Everything public is re-exported from `lib.rs`; there are no public submodules except `reporting`, `text`, and `markdown`. Adding a type means adding it to that re-export list.
 
 **`Skill`** is the data model: `path`, `frontmatter`, `body`, `body_line_offset`, and the complete unmodified `source`. Both `body` and `source` are retained (roughly 2× file bytes) — deliberate, since `fmt` compares against `source` byte-for-byte; halving it is a recorded deferral.
 
@@ -247,17 +251,19 @@ Everything public is re-exported from `lib.rs`; there are no public submodules e
 
 **`text.rs`** owns the definition of a "word" (lowercased, split on non-alphanumeric) and `jaccard`. `word_bag` and `words` share one tokenizer so the set-based and order-based callers cannot diverge.
 
+**`markdown`** is the shared Markdown lexer, and the only markdown-aware code in the workspace. It exposes two views over the same document: `parse_document` builds the span-free `Block`/`Inline` AST the formatter re-prints, while `headings` / `link_destinations` / `inline_code_spans` return `Located<T>` values (carrying a 1-based body line) for the `SL1xx` rules, which need positions but no tree. Both views go through `markdown::parser()`, the **single** `pulldown-cmark` `Parser` construction site in the workspace — `grep -rn "Parser::new" crates/` must keep yielding exactly one hit. **Do not construct a `Parser` anywhere else**: an `Options` flag enabled for one view and not the other would let the linter and the formatter drift back into disagreeing about what a heading or a link is. Fence matching, info strings, indented code, nested brackets and reference links all come from the parser, so a markdown-aware rule never needs its own line scan.
+
 **Known limitation**: `SKILL_FILE_NAME` is a private `const` in `skillset.rs`, not part of `SkillParser`. A parser for a format using `skill.yaml` or `AGENT.md` can therefore never be handed a file — the pluggability seam is incomplete. See `docs/BACKLOG.md`.
 
 ## 10. Formatter and Scorer Surfaces
 
 ### `adept_fmt`
 
-Pipeline: `Skill` → canonical frontmatter string → `markdown::parse_document(&skill.body)` (pulldown-cmark events → `Block`/`Inline` AST) → `markdown::print_document` → output. Exactly one blank line separates the closing `---` from the body.
+Pipeline: `Skill` → canonical frontmatter string → `adept::markdown::parse_document(&skill.body)` (the shared lexer's `Block`/`Inline` AST — see §9) → `markdown::print_document` → output. The formatter owns only the printer; the AST and its builder live in the core crate. Exactly one blank line separates the closing `---` from the body.
 
 Frontmatter order is fixed: `name`, `description`, `license` (if present), then extras alphabetically. YAML quoting is minimal-but-correct, emitted by hand in `frontmatter.rs`.
 
-Nesting of block quotes, lists, and footnote definitions is bounded by `markdown::MAX_NESTING_DEPTH = 100`; anything deeper becomes `Block::Raw` and is passed through verbatim rather than recursed into. This is a stack-overflow guard against adversarial input — keep it.
+Nesting of block quotes, lists, and footnote definitions is bounded by `adept::markdown::MAX_NESTING_DEPTH = 100`; anything deeper becomes `Block::Raw` and is passed through verbatim rather than recursed into. This is a stack-overflow guard against adversarial input — keep it.
 
 Prefer `format_skill` / `check_skill` (already-parsed `Skill`) over `format_str` / `check_str` (re-parses) whenever a `Skill` is in hand. The CLI always has one.
 
@@ -319,7 +325,7 @@ Other contract points:
 
 ## 13. Testing & Snapshot Conventions
 
-125 tests across 14 suites, ~3.5s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
+148 tests across 14 suites, ~3.5s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
 
 **Rule tests are snapshot tests.** Each rule gets a fixture directory under `crates/adept/tests/fixtures/rules/<sl_code>_<slug>/` containing a `SKILL.md` that triggers exactly that rule, plus an `insta` snapshot under `crates/adept/tests/snapshots/rules__snapshot_<name>.snap`. There is also a `cross_clean` fixture asserting a well-formed pair produces nothing. Review snapshot diffs — an accepted snapshot is an accepted behaviour change.
 
@@ -339,9 +345,7 @@ Not covered: no fixture exercises a real skills corpus. The "runs clean-ish on a
 
 Read `docs/BACKLOG.md` for the full list. The three worth knowing before you write code:
 
-**Markdown parsing is implemented twice.** `crates/adept/src/rules/structure.rs` hand-rolls a line scanner for ATX headings, fence tracking (three separate times in that one file), and `](...)` link extraction, while `adept_fmt/src/markdown/build.rs` already has a pulldown-cmark-backed AST with correct fence, indented-code, nested-bracket, and reference-link handling. So `SL102`/`SL103`/`SL104` and `adept fmt` hold two different definitions of "heading" and "link", and the formatter can rewrite a link the linter cannot see. The fix is to move block/inline extraction down into the core crate (or a shared `adept_md`) — a crate-layout change, which is why it hasn't been done. **If you are adding a markdown-aware rule, do not copy-paste the fence tracker a fourth time; raise the consolidation instead.**
-
-Note that `SL104`'s *heuristic filters* (URL schemes, globs, `~`, `@scope/name`, template placeholders) are **not** part of that problem and should stay — they are genuine domain judgements about what a repo-relative path looks like, with one consumer. Only the lexing beneath them is duplicated.
+**`SL104`'s heuristic filters are not lexing.** The URL-scheme, glob, `~`, `@scope/name` and template-placeholder filters in `rules/structure.rs` are genuine domain judgements about what a repo-relative path looks like, with one consumer. They sit *above* the shared lexer (§9) and should stay hand-written — do not try to push them into `adept::markdown`.
 
 **Stale comment in `adept_score/src/overlap.rs`.** Its module header (lines 4–8) still claims the similarity heuristic is "implemented locally and deliberately separate" from anything in the core crate. That is no longer true — the function bodies call `adept::text::word_bag` / `adept::text::jaccard`. The *thresholds and inputs* remain deliberately divergent (see §10); only the comment is out of date. Trust the code, and fix the comment when you are next in that file.
 

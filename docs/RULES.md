@@ -43,7 +43,8 @@ empty or whitespace-only.
 **Fix:** add instructions describing how to use the skill.
 
 ### SL102 `missing-h1` (Warning)
-Flags a body with no top-level (`#`) heading.
+Flags a body with no top-level heading. Both ATX (`# Title`) and setext
+(`Title` underlined with `===`) h1s satisfy it.
 **Fix:** add a single `# Title` heading near the top of the body.
 
 ### SL103 `heading-skip` (Warning)
@@ -67,6 +68,14 @@ bare filename with no directory component and no markdown-link context
 (e.g. a prose mention of `package.json`) — real companion-file references
 almost always come as a markdown link or an explicit relative path.
 **Fix:** fix the path, or add the missing file next to SKILL.md.
+
+### SL105 `setext-heading` (Info)
+Flags a heading written in setext form — a `Title` line underlined with
+`===` (h1) or `---` (h2) — rather than ATX (`# Title`). Reported as a style
+issue because `adept fmt` rewrites setext headings to ATX, so leaving one in
+place means the linter and the formatter disagree about style. Informational
+only: the formatter resolves it automatically, so it should not fail CI.
+**Fix:** run `adept fmt`, or write the heading as `# Title` / `## Title`.
 
 ## SL2xx — description / triggering heuristics
 

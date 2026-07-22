@@ -29,25 +29,6 @@ Documented in `crates/adept_fmt`, each visible as an unexpected diff to users:
 - Text escaping covers a conservative subset rather than every line-start
   ambiguity.
 
-### Markdown parsing is implemented twice
-`crates/adept/src/rules/structure.rs` hand-rolls a line scanner for ATX
-headings, fence tracking, and `](...)` link extraction — three times within
-the one file — while `crates/adept_fmt/src/markdown/build.rs` already has a
-`pulldown-cmark`-backed AST with correct fence, indented-code, nested-bracket
-and reference-link handling. So `SL102`/`SL103`/`SL104` and `adept fmt` hold
-two different definitions of "heading" and "link", and the formatter can
-rewrite a link the linter cannot see.
-
-The fix is to move block/inline extraction into the core crate (or a shared
-`adept_md`) and have both consumers use it — a crate-layout change, which is
-why it wasn't done as part of cleanup. Cost of waiting: every new
-markdown-aware rule copy-pastes fence tracking again.
-
-Note that SL104's *heuristic filters* (URL schemes, globs, `~`, `@scope/name`)
-are not the problem and should stay — they are genuine domain judgements
-about what a repo-relative path looks like. It's the lexing beneath them
-that's duplicated.
-
 ### Parse errors bypass the rule pipeline
 `SL001`/`SL002`/`SL003` are synthesized by a `match` on `AdeptError` in
 `Linter::lint_set`, which re-inlines the enable/severity logic that

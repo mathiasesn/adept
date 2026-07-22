@@ -3,7 +3,7 @@
 //!
 //! This crate implements `adept fmt`: canonical frontmatter (key order,
 //! minimal-but-correct YAML quoting) plus a full Markdown body reflow built
-//! on `pulldown-cmark`'s event stream and a custom deterministic printer
+//! on the shared [`adept::markdown`] AST and a custom deterministic printer
 //! (see [`mod@markdown`]).
 //!
 //! # Supported constructs
