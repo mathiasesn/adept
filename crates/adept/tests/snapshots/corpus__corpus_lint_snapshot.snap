@@ -1,0 +1,77 @@
+---
+source: crates/adept/tests/corpus.rs
+assertion_line: 62
+expression: rendered
+---
+algorithmic-art/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+algorithmic-art/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+algorithmic-art/SKILL.md:6:1: SL102 SKILL.md body has no top-level `#` heading
+  fix: add a single `# Title` heading near the top of the body
+algorithmic-art/SKILL.md:6:1: SL302 SKILL.md body is 4076 tokens, over the budget of 1500
+  fix: move detailed reference material into companion files loaded on demand
+brand-guidelines/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+brand-guidelines/SKILL.md:3:1: SL203 description does not state when the skill should be used
+  fix: add trigger phrasing, e.g. "Use when the user asks to..."
+brand-guidelines/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+claude-api/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+claude-api/SKILL.md:3:1: SL203 description does not state when the skill should be used
+  fix: add trigger phrasing, e.g. "Use when the user asks to..."
+claude-api/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+claude-api/SKILL.md:3:1: SL301 description token budget exceeded: 290 tokens (budget: 75)
+  fix: shorten the description below the configured token budget
+claude-api/SKILL.md:9:1: SL302 SKILL.md body is 16973 tokens, over the budget of 1500
+  fix: move detailed reference material into companion files loaded on demand
+doc-coauthoring/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+doc-coauthoring/SKILL.md:5:1: SL302 SKILL.md body is 3172 tokens, over the budget of 1500
+  fix: move detailed reference material into companion files loaded on demand
+frontend-design/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2018 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+frontend-design/SKILL.md:3:1: SL203 description does not state when the skill should be used
+  fix: add trigger phrasing, e.g. "Use when the user asks to..."
+frontend-design/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+frontend-design/SKILL.md:6:1: SL302 SKILL.md body is 1592 tokens, over the budget of 1500
+  fix: move detailed reference material into companion files loaded on demand
+internal-comms/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+internal-comms/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+internal-comms/SKILL.md:6:1: SL102 SKILL.md body has no top-level `#` heading
+  fix: add a single `# Title` heading near the top of the body
+mcp-builder/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+mcp-builder/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+mcp-builder/SKILL.md:6:1: SL302 SKILL.md body is 1864 tokens, over the budget of 1500
+  fix: move detailed reference material into companion files loaded on demand
+skill-creator/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+skill-creator/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+skill-creator/SKILL.md:5:1: SL302 SKILL.md body is 7172 tokens, over the budget of 1500
+  fix: move detailed reference material into companion files loaded on demand
+skill-creator/SKILL.md:145:1: SL104 referenced file "evals/evals.json" does not exist
+  fix: fix the path, or add the missing file next to SKILL.md
+skill-creator/SKILL.md:201:1: SL104 referenced file "evals/evals.json" does not exist
+  fix: fix the path, or add the missing file next to SKILL.md
+skill-creator/SKILL.md:205:1: SL104 referenced file "evals/evals.json" does not exist
+  fix: fix the path, or add the missing file next to SKILL.md
+slack-gif-creator/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+slack-gif-creator/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+slack-gif-creator/SKILL.md:6:1: SL302 SKILL.md body is 1920 tokens, over the budget of 1500
+  fix: move detailed reference material into companion files loaded on demand
+webapp-testing/SKILL.md:1:1: SL303 companion file "LICENSE.txt" is 2262 tokens, over the budget of 2000
+  fix: split the companion file or trim it down
+webapp-testing/SKILL.md:3:1: SL203 description does not state when the skill should be used
+  fix: add trigger phrasing, e.g. "Use when the user asks to..."
+webapp-testing/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
