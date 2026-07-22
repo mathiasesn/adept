@@ -238,11 +238,138 @@ fn idempotency_holds_for_every_fixture_with_prose_reflow_disabled() {
     }
 }
 
+/// Corpus of vendored real-world skills, shared with `crates/adept`'s own
+/// corpus tests. Lives under `crates/adept` (not `adept_fmt`) because the
+/// corpus lint snapshot test also needs it; resolved cross-crate rather than
+/// duplicated. See `specs/vendored-skills-corpus-fixture.md`.
+fn corpus_dir() -> std::path::PathBuf {
+    Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../adept/tests/fixtures/corpus"
+    ))
+    .to_path_buf()
+}
+
+/// Skills whose `SKILL.md` is known not to round-trip idempotently under
+/// `FmtConfig::default()` (`reflow_prose: true`). Both entries below hit the
+/// same underlying "leaning toothpick" class of bug: prose reflow can wrap a
+/// line so that its first token — purely by chance of where the width limit
+/// fell — becomes something CommonMark treats as block-starting syntax on
+/// re-parse (a `-`/`+`/`*` bullet marker, in these two cases) even though it
+/// was mid-sentence punctuation in the source. `format` doesn't look ahead
+/// for this when choosing a break point, so a second pass reflows the
+/// now-reinterpreted structure differently. See minimized repros in
+/// `wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list` and
+/// `wrapped_line_starting_with_plus_is_not_reparsed_as_list_in_blockquote`
+/// below (both `#[ignore]`d, since they currently fail) and the backlog entry
+/// for "reflow: avoid emitting marker-like line starts".
+const KNOWN_NON_IDEMPOTENT: &[&str] = &[
+    // Wraps "... behaviors - not static composition" so the continuation
+    // line is "  - not static composition", indistinguishable on re-parse
+    // from a nested list item.
+    "algorithmic-art",
+    // Wraps "Claude API + tool use is the right choice" inside a blockquote
+    // so the continuation line is "> + tool use is the right choice",
+    // indistinguishable on re-parse from a `+`-bulleted list item.
+    "claude-api",
+];
+
+/// `format(format(x)) == format(x)` for every vendored corpus `SKILL.md`,
+/// under `FmtConfig::default()` — i.e. with `reflow_prose: true`, which is
+/// what `adept fmt` actually does. This is the property real prose has never
+/// been exercised against in a broad test (the loop above is reflow-disabled).
+#[test]
+fn idempotency_holds_for_corpus_with_prose_reflow_enabled() {
+    let cfg = FmtConfig::default();
+    assert!(cfg.reflow_prose, "this test only guards the reflow path");
+
+    let corpus = corpus_dir();
+    let mut skills: Vec<_> = fs::read_dir(&corpus)
+        .expect("corpus dir should exist")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    skills.sort();
+    assert!(
+        !skills.is_empty(),
+        "corpus should contain skill directories"
+    );
+
+    let mut checked = 0;
+    for skill_dir in skills {
+        let name = skill_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .expect("skill dir should have a UTF-8 name")
+            .to_string();
+        let skill_md = skill_dir.join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+        if KNOWN_NON_IDEMPOTENT.contains(&name.as_str()) {
+            continue;
+        }
+        checked += 1;
+        let source = fs::read_to_string(&skill_md)
+            .unwrap_or_else(|e| panic!("{name}/SKILL.md should be readable: {e}"));
+        let formatted = format_str(&source, &cfg)
+            .unwrap_or_else(|e| panic!("corpus skill {name} failed to format: {e}"));
+        let formatted_twice = format_str(&formatted, &cfg)
+            .unwrap_or_else(|e| panic!("corpus skill {name} failed on second pass: {e}"));
+        assert_eq!(
+            formatted, formatted_twice,
+            "corpus skill {name} is not idempotent with reflow_prose = true"
+        );
+    }
+    assert!(checked > 0, "no corpus skills were actually checked");
+}
+
 /// Build a full SKILL.md source with the given Markdown `body`.
 fn skill_source(body: &str) -> String {
     format!(
         "---\nname: deep\ndescription: Use when testing deeply nested markdown to check parser robustness.\n---\n\n{body}"
     )
+}
+
+/// Minimized repro for the `algorithmic-art` corpus entry on
+/// [`KNOWN_NON_IDEMPOTENT`]: a tight list item whose prose contains a
+/// mid-sentence `-` reflows so the continuation line starts with `- `,
+/// which re-parses as a nested list item rather than continuation text.
+/// `#[ignore]`d because it currently fails; un-ignore once the reflow
+/// hardening backlog item lands.
+#[test]
+#[ignore = "reflow: wrapped '- ' continuation line is reparsed as a nested list item, see KNOWN_NON_IDEMPOTENT"]
+fn wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list() {
+    let cfg = FmtConfig::default();
+    let body = "- **PARAMETRIC EXPRESSION**: Ideas communicate through mathematical relationships, forces, behaviors - not static composition\n- **OTHER**: filler\n";
+    let source = skill_source(body);
+    let formatted = format_str(&source, &cfg).expect("should format");
+    let formatted_twice = format_str(&formatted, &cfg).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "wrapped '- ' continuation line should not change meaning on re-parse"
+    );
+}
+
+/// Minimized repro for the `claude-api` corpus entry on
+/// [`KNOWN_NON_IDEMPOTENT`]: a blockquote paragraph containing a mid-sentence
+/// `+` reflows so the continuation line starts with `+ `, which re-parses as
+/// a list item inside the blockquote rather than continuation text.
+/// `#[ignore]`d because it currently fails; un-ignore once the reflow
+/// hardening backlog item lands.
+#[test]
+#[ignore = "reflow: wrapped '+ ' continuation line is reparsed as a list item, see KNOWN_NON_IDEMPOTENT"]
+fn wrapped_line_starting_with_plus_is_not_reparsed_as_list_in_blockquote() {
+    let cfg = FmtConfig::default();
+    let body = "> **Note:** Managed Agents is the right choice when you want Anthropic to run the agent loop *and* host the container where tools execute — file ops, bash, code execution all run in the per-session workspace. If you want to host the compute yourself or run your own custom tool runtime, Claude API + tool use is the right choice — use the tool runner for the agentic loop — its per-turn hooks still give you approval gates, logging, error interception, and conditional execution (see `shared/tool-use-concepts.md`) — or the manual loop when you want to own the entire loop yourself.\n";
+    let source = skill_source(body);
+    let formatted = format_str(&source, &cfg).expect("should format");
+    let formatted_twice = format_str(&formatted, &cfg).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "wrapped '+ ' continuation line should not change meaning on re-parse"
+    );
 }
 
 // --- Regression tests for the unbounded-recursion stack overflow (nested

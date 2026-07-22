@@ -289,13 +289,30 @@ fn wrap_tokens(tokens: &[Token], width: usize, reflow: bool) -> Vec<String> {
 
 fn build_tokens(items: &[Inline], cfg: &FmtConfig) -> Vec<Token> {
     let mut out = Vec::new();
+    // Adjacent `Inline::Text` nodes are not necessarily whitespace-separated
+    // in the source: a backslash escape (e.g. `foo\_bar`) splits into
+    // multiple `Text` events around the escaped character, with nothing
+    // between them. Splitting each node on whitespace independently would
+    // spuriously break such a run into separate words (`foo`, `_`, `bar`),
+    // which then get rejoined with a space on the next reflow pass —
+    // breaking idempotency. Coalesce a run of consecutive `Text` nodes
+    // before splitting on whitespace so escape boundaries don't count as
+    // word boundaries.
+    let mut text_run = String::new();
+    let flush_text_run = |run: &mut String, out: &mut Vec<Token>| {
+        for w in run.split_whitespace() {
+            out.push(Token::Word(escape_text(w)));
+        }
+        run.clear();
+    };
     for item in items {
+        if let Inline::Text(s) = item {
+            text_run.push_str(s);
+            continue;
+        }
+        flush_text_run(&mut text_run, &mut out);
         match item {
-            Inline::Text(s) => {
-                for w in s.split_whitespace() {
-                    out.push(Token::Word(escape_text(w)));
-                }
-            }
+            Inline::Text(_) => unreachable!("handled by the `if let` above"),
             Inline::Code(s) => out.push(Token::Word(render_code_span(s))),
             Inline::Emphasis(children) => glue(
                 &mut out,
@@ -337,6 +354,7 @@ fn build_tokens(items: &[Inline], cfg: &FmtConfig) -> Vec<Token> {
             Inline::FootnoteReference(s) => out.push(Token::Word(format!("[^{s}]"))),
         }
     }
+    flush_text_run(&mut text_run, &mut out);
     out
 }
 
