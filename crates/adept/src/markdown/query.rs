@@ -83,7 +83,7 @@ pub fn headings(src: &str) -> Vec<Located<Heading>> {
                         value: Heading {
                             level,
                             text: text.trim().to_string(),
-                            is_setext: !starts_with_hash(&src[start..range.end.min(src.len())]),
+                            is_setext: is_setext_source(&src[start..range.end.min(src.len())]),
                         },
                         line: index.line(start),
                     });
@@ -105,14 +105,29 @@ pub fn headings(src: &str) -> Vec<Located<Heading>> {
     out
 }
 
-/// Whether a heading's source starts (after any indentation) with `#`,
-/// i.e. is an ATX heading. `pulldown-cmark` does not expose the ATX/setext
-/// distinction, so it is derived from the heading's source range.
-fn starts_with_hash(heading_src: &str) -> bool {
-    heading_src
-        .bytes()
-        .find(|b| !b.is_ascii_whitespace())
-        .is_some_and(|b| b == b'#')
+/// Whether a heading's source is setext form. `pulldown-cmark` does not
+/// expose the ATX/setext distinction, so it is derived from the heading's
+/// source range.
+///
+/// The discriminator is the **end** of the range, not its start: an ATX
+/// heading occupies exactly one line, whereas a setext heading spans at
+/// least two and its last line is an underline of only `=` or only `-`.
+/// Looking at the start instead would misread `#hashtag` (not an ATX
+/// heading — CommonMark requires a space after the `#` run) underlined by
+/// `====` as ATX.
+///
+/// Inside a container, `into_offset_iter` includes the container's marker
+/// on continuation lines (`> =====`, `  =====`), so leading whitespace and
+/// `>` markers are stripped before the underline is checked.
+fn is_setext_source(heading_src: &str) -> bool {
+    let trimmed = heading_src.trim_end();
+    let Some((_, last)) = trimmed.rsplit_once('\n') else {
+        // A single line: necessarily ATX.
+        return false;
+    };
+    let underline = last.trim_matches(|c: char| c.is_whitespace() || c == '>');
+    !underline.is_empty()
+        && (underline.bytes().all(|b| b == b'=') || underline.bytes().all(|b| b == b'-'))
 }
 
 /// The destinations of every link and image in `src`, in document order.
@@ -212,6 +227,50 @@ mod tests {
         let found = headings(src);
         assert_eq!(found.len(), 1);
         assert!(!found[0].value.is_setext);
+    }
+
+    #[test]
+    fn hash_prefixed_text_underlined_is_setext_not_atx() {
+        // `#hashtag` is not an ATX heading (CommonMark requires a space
+        // after the `#` run), so this is a setext h1 whose text merely
+        // starts with `#`.
+        let src = "#hashtag start of setext\n========================\n";
+        let found = headings(src);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.level, 1);
+        assert_eq!(found[0].value.text, "#hashtag start of setext");
+        assert!(found[0].value.is_setext);
+    }
+
+    #[test]
+    fn dash_underlined_heading_is_a_setext_h2() {
+        let src = "Setext H2\n---------\n";
+        let found = headings(src);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].value.level, 2);
+        assert!(found[0].value.is_setext);
+    }
+
+    #[test]
+    fn escaped_hash_underlined_is_setext() {
+        let src = "\\# Escaped\n=====\n";
+        let found = headings(src);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].value.is_setext);
+    }
+
+    #[test]
+    fn setext_headings_inside_containers_are_setext() {
+        // `into_offset_iter` includes the container marker on the
+        // underline line, which the discriminator must tolerate.
+        for src in [
+            "> Quoted Setext\n> =============\n",
+            "- List item setext\n  =================\n",
+        ] {
+            let found = headings(src);
+            assert_eq!(found.len(), 1, "{src:?}");
+            assert!(found[0].value.is_setext, "{src:?}");
+        }
     }
 
     #[test]

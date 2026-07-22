@@ -208,7 +208,7 @@ fn mismatched_fence_characters_hide_their_contents() {
     // starting with ``` or ~~~, so a ``` block containing a ~~~ line was
     // treated as *closed* there — and everything after it re-entered
     // "prose", producing phantom SL102/SL103/SL104 findings.
-    assert_no_codes("md-mismatched-fence", &["SL102", "SL103", "SL104", "SL105"]);
+    assert_no_codes("md_mismatched_fence", &["SL102", "SL103", "SL104", "SL105"]);
 }
 
 #[test]
@@ -217,7 +217,7 @@ fn fence_info_string_containing_hash_is_not_a_heading() {
     // `#`-counting heading scan ran over any line it thought was prose, so
     // ``` ```bash # run this ``` and the comment inside could be read as
     // headings and the link inside as a file reference.
-    assert_no_codes("md-fence-info-hash", &["SL102", "SL103", "SL104", "SL105"]);
+    assert_no_codes("md_fence_info_hash", &["SL102", "SL103", "SL104", "SL105"]);
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn indented_code_block_contents_are_not_lexed() {
     // Old scanner bug: it never recognised 4-space indented code blocks at
     // all, so heading-like and link-like text inside them was linted as
     // prose (an h1 -> h3 skip plus a broken file reference here).
-    assert_no_codes("md-indented-code", &["SL103", "SL104", "SL105"]);
+    assert_no_codes("md_indented_code", &["SL103", "SL104", "SL105"]);
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn sl104_reports_full_destination_with_nested_parentheses() {
     // Old scanner bug: `extract_link_targets` scanned from `](` to the
     // *first* `)`, so `[x](./a(b).md)` yielded the truncated `./a(b` and the
     // diagnostic quoted a path the user never wrote.
-    let found = diagnostics_with_code("md-nested-paren-link", "SL104");
+    let found = diagnostics_with_code("md_nested_paren_link", "SL104");
     assert_eq!(found.len(), 1, "got:\n{found:#?}");
     assert!(
         found[0].message.contains("./a(b).md"),
@@ -248,14 +248,14 @@ fn sl104_reports_full_destination_with_nested_parentheses() {
 fn setext_h1_satisfies_sl102() {
     // Old scanner bug: it counted `#` characters and so could not see
     // setext headings, giving `Title\n=====` a bogus missing-h1 warning.
-    assert_no_codes("md-setext-headings", &["SL102"]);
+    assert_no_codes("sl105_setext_heading", &["SL102"]);
 }
 
 #[test]
 fn setext_heading_participates_in_sl103_level_sequence() {
     // Old scanner bug: with the setext h1 invisible, the following `###`
     // had no preceding heading to skip from, so SL103 stayed silent.
-    let found = diagnostics_with_code("md-setext-headings", "SL103");
+    let found = diagnostics_with_code("sl105_setext_heading", "SL103");
     assert_eq!(found.len(), 1, "got:\n{found:#?}");
     assert!(
         found[0].message.contains("h1 to h3"),
@@ -270,13 +270,22 @@ fn setext_heading_participates_in_sl103_level_sequence() {
 fn sl105_fires_on_setext_headings_only() {
     // SL105 is new with the shared lexer; the old scanner could not see
     // setext headings, so this rule was not expressible at all.
-    let found = diagnostics_with_code("md-setext-headings", "SL105");
-    assert_eq!(found.len(), 2, "got:\n{found:#?}");
+    let found = diagnostics_with_code("sl105_setext_heading", "SL105");
+    assert_eq!(found.len(), 3, "got:\n{found:#?}");
     // File lines 5 (`Title`, underlined on 6) and 10 (`Sub`, underlined on 11).
     assert_eq!(found[0].line, 5);
     assert!(found[0].message.contains("Title"), "{}", found[0].message);
     assert_eq!(found[1].line, 10);
     assert!(found[1].message.contains("Sub"), "{}", found[1].message);
+    // File line 15: text beginning with `#` is *not* an ATX heading —
+    // CommonMark requires a space after the `#` run — so this is a setext
+    // h1 and SL105 must still fire on it.
+    assert_eq!(found[2].line, 15);
+    assert!(
+        found[2].message.contains("#hashtag start of setext"),
+        "{}",
+        found[2].message
+    );
     for d in &found {
         assert_eq!(d.severity, Severity::Info);
     }
@@ -361,6 +370,11 @@ fn snapshot_sl103_heading_skip() {
 #[test]
 fn snapshot_sl104_broken_file_reference() {
     insta::assert_snapshot!(lint_fixture("sl104_broken_ref"));
+}
+
+#[test]
+fn snapshot_sl105_setext_heading() {
+    insta::assert_snapshot!(lint_fixture("sl105_setext_heading"));
 }
 
 #[test]
