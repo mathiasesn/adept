@@ -5,6 +5,8 @@
 //! share [`super::parser`] with the formatter's [`super::parse_document`],
 //! so both agree on what a heading, a link, or a code block is.
 
+use std::ops::Range;
+
 use pulldown_cmark::{Event, Tag, TagEnd};
 
 /// A value together with the line it starts on.
@@ -61,6 +63,22 @@ impl LineIndex {
     }
 }
 
+/// Every event in `src`, paired with its source range and the 1-based line
+/// its range starts on.
+///
+/// This is the one place that combines [`super::parser`] with a
+/// [`LineIndex`], so each public query below is just a filter over it and
+/// none of them can get the offset-to-line convention wrong on its own.
+fn located_events(src: &str) -> impl Iterator<Item = (Event<'_>, Range<usize>, usize)> {
+    let index = LineIndex::new(src);
+    super::parser(src)
+        .into_offset_iter()
+        .map(move |(event, range)| {
+            let line = index.line(range.start);
+            (event, range, line)
+        })
+}
+
 /// All headings in `src`, in document order.
 ///
 /// Both ATX (`# Title`) and setext (`Title` / `=====`) headings are
@@ -68,34 +86,34 @@ impl LineIndex {
 /// inside fenced or indented code blocks is not a heading and is not
 /// reported.
 pub fn headings(src: &str) -> Vec<Located<Heading>> {
-    let index = LineIndex::new(src);
     let mut out = Vec::new();
-    // The heading currently being accumulated: level, start offset, text.
-    let mut open: Option<(u8, usize, String)> = None;
-    for (event, range) in super::parser(src).into_offset_iter() {
+    // The heading currently being accumulated: level, start offset, start
+    // line, and text.
+    let mut open: Option<(u8, usize, usize, String)> = None;
+    for (event, range, line) in located_events(src) {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
-                open = Some((level as u8, range.start, String::new()));
+                open = Some((level as u8, range.start, line, String::new()));
             }
             Event::End(TagEnd::Heading(_)) => {
-                if let Some((level, start, text)) = open.take() {
+                if let Some((level, start, start_line, text)) = open.take() {
                     out.push(Located {
                         value: Heading {
                             level,
                             text: text.trim().to_string(),
                             is_setext: is_setext_source(&src[start..range.end.min(src.len())]),
                         },
-                        line: index.line(start),
+                        line: start_line,
                     });
                 }
             }
             Event::Text(t) | Event::Code(t) => {
-                if let Some((_, _, text)) = open.as_mut() {
+                if let Some((.., text)) = open.as_mut() {
                     text.push_str(&t);
                 }
             }
             Event::SoftBreak | Event::HardBreak => {
-                if let Some((_, _, text)) = open.as_mut() {
+                if let Some((.., text)) = open.as_mut() {
                     text.push(' ');
                 }
             }
@@ -136,17 +154,15 @@ fn is_setext_source(heading_src: &str) -> bool {
 /// `pulldown-cmark` emits code content as text, never as a link. Nested
 /// parentheses in a destination are handled by the parser.
 pub fn link_destinations(src: &str) -> Vec<Located<String>> {
-    let index = LineIndex::new(src);
-    super::parser(src)
-        .into_offset_iter()
-        .filter_map(|(event, range)| {
+    located_events(src)
+        .filter_map(|(event, _, line)| {
             let dest = match event {
                 Event::Start(Tag::Link { dest_url, .. } | Tag::Image { dest_url, .. }) => dest_url,
                 _ => return None,
             };
             Some(Located {
                 value: dest.to_string(),
-                line: index.line(range.start),
+                line,
             })
         })
         .collect()
@@ -156,13 +172,11 @@ pub fn link_destinations(src: &str) -> Vec<Located<String>> {
 /// document order. Fenced and indented code *blocks* are not inline code
 /// spans and are not reported.
 pub fn inline_code_spans(src: &str) -> Vec<Located<String>> {
-    let index = LineIndex::new(src);
-    super::parser(src)
-        .into_offset_iter()
-        .filter_map(|(event, range)| match event {
+    located_events(src)
+        .filter_map(|(event, _, line)| match event {
             Event::Code(code) => Some(Located {
                 value: code.to_string(),
-                line: index.line(range.start),
+                line,
             }),
             _ => None,
         })

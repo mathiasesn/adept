@@ -2,8 +2,8 @@
 
 use crate::config::FmtConfig;
 
-use super::ast::{Alignment, Block, Inline, ListItem};
-use super::MAX_NESTING_DEPTH;
+use adept::markdown::ast::{Alignment, Block, Inline, ListItem};
+use adept::markdown::MAX_NESTING_DEPTH;
 
 /// A single reflow-able output token: either an atomic word (which may
 /// itself be a whole inline code span, link, or image — never split

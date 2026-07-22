@@ -3,8 +3,7 @@
 //!
 //! This crate implements `adept fmt`: canonical frontmatter (key order,
 //! minimal-but-correct YAML quoting) plus a full Markdown body reflow built
-//! on the shared [`adept::markdown`] AST and a custom deterministic printer
-//! (see [`mod@markdown`]).
+//! on the shared [`adept::markdown`] AST and a custom deterministic printer.
 //!
 //! # Supported constructs
 //!
@@ -40,7 +39,7 @@ mod config;
 mod diff;
 mod error;
 mod frontmatter;
-pub mod markdown;
+mod print;
 
 pub use config::{BulletMarker, EmphasisMarker, FenceChar, FmtConfig, HeadingStyle, StrongMarker};
 pub use diff::CheckResult;
@@ -83,9 +82,9 @@ pub fn format_skill(skill: &Skill, config: &FmtConfig) -> Result<String, FmtErro
     // Exactly one blank line after the closing `---`.
     out.push('\n');
 
-    let blocks = markdown::parse_document(&skill.body);
+    let blocks = adept::markdown::parse_document(&skill.body);
     if !blocks.is_empty() {
-        out.push_str(&markdown::print_document(&blocks, config));
+        out.push_str(&print::print_document(&blocks, config));
     }
     Ok(out)
 }

@@ -13,11 +13,7 @@ fn fixture_dir(name: &str) -> PathBuf {
 }
 
 fn lint_fixture(name: &str) -> String {
-    let path = fixture_dir(name).join("SKILL.md");
-    let skill = parse_skill(&path).expect("fixture should parse");
-    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
-    let diagnostics = linter.lint_skill(&skill);
-    render_human_colored(&diagnostics, false)
+    render_human_colored(&diagnostics_for(name), false)
 }
 
 fn lint_set_fixture(name: &str) -> String {

@@ -133,37 +133,36 @@ impl SkillRule for BrokenFileReference {
         // Candidate targets, in document order: every link/image
         // destination, plus backtick-quoted spans that look like an explicit
         // path. Fenced and indented code blocks are excluded by the parser.
-        let mut candidates: Vec<(String, usize)> = markdown::link_destinations(&skill.body)
-            .into_iter()
-            .map(|d| (d.value, d.line))
-            .collect();
+        let mut candidates = markdown::link_destinations(&skill.body);
         candidates.extend(
             markdown::inline_code_spans(&skill.body)
                 .into_iter()
-                .filter(|c| looks_like_explicit_path(c.value.trim()))
-                .map(|c| (c.value.trim().to_string(), c.line)),
+                .map(|c| markdown::Located {
+                    value: c.value.trim().to_string(),
+                    line: c.line,
+                })
+                .filter(|c| looks_like_explicit_path(&c.value)),
         );
         // Stable, so links still precede code spans on the same line.
-        candidates.sort_by_key(|(_, line)| *line);
+        candidates.sort_by_key(|c| c.line);
 
         let mut diagnostics = Vec::new();
-        for (target, line_in_body) in candidates {
-            let target = target.as_str();
+        for candidate in candidates {
+            let target = &candidate.value;
             if !is_intended_file_reference(target) {
                 continue;
             }
             // Strip a trailing anchor/query before checking existence
             // (e.g. `notes.md#section`); the diagnostic still quotes
             // the original target.
-            let path_part = target.split(['#', '?']).next().unwrap_or(target).trim();
-            if !dir.join(path_part).exists() {
+            if !dir.join(path_part(target)).exists() {
                 diagnostics.push(
                     Diagnostic::new(
                         self.code(),
                         format!("referenced file \"{target}\" does not exist"),
                         self.default_severity(),
                         &skill.path,
-                        skill.body_line_offset + line_in_body - 1,
+                        skill.body_line_offset + candidate.line - 1,
                         1,
                     )
                     .with_fix_suggestion("fix the path, or add the missing file next to SKILL.md"),
@@ -274,10 +273,19 @@ fn looks_like_explicit_path(s: &str) -> bool {
     if s.starts_with("./") || s.starts_with("../") {
         return true;
     }
-    s.contains('/')
-        && KNOWN_EXTENSIONS
-            .iter()
-            .any(|ext| s.to_lowercase().ends_with(ext))
+    if !s.contains('/') {
+        return false;
+    }
+    // Lowercased once, not once per extension.
+    let lower = s.to_lowercase();
+    KNOWN_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+}
+
+/// A target with any trailing `#anchor` / `?query` stripped — the part that
+/// names a file on disk. Shared by [`is_intended_file_reference`], which
+/// judges it, and [`BrokenFileReference`], which checks it for existence.
+fn path_part(target: &str) -> &str {
+    target.split(['#', '?']).next().unwrap_or(target).trim()
 }
 
 /// Whether `target` (a parsed link/image destination, or a code span
@@ -291,8 +299,7 @@ fn is_intended_file_reference(target: &str) -> bool {
         return false;
     }
     // Strip a trailing anchor/query before judging the path itself.
-    let path_part = target.split(['#', '?']).next().unwrap_or(target).trim();
-    if path_part.is_empty() {
+    if path_part(target).is_empty() {
         // A pure `#anchor` link.
         return false;
     }
