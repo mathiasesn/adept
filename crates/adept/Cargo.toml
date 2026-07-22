@@ -18,3 +18,9 @@ owo-colors = { workspace = true }
 
 [dev-dependencies]
 insta = { workspace = true }
+criterion = "0.5"
+tempfile = "3"
+
+[[bench]]
+name = "lint_100_skills"
+harness = false

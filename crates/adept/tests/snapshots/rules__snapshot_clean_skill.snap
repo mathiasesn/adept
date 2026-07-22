@@ -1,0 +1,6 @@
+---
+source: crates/adept/tests/rules.rs
+assertion_line: 193
+expression: "lint_fixture(\"pdf-extractor\")"
+---
+
