@@ -67,6 +67,16 @@ look path-like: it skips anything with a URL scheme (`https://...`,
 bare filename with no directory component and no markdown-link context
 (e.g. a prose mention of `package.json`) — real companion-file references
 almost always come as a markdown link or an explicit relative path.
+
+It also exempts paths the skill *instructs the reader to create*: if any
+reference to a path sits on a body line phrased as a creation instruction
+(a create/write/save/generate/output/produce/draft word — "Save test cases
+to `evals/evals.json`"), that path is treated as skill-authored and every
+reference to it is skipped, including later read/update mentions ("if
+`evals/evals.json` already exists…"). Modification verbs like *update* are
+deliberately excluded, since they imply the file should already exist.
+Intent is detected per line, so a genuine broken reference sharing a line
+with an unrelated creation instruction is not currently flagged.
 **Fix:** fix the path, or add the missing file next to SKILL.md.
 
 ### SL105 `setext-heading` (Info)

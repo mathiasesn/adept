@@ -152,6 +152,10 @@ impl SkillRule for BrokenFileReference {
         // instruction ("Save test cases to `evals/evals.json`"), treat every
         // reference to that same path as skill-authored, including later
         // read/update mentions ("if `evals/evals.json` already exists…").
+        // Intent is line-granular: a broken reference sharing a line with an
+        // unrelated creation instruction is not flagged. Binding the verb to
+        // a specific path would need column tracking through the markdown
+        // query layer; the co-occurrence is rare, so it is left as a bound.
         let body_lines: Vec<&str> = skill.body.lines().collect();
         let line_text = |line: usize| body_lines.get(line - 1).copied().unwrap_or("");
         let authored: std::collections::HashSet<&str> = candidates
@@ -303,7 +307,12 @@ fn looks_like_explicit_path(s: &str) -> bool {
 /// consumes: the reference is an instruction to write the file, so its
 /// absence next to SKILL.md is expected, not a broken reference. Kept
 /// deliberately small — every entry widens the class of references SL104
-/// stops checking, so the bar is "unambiguously describes producing a file".
+/// stops checking, so the bar is "unambiguously describes *producing* a
+/// file". Modification verbs (`update`, `populate`, `store`) are excluded on
+/// purpose: they imply the file already exists, so a missing target under
+/// them is a genuine broken reference. A path that is genuinely authored
+/// *and* later updated is still exempted at the update mention, because the
+/// creation line propagates its exemption to every reference of that path.
 const CREATION_VERBS: &[&str] = &[
     "create",
     "creates",
@@ -326,24 +335,19 @@ const CREATION_VERBS: &[&str] = &[
     "outputs",
     "produce",
     "produces",
-    "populate",
-    "populates",
-    "store",
-    "stores",
     "draft",
     "drafts",
     "drafting",
     "drafted",
-    "update",
-    "updates",
-    "updating",
-    "updated",
 ];
 
 /// Whether a body line reads as an instruction to create/write a file, used
 /// by [`BrokenFileReference`] to exempt skill-authored paths. Matches whole
 /// alphabetic words case-insensitively against [`CREATION_VERBS`], so
-/// `regenerate` or `software` do not spuriously match `generate`/`store`.
+/// `regenerate` does not spuriously match `generate`. Intent is judged for
+/// the whole line, not bound to a column, so a creation instruction and an
+/// unrelated broken reference sharing one line cannot be told apart — an
+/// accepted narrow limitation (see the caller).
 fn has_creation_intent(line: &str) -> bool {
     line.split(|c: char| !c.is_ascii_alphabetic())
         .filter(|w| !w.is_empty())
@@ -477,6 +481,20 @@ mod tests {
         );
         assert_eq!(found.len(), 1);
         assert!(found[0].message.contains("scripts/helper.py"));
+    }
+
+    #[test]
+    fn modification_verb_alone_does_not_exempt_missing_file() {
+        // "update"/"store" imply the file should already exist, so a missing
+        // target under them is a genuine broken reference, not skill-authored.
+        let found = run(
+            &BrokenFileReference,
+            "Update `docs/missing.md` with notes.\n",
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("docs/missing.md"));
+        assert!(!has_creation_intent("Update the file"));
+        assert!(!has_creation_intent("store results there"));
     }
 
     #[test]
