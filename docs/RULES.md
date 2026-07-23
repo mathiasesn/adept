@@ -134,7 +134,12 @@ demand.
 
 ### SL303 `companion-file-bloat` (Warning)
 Flags any companion file (a file other than SKILL.md in the skill's
-directory) over `companion_file_max_tokens` (default **2000**).
+directory) over `companion_file_max_tokens` (default **2000**). Bundled
+license files are exempt — `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT`
+(any extension) and `LICENSE-*`/`LICENCE-*` variants — since their
+boilerplate legal text is not skill content and routinely exceeds any
+reasonable budget. The exemption is scoped to this rule; `adept_score`'s
+token-bloat view still counts license files.
 **Fix:** split the companion file or trim it down.
 
 ## SL4xx — cross-skill
