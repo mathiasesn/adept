@@ -16,7 +16,9 @@ use std::io::{BufRead, Write};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use adept::{AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
+use adept::{
+    sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet,
+};
 use adept_fmt::{format_str, FmtConfig};
 use adept_score::{LlmConfig, OpenAiCompatClient, ScoreOptions};
 use serde_json::{json, Value};
@@ -300,10 +302,8 @@ fn format_skill_tool(arguments: &Value) -> (String, bool) {
 ///
 /// The search root is `directory` if given. Otherwise, for a real on-disk
 /// `path` (the synthetic `"SKILL.md"` default used for raw `content` is not
-/// treated as a location), it is the parent of the skill's *own* directory —
-/// in the standard `<root>/<skill-name>/SKILL.md` layout, that is `<root>`,
-/// where the sibling skill directories live. (`discover` walks recursively,
-/// so searching the skill's own directory would only ever re-find itself.)
+/// treated as a location), it is `adept::sibling_root(path)` — the parent of
+/// the skill's *own* directory, where sibling skill directories live.
 /// When neither is available, fall back to the target alone — overlap is
 /// genuinely undetectable then. The target skill is always included so its
 /// own pairs are considered even if discovery (e.g. from `content` that
@@ -314,23 +314,13 @@ fn overlap_skillset(arguments: &Value, path: &std::path::Path, skill: &Skill) ->
         .and_then(Value::as_str)
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            // Only treat `path` as a filesystem location when the caller
-            // actually passed one, not the synthetic `read_source` default.
-            arguments.get("path").and_then(Value::as_str).map(|_| {
-                // The skill's own directory: the file's parent, or the given
-                // directory itself. Siblings live one level above that.
-                let skill_dir = if path.is_dir() {
-                    path.to_path_buf()
-                } else {
-                    path.parent()
-                        .map(std::path::Path::to_path_buf)
-                        .unwrap_or_else(|| std::path::PathBuf::from("."))
-                };
-                skill_dir
-                    .parent()
-                    .map(std::path::Path::to_path_buf)
-                    .unwrap_or(skill_dir)
-            })
+            // Only when the caller actually passed `path`, not the synthetic
+            // `read_source` default. Siblings live one level above the skill's
+            // own directory (see `sibling_root`).
+            arguments
+                .get("path")
+                .and_then(Value::as_str)
+                .map(|_| sibling_root(path))
         });
 
     let Some(root) = search_root else {

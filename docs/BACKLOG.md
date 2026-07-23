@@ -6,7 +6,8 @@ markdown-parsing unification, the vendored-corpus fixture, the MCP
 top). Nothing
 here blocks the four shipped surfaces (`check`, `fmt`, `score`, `mcp`); these
 are known gaps, deliberate deferrals, and follow-ups surfaced by the two-axis
-review.
+review. `score` and `mcp` now share one sibling-root rule (`adept::sibling_root`),
+resolving the divergence previously tracked here.
 
 ## Correctness gaps
 
@@ -34,19 +35,6 @@ Documented in `crates/adept_fmt`, each visible as an unexpected diff to users:
   but it adds blank lines.
 - Text escaping covers a conservative subset rather than every line-start
   ambiguity.
-
-### `score` discovers siblings from the skill's own directory
-`load_skill_and_set` in `crates/adept_cli/src/commands/score.rs` uses
-`adept::skill_directory(path)` — the skill's *own* directory — as the overlap
-search root. `SkillSet::discover` walks recursively, so for the standard
-`<root>/<skill-name>/SKILL.md` layout it only ever re-finds the skill itself:
-`score`'s overlap detection is effectively inert unless the user points it at a
-skills-root directory. The MCP `score_skill` tool takes the correct root (the
-parent of the skill's own directory; see `overlap_skillset` in
-`commands/mcp.rs`), so the two surfaces now disagree about where siblings live.
-The fix is to share one sibling-root rule — `skill_directory` already factors
-out the file-or-dir half — but changing `score`'s root changes its observable
-output, so it is deferred rather than folded into a cleanup pass.
 
 ### Parse errors bypass the rule pipeline
 `SL001`/`SL002`/`SL003` are synthesized by a `match` on `AdeptError` in

@@ -108,15 +108,9 @@ fn load_skill_and_set(path: &std::path::Path) -> Result<(Skill, Vec<Skill>), Str
     }
     let skill = adept::parse_skill(path).map_err(|err| err.to_string())?;
 
-    // Discover sibling skills for overlap detection: walk the parent
-    // directory of the skill (or the given directory itself).
-    let search_root = if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        path.parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-    };
+    // Discover sibling skills for overlap detection: walk the parent of the
+    // skill's own directory, where siblings live.
+    let search_root = adept::sibling_root(path);
     let skillset = SkillSet::discover(&search_root)
         .map(|set| set.skills)
         .unwrap_or_default();

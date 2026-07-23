@@ -75,6 +75,37 @@ impl SkillSet {
     }
 }
 
+/// The skill's own directory, given a path to its `SKILL.md` file or the
+/// directory itself. Falls back to `.` when a file path has no parent.
+///
+/// The file-or-directory half of [`sibling_root`]; kept as its own function
+/// so that rule reads as "the parent of the skill's own directory".
+fn skill_directory(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+}
+
+/// The root under which a skill's *siblings* live, given a path to its
+/// `SKILL.md` file or the skill's own directory: the parent of
+/// [`skill_directory`], falling back to the skill's own directory when it
+/// has no parent.
+///
+/// `discover` walks recursively, so searching the skill's own directory
+/// would only ever re-find the skill itself; siblings live one level up, in
+/// the standard `<root>/<skill-name>/SKILL.md` layout.
+pub fn sibling_root(path: &Path) -> PathBuf {
+    let skill_dir = skill_directory(path);
+    skill_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or(skill_dir)
+}
+
 fn is_excluded(entry: &walkdir::DirEntry) -> bool {
     // Never exclude the root itself, even if its name would otherwise match.
     if entry.depth() == 0 {
