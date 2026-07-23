@@ -1,9 +1,10 @@
 # Backlog
 
-Open items as of `993758f` (MVP baseline `9bf467a` → `2e29dff`, plus the
+Open items as of `930803f` (MVP baseline `9bf467a` → `2e29dff`, plus the
 markdown-parsing unification, the vendored-corpus fixture, the reflow
-leaning-toothpick fix, the shared sibling-root rule, and the SL303
-bundled-license exemption on top). Nothing
+leaning-toothpick fix, the shared sibling-root rule, the SL303
+bundled-license exemption, and the SL104 creation-intent exemption on top).
+Nothing
 here blocks the four shipped surfaces (`check`, `fmt`, `score`, `mcp`); these
 are known gaps, deliberate deferrals, and follow-ups surfaced by the two-axis
 review. `score` and `mcp` now discover sibling skills through one shared
@@ -14,10 +15,18 @@ divergence previously tracked here.
 
 ### Residual SL104 false positives
 Down from 55 to a residual of archive/template cases. The **plausible-but-
-uncreated companion** class is now handled: `BrokenFileReference` exempts a
-path that any occurrence describes creating (a `CREATION_VERBS` word on the
-same body line — "Save test cases to `evals/evals.json`"), and propagates
-that exemption to every later read/update mention of the same path. This
+uncreated companion** class is now handled across `996eb3e` (exemption),
+`360f384` (excluded modification verbs after review, documented in
+`docs/RULES.md`) and `930803f` (reuse the shared `text::words` tokenizer):
+`BrokenFileReference` exempts a path that any occurrence describes creating
+(a `CREATION_VERBS` word — create/write/save/generate/output/produce/draft —
+on the same body line, "Save test cases to `evals/evals.json`"), and
+propagates that exemption to every later read/update mention of the same
+path. Modification verbs (`update`, `store`, `populate`) are deliberately
+excluded, since they imply the file already exists. Intent is line-granular:
+a broken reference sharing a line with an unrelated creation instruction is
+not flagged — an accepted narrow bound, since binding the verb to a specific
+path would need column tracking through the markdown query layer. This
 removed the 3 corpus `skill-creator` → `evals/evals.json` findings (corpus
 snapshot 27 → 24) and is regression-covered in `rules/structure.rs`.
 
