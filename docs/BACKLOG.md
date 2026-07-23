@@ -1,7 +1,9 @@
 # Backlog
 
-Open items as of `10a5644` (MVP baseline `9bf467a` → `2e29dff`, plus the
-markdown-parsing unification and the vendored-corpus fixture on top). Nothing
+Open items as of `99cc8a9` (MVP baseline `9bf467a` → `2e29dff`, plus the
+markdown-parsing unification, the vendored-corpus fixture, the MCP
+`score_skill` sibling-discovery fix, and the reflow leaning-toothpick fix on
+top). Nothing
 here blocks the four shipped surfaces (`check`, `fmt`, `score`, `mcp`); these
 are known gaps, deliberate deferrals, and follow-ups surfaced by the two-axis
 review.
@@ -32,6 +34,19 @@ Documented in `crates/adept_fmt`, each visible as an unexpected diff to users:
   but it adds blank lines.
 - Text escaping covers a conservative subset rather than every line-start
   ambiguity.
+
+### `score` discovers siblings from the skill's own directory
+`load_skill_and_set` in `crates/adept_cli/src/commands/score.rs` uses
+`adept::skill_directory(path)` — the skill's *own* directory — as the overlap
+search root. `SkillSet::discover` walks recursively, so for the standard
+`<root>/<skill-name>/SKILL.md` layout it only ever re-finds the skill itself:
+`score`'s overlap detection is effectively inert unless the user points it at a
+skills-root directory. The MCP `score_skill` tool takes the correct root (the
+parent of the skill's own directory; see `overlap_skillset` in
+`commands/mcp.rs`), so the two surfaces now disagree about where siblings live.
+The fix is to share one sibling-root rule — `skill_directory` already factors
+out the file-or-dir half — but changing `score`'s root changes its observable
+output, so it is deferred rather than folded into a cleanup pass.
 
 ### Parse errors bypass the rule pipeline
 `SL001`/`SL002`/`SL003` are synthesized by a `match` on `AdeptError` in
@@ -67,8 +82,8 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
   fences, HTML, and emphasis, and the fixture idempotency loop is still gated on
   `reflow_prose: false` — but the vendored corpus is now exercised at
   `reflow_prose: true` (`idempotency_holds_for_corpus_with_prose_reflow_enabled`),
-  so real prose does reach the reflow path. 8 of 10 corpus skills pass; the two
-  that don't are the leaning-toothpick bug below.
+  so real prose does reach the reflow path. All 10 corpus skills now pass at
+  `reflow_prose: true` (the leaning-toothpick bug below is fixed).
 - **The criterion benchmark asserts nothing.** CI gates performance by parsing
   `--quick` output in a bash step (~23ms against a 500ms threshold). A native
   assertion in the bench would be less brittle than text parsing.
@@ -89,20 +104,21 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
 - **Setext handling has no real-world coverage.** The corpus contains no setext
   headings at all, so `SL105` fires nowhere in it. Its only evidence is the unit
   and regression tests in `markdown/query.rs` and `tests/rules.rs`.
-- **Reflow can emit marker-like line starts ("leaning toothpick").**
-  `wrap_tokens`/`build_tokens` in `crates/adept_fmt/src/print.rs` choose break
-  points purely by width, never checking whether the resulting line-initial
-  token would re-parse as CommonMark block syntax — a `-`/`+`/`*` bullet, ATX
-  `#`, blockquote `>`, or ordered-list `N.`. This breaks
-  `format(format(x)) == format(x)` whenever prose has such a character
-  mid-sentence where the width limit happens to fall. Confirmed in two corpus
-  skills: `algorithmic-art` (a mid-sentence `-` wraps into a line read as a
-  nested list item, flipping the list from tight to loose) and `claude-api` (a
-  `+` inside a blockquote). Both sit on `KNOWN_NON_IDEMPOTENT` in
-  `crates/adept_fmt/tests/format_tests.rs`, with `#[ignore]`d minimized repros
-  ready to un-ignore. Likely fix: when a candidate break would put a
-  block-marker token at line start, force it onto the previous line even
-  over-width, or escape the leading character.
+- ~~**Reflow can emit marker-like line starts ("leaning toothpick").**~~ Fixed
+  across `21cd220` (initial bullet/ATX/`>`/ordered guard), `50563e3`
+  (generalized to thematic breaks and setext underlines), `76b46cb` (tilde
+  code fences `~~~`, plus firmed-up non-vacuous tests) and `99cc8a9` (cleanup).
+  `wrap_tokens` in `crates/adept_fmt/src/print.rs` now enforces a single
+  invariant: no wrapped line may begin with a marker-like token (`marker_like`),
+  covering `-`/`+`/`*` bullets, ATX `#`, blockquote `>`, ordered `N.`/`N)`,
+  thematic breaks (`---`/`***`/`___`), setext underlines (`===`, lone `-`), and
+  tilde code fences (`~~~`). A marker-like token is forced onto the previous
+  line even over-width, or backslash-escaped when it lands at a line start
+  unavoidably (only after a hard break, since a paragraph's genuine first token
+  is never marker-like). `KNOWN_NON_IDEMPOTENT` is now empty; the
+  `algorithmic-art` and `claude-api` corpus skills and the formerly-`#[ignore]`d
+  repros pass, with added regression tests for the thematic-break/setext/tilde
+  cases.
 - **`SL303` flags bundled `LICENSE.txt` files.** 9 of the corpus's 36
   diagnostics are SL303 companion-file-bloat findings against the per-skill
   Apache-2.0 license text every upstream skill ships. Bundled license text is
@@ -140,6 +156,28 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
   `#hashtag\n========` it suggests ``write it as `# #hashtag` ``, which is
   correct CommonMark but looks like a typo. Cosmetic; the message would need to
   special-case a `#`-leading heading text.
+- **The formatter has two escaping seams with an unstated ownership split.**
+  `escape_text` (in `build_tokens`) unconditionally backslash-escapes a fixed
+  inline set (`` \`*_[] ``) at tokenize time; `escape_line_start`/`marker_like`
+  handle line-start-only markers (`-`/`=`/`#`/`>`/`~`, ordered, `***`) at wrap
+  time. The split is character-arbitrary: `marker_like`'s `*`/`_` arms are dead
+  because `escape_text` already covers them, while its `~` arm is live because
+  `escape_text` does not — same hazard class, three different justifications.
+  A deeper factoring would let line-start escaping own the full positional set
+  and leave `escape_text` only the truly context-free escapes, making the
+  backstop arms genuinely reachable. Changing it moves observable output
+  (where backslashes land), so it is deferred, not folded into cleanup. Related
+  to the "text escaping covers a conservative subset" formatter limitation
+  above.
+- **`marker_like` hand-rolls CommonMark block-start detection.** It re-derives
+  the parser's grammar by string matching (`#`-count ≤6, digit-count ≤9,
+  tilde-run ≥3, setext/thematic rules) in the printer, even though the crate
+  already parses via `adept::markdown`/`pulldown_cmark`. The invariant it
+  guards — "re-parsing the emitted line yields the same block structure" — is
+  in principle checkable by feeding the candidate line start through the real
+  parser instead of a hand-maintained lookalike that can drift. Deferred:
+  the oracle approach is a larger rearchitecture with a per-word parse cost on
+  the format path, and the current predicate is deliberate and cheap.
 - **The formatter's semantic oracle no longer pins its own parser options.**
   `crates/adept_fmt/tests/format_tests.rs` used to construct its own `Parser`
   as an independent differential check; it now calls `adept::markdown::parser`
