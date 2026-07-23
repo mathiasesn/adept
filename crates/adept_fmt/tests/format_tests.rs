@@ -338,17 +338,23 @@ fn skill_source(body: &str) -> String {
 /// which re-parses as a nested list item rather than continuation text.
 /// `#[ignore]`d because it currently fails; un-ignore once the reflow
 /// hardening backlog item lands.
-#[test]
-#[ignore = "reflow: wrapped '- ' continuation line is reparsed as a nested list item, see KNOWN_NON_IDEMPOTENT"]
-fn wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list() {
+/// Formats `body` (wrapped in a skill) twice and asserts the second pass is a
+/// no-op, i.e. `format(format(x)) == format(x)` at `FmtConfig::default()`.
+fn assert_body_idempotent(body: &str) {
     let cfg = FmtConfig::default();
-    let body = "- **PARAMETRIC EXPRESSION**: Ideas communicate through mathematical relationships, forces, behaviors - not static composition\n- **OTHER**: filler\n";
-    let source = skill_source(body);
-    let formatted = format_str(&source, &cfg).expect("should format");
+    let formatted = format_str(&skill_source(body), &cfg).expect("should format");
     let formatted_twice = format_str(&formatted, &cfg).expect("should format twice");
     assert_eq!(
         formatted, formatted_twice,
-        "wrapped '- ' continuation line should not change meaning on re-parse"
+        "reflow changed meaning on the second pass"
+    );
+}
+
+#[test]
+#[ignore = "reflow: wrapped '- ' continuation line is reparsed as a nested list item, see KNOWN_NON_IDEMPOTENT"]
+fn wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list() {
+    assert_body_idempotent(
+        "- **PARAMETRIC EXPRESSION**: Ideas communicate through mathematical relationships, forces, behaviors - not static composition\n- **OTHER**: filler\n",
     );
 }
 
@@ -361,14 +367,8 @@ fn wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list() {
 #[test]
 #[ignore = "reflow: wrapped '+ ' continuation line is reparsed as a list item, see KNOWN_NON_IDEMPOTENT"]
 fn wrapped_line_starting_with_plus_is_not_reparsed_as_list_in_blockquote() {
-    let cfg = FmtConfig::default();
-    let body = "> **Note:** Managed Agents is the right choice when you want Anthropic to run the agent loop *and* host the container where tools execute — file ops, bash, code execution all run in the per-session workspace. If you want to host the compute yourself or run your own custom tool runtime, Claude API + tool use is the right choice — use the tool runner for the agentic loop — its per-turn hooks still give you approval gates, logging, error interception, and conditional execution (see `shared/tool-use-concepts.md`) — or the manual loop when you want to own the entire loop yourself.\n";
-    let source = skill_source(body);
-    let formatted = format_str(&source, &cfg).expect("should format");
-    let formatted_twice = format_str(&formatted, &cfg).expect("should format twice");
-    assert_eq!(
-        formatted, formatted_twice,
-        "wrapped '+ ' continuation line should not change meaning on re-parse"
+    assert_body_idempotent(
+        "> **Note:** Managed Agents is the right choice when you want Anthropic to run the agent loop *and* host the container where tools execute — file ops, bash, code execution all run in the per-session workspace. If you want to host the compute yourself or run your own custom tool runtime, Claude API + tool use is the right choice — use the tool runner for the agentic loop — its per-turn hooks still give you approval gates, logging, error interception, and conditional execution (see `shared/tool-use-concepts.md`) — or the manual loop when you want to own the entire loop yourself.\n",
     );
 }
 

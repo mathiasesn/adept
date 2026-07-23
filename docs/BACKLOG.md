@@ -113,6 +113,14 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
   Apache-2.0 license text every upstream skill ships. Bundled license text is
   not bloat in any useful sense; the rule probably wants a license-filename
   exemption. The current snapshot enshrines these as expected output.
+- **Diagnostic rendering has no display-root option.** `reporting.rs` renders
+  `d.path.display()` verbatim — always the absolute discovery path — so
+  `tests/corpus.rs` rewrites each `Diagnostic::path` to be corpus-relative in
+  the test before snapshotting. Relativizing for stable output is a renderer
+  concern: a `base: Option<&Path>` parameter on `render_human_colored` (and the
+  JSON renderer) would serve the corpus test and any CLI caller wanting
+  reproducible/relative output, instead of mutating the public `path` field in
+  a test.
 - **`adept::markdown::build::collect_inlines` never coalesces adjacent `Text`
   events.** A backslash escape splits one word into several `Inline::Text`
   nodes with nothing between them. `adept_fmt` now defends against this locally
