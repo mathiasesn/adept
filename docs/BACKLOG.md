@@ -13,15 +13,27 @@ divergence previously tracked here.
 ## Correctness gaps
 
 ### Residual SL104 false positives
-7 findings remain on the anthropics/skills corpus, down from 55. The survivors
-are genuinely ambiguous rather than noise: zip-internal paths (`word/document.xml`),
-template filenames (`slideN.xml`), and plausible-but-uncreated companion files
-(`evals/evals.json`). Resolving them needs semantic or archive-aware checking.
+Down from 55 to a residual of archive/template cases. The **plausible-but-
+uncreated companion** class is now handled: `BrokenFileReference` exempts a
+path that any occurrence describes creating (a `CREATION_VERBS` word on the
+same body line — "Save test cases to `evals/evals.json`"), and propagates
+that exemption to every later read/update mention of the same path. This
+removed the 3 corpus `skill-creator` → `evals/evals.json` findings (corpus
+snapshot 27 → 24) and is regression-covered in `rules/structure.rs`.
 
-Re-confirmed at `130398d`: still exactly 7, and the same 7. Moving SL104 onto
-the shared `pulldown-cmark` lexer neither fixed nor worsened them, which is
-the expected result — they are judgement failures in the heuristic filters,
-not lexing failures.
+The remaining survivors are the **archive-aware** cases that live only in the
+non-vendored source-available skills (`docx`, `pdf`, `pptx`, `xlsx`): zip-
+internal paths (`word/document.xml`) and template filenames (`slideN.xml`).
+These are *not reproducible in-repo* — the corpus README forbids vendoring
+those skills — so any detection heuristic (recognizing OOXML-internal roots,
+template placeholders) can only be tested against synthetic fixtures, not the
+real inputs. Deferred until those skills can be licensed for real coverage;
+building unverifiable suppression into an Error-severity rule is the wrong
+trade. See the corpus README before attempting.
+
+History: at `130398d` there were exactly 7, and moving SL104 onto the shared
+`pulldown-cmark` lexer neither fixed nor worsened them — they were judgement
+failures in the heuristic filters, not lexing failures.
 
 ### Formatter limitations
 Documented in `crates/adept_fmt`, each visible as an unexpected diff to users:
@@ -79,16 +91,18 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
 - ~~**No fixture exercises a real skills corpus.**~~ Done: 10 Apache-2.0 skills
   are vendored under `crates/adept/tests/fixtures/corpus/` at upstream
   `1f630fdf9259cec4a14913127dfd7c3b69ef72eb`, and `tests/corpus.rs` snapshots the
-  linter's output over them (27 diagnostics, after the SL303 license
-  exemption below). The manual clone-build-diff ritual is retired. What
-  remains narrowed to the items below.
+  linter's output over them (24 diagnostics, after the SL303 license
+  exemption and the SL104 creation-intent exemption below). The manual
+  clone-build-diff ritual is retired. What remains narrowed to the items below.
 - **The corpus cannot cover the SL104 residuals.** `anthropics/skills` is not
   uniformly licensed: `docx`, `pdf`, `pptx` and `xlsx` are source-available, not
   open source, so they are not vendored — and they are exactly the skills whose
-  zip-internal paths and template filenames produce the 7 known SL104 false
-  positives. The corpus produces 3 SL104 findings, all
-  `skill-creator` → `evals/evals.json`. **The 7 residuals above remain manually
-  verified, not corpus-covered.** Three more skills (`canvas-design`,
+  zip-internal paths and template filenames produce the remaining SL104 false
+  positives. The corpus's own SL104 finding — `skill-creator` →
+  `evals/evals.json` — is now suppressed by the creation-intent exemption
+  (see Correctness gaps), so the corpus produces 0 SL104 findings. **The
+  archive/template residuals remain manually verified, not corpus-covered.**
+  Three more skills (`canvas-design`,
   `theme-factory`, `web-artifacts-builder`) are excluded for carrying binary
   assets. Do not "helpfully" refresh the pin; see the corpus README.
 - **Setext handling has no real-world coverage.** The corpus contains no setext

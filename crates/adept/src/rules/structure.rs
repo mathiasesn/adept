@@ -146,10 +146,28 @@ impl SkillRule for BrokenFileReference {
         // Stable, so links still precede code spans on the same line.
         candidates.sort_by_key(|c| c.line);
 
+        // Paths the skill *instructs the reader to create* are not broken
+        // references — they legitimately don't exist next to SKILL.md yet.
+        // If any occurrence of a path sits on a line phrased as a creation
+        // instruction ("Save test cases to `evals/evals.json`"), treat every
+        // reference to that same path as skill-authored, including later
+        // read/update mentions ("if `evals/evals.json` already exists…").
+        let body_lines: Vec<&str> = skill.body.lines().collect();
+        let line_text = |line: usize| body_lines.get(line - 1).copied().unwrap_or("");
+        let authored: std::collections::HashSet<&str> = candidates
+            .iter()
+            .filter(|c| is_intended_file_reference(&c.value))
+            .filter(|c| has_creation_intent(line_text(c.line)))
+            .map(|c| path_part(&c.value))
+            .collect();
+
         let mut diagnostics = Vec::new();
-        for candidate in candidates {
+        for candidate in &candidates {
             let target = &candidate.value;
             if !is_intended_file_reference(target) {
+                continue;
+            }
+            if authored.contains(path_part(target)) {
                 continue;
             }
             // Strip a trailing anchor/query before checking existence
@@ -281,6 +299,60 @@ fn looks_like_explicit_path(s: &str) -> bool {
     KNOWN_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
 }
 
+/// Verbs that mark a path as something the skill *authors* rather than
+/// consumes: the reference is an instruction to write the file, so its
+/// absence next to SKILL.md is expected, not a broken reference. Kept
+/// deliberately small — every entry widens the class of references SL104
+/// stops checking, so the bar is "unambiguously describes producing a file".
+const CREATION_VERBS: &[&str] = &[
+    "create",
+    "creates",
+    "creating",
+    "created",
+    "write",
+    "writes",
+    "writing",
+    "wrote",
+    "written",
+    "save",
+    "saves",
+    "saving",
+    "saved",
+    "generate",
+    "generates",
+    "generating",
+    "generated",
+    "output",
+    "outputs",
+    "produce",
+    "produces",
+    "populate",
+    "populates",
+    "store",
+    "stores",
+    "draft",
+    "drafts",
+    "drafting",
+    "drafted",
+    "update",
+    "updates",
+    "updating",
+    "updated",
+];
+
+/// Whether a body line reads as an instruction to create/write a file, used
+/// by [`BrokenFileReference`] to exempt skill-authored paths. Matches whole
+/// alphabetic words case-insensitively against [`CREATION_VERBS`], so
+/// `regenerate` or `software` do not spuriously match `generate`/`store`.
+fn has_creation_intent(line: &str) -> bool {
+    line.split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|w| !w.is_empty())
+        .any(|w| {
+            let lower = w.to_ascii_lowercase();
+            CREATION_VERBS.contains(&lower.as_str())
+        })
+}
+
 /// A target with any trailing `#anchor` / `?query` stripped — the part that
 /// names a file on disk. Shared by [`is_intended_file_reference`], which
 /// judges it, and [`BrokenFileReference`], which checks it for existence.
@@ -372,6 +444,48 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert!(found[0].message.contains("missing/file_(v2).md"));
         assert_eq!(found[0].line, 7);
+    }
+
+    #[test]
+    fn creation_instruction_exempts_authored_path() {
+        // The skill tells the reader to create the file; its absence is
+        // expected, not a broken reference.
+        let found = run(
+            &BrokenFileReference,
+            "Save test cases to `evals/evals.json`.\n",
+        );
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn authored_path_is_exempt_at_later_read_and_update_mentions() {
+        // One creation instruction clears every reference to the same path,
+        // including plain read/update mentions with no verb of their own.
+        let body = "Save output to `data/out.json`.\n\n\
+            If `data/out.json` already exists, review it.\n\n\
+            Update `data/out.json` with the results.\n";
+        assert!(run(&BrokenFileReference, body).is_empty());
+    }
+
+    #[test]
+    fn non_authored_missing_reference_still_fires() {
+        // No creation intent anywhere -> a genuinely broken reference is
+        // still reported.
+        let found = run(
+            &BrokenFileReference,
+            "See `scripts/helper.py` for details.\n",
+        );
+        assert_eq!(found.len(), 1);
+        assert!(found[0].message.contains("scripts/helper.py"));
+    }
+
+    #[test]
+    fn creation_intent_matches_whole_words_only() {
+        // `regenerate` must not match `generate`, so an unrelated broken
+        // reference on such a line is not spuriously exempted.
+        assert!(!has_creation_intent("Nothing here references files"));
+        assert!(has_creation_intent("Save to path"));
+        assert!(!has_creation_intent("regenerated the report"));
     }
 
     #[test]

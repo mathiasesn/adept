@@ -42,12 +42,6 @@ skill-creator/SKILL.md:3:1: SL206 description gives no guidance on when not to u
   fix: consider adding "Do not use for..." guidance to reduce over-triggering
 skill-creator/SKILL.md:5:1: SL302 SKILL.md body is 7172 tokens, over the budget of 1500
   fix: move detailed reference material into companion files loaded on demand
-skill-creator/SKILL.md:145:1: SL104 referenced file "evals/evals.json" does not exist
-  fix: fix the path, or add the missing file next to SKILL.md
-skill-creator/SKILL.md:201:1: SL104 referenced file "evals/evals.json" does not exist
-  fix: fix the path, or add the missing file next to SKILL.md
-skill-creator/SKILL.md:205:1: SL104 referenced file "evals/evals.json" does not exist
-  fix: fix the path, or add the missing file next to SKILL.md
 slack-gif-creator/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
   fix: consider adding "Do not use for..." guidance to reduce over-triggering
 slack-gif-creator/SKILL.md:6:1: SL302 SKILL.md body is 1920 tokens, over the budget of 1500
