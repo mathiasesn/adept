@@ -251,28 +251,15 @@ fn corpus_dir() -> std::path::PathBuf {
 }
 
 /// Skills whose `SKILL.md` is known not to round-trip idempotently under
-/// `FmtConfig::default()` (`reflow_prose: true`). Both entries below hit the
-/// same underlying "leaning toothpick" class of bug: prose reflow can wrap a
-/// line so that its first token — purely by chance of where the width limit
-/// fell — becomes something CommonMark treats as block-starting syntax on
-/// re-parse (a `-`/`+`/`*` bullet marker, in these two cases) even though it
-/// was mid-sentence punctuation in the source. `format` doesn't look ahead
-/// for this when choosing a break point, so a second pass reflows the
-/// now-reinterpreted structure differently. See minimized repros in
-/// `wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list` and
-/// `wrapped_line_starting_with_plus_is_not_reparsed_as_list_in_blockquote`
-/// below (both `#[ignore]`d, since they currently fail) and the backlog entry
-/// for "reflow: avoid emitting marker-like line starts".
-const KNOWN_NON_IDEMPOTENT: &[&str] = &[
-    // Wraps "... behaviors - not static composition" so the continuation
-    // line is "  - not static composition", indistinguishable on re-parse
-    // from a nested list item.
-    "algorithmic-art",
-    // Wraps "Claude API + tool use is the right choice" inside a blockquote
-    // so the continuation line is "> + tool use is the right choice",
-    // indistinguishable on re-parse from a `+`-bulleted list item.
-    "claude-api",
-];
+/// `FmtConfig::default()` (`reflow_prose: true`). Previously this held
+/// "algorithmic-art" and "claude-api", both hit by the "leaning toothpick"
+/// class of bug where prose reflow could wrap a line so that its first token
+/// became something CommonMark treats as block-starting syntax on re-parse
+/// (a `-`/`+`/`*` bullet marker) even though it was mid-sentence punctuation
+/// in the source. `wrap_tokens` now guards against dangerous line starts
+/// (see `dangerous_line_start` in `adept_fmt::print`), so both are fixed and
+/// this list is empty; kept as a named slot for any future entries.
+const KNOWN_NON_IDEMPOTENT: &[&str] = &[];
 
 /// `format(format(x)) == format(x)` for every vendored corpus `SKILL.md`,
 /// under `FmtConfig::default()` — i.e. with `reflow_prose: true`, which is
@@ -335,9 +322,8 @@ fn skill_source(body: &str) -> String {
 /// Minimized repro for the `algorithmic-art` corpus entry on
 /// [`KNOWN_NON_IDEMPOTENT`]: a tight list item whose prose contains a
 /// mid-sentence `-` reflows so the continuation line starts with `- `,
-/// which re-parses as a nested list item rather than continuation text.
-/// `#[ignore]`d because it currently fails; un-ignore once the reflow
-/// hardening backlog item lands.
+/// which would otherwise re-parse as a nested list item rather than
+/// continuation text; `wrap_tokens` now guards against this.
 /// Formats `body` (wrapped in a skill) twice and asserts the second pass is a
 /// no-op, i.e. `format(format(x)) == format(x)` at `FmtConfig::default()`.
 fn assert_body_idempotent(body: &str) {
@@ -351,7 +337,6 @@ fn assert_body_idempotent(body: &str) {
 }
 
 #[test]
-#[ignore = "reflow: wrapped '- ' continuation line is reparsed as a nested list item, see KNOWN_NON_IDEMPOTENT"]
 fn wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list() {
     assert_body_idempotent(
         "- **PARAMETRIC EXPRESSION**: Ideas communicate through mathematical relationships, forces, behaviors - not static composition\n- **OTHER**: filler\n",
@@ -360,12 +345,10 @@ fn wrapped_line_starting_with_dash_is_not_reparsed_as_nested_list() {
 
 /// Minimized repro for the `claude-api` corpus entry on
 /// [`KNOWN_NON_IDEMPOTENT`]: a blockquote paragraph containing a mid-sentence
-/// `+` reflows so the continuation line starts with `+ `, which re-parses as
-/// a list item inside the blockquote rather than continuation text.
-/// `#[ignore]`d because it currently fails; un-ignore once the reflow
-/// hardening backlog item lands.
+/// `+` reflows so the continuation line starts with `+ `, which would
+/// otherwise re-parse as a list item inside the blockquote rather than
+/// continuation text; `wrap_tokens` now guards against this.
 #[test]
-#[ignore = "reflow: wrapped '+ ' continuation line is reparsed as a list item, see KNOWN_NON_IDEMPOTENT"]
 fn wrapped_line_starting_with_plus_is_not_reparsed_as_list_in_blockquote() {
     assert_body_idempotent(
         "> **Note:** Managed Agents is the right choice when you want Anthropic to run the agent loop *and* host the container where tools execute — file ops, bash, code execution all run in the per-session workspace. If you want to host the compute yourself or run your own custom tool runtime, Claude API + tool use is the right choice — use the tool runner for the agentic loop — its per-turn hooks still give you approval gates, logging, error interception, and conditional execution (see `shared/tool-use-concepts.md`) — or the manual loop when you want to own the entire loop yourself.\n",

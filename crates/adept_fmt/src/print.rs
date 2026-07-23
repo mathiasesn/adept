@@ -261,19 +261,78 @@ fn wrap_paragraph(inline: &[Inline], cfg: &FmtConfig) -> Vec<String> {
     wrap_tokens(&tokens, cfg.line_width, cfg.reflow_prose)
 }
 
+/// True when `word`, if it were the first token on a line followed by more
+/// content, would re-parse as CommonMark block syntax on the next format
+/// pass (a bullet/blockquote/heading marker or ordered-list marker). Used by
+/// `wrap_tokens` to keep reflow idempotent: width-only line breaking can
+/// otherwise strand a mid-sentence punctuation token (e.g. a bare `-`) at
+/// the start of a wrapped continuation line, silently turning prose into a
+/// nested list on the next pass (the "leaning toothpick" bug).
+fn dangerous_line_start(word: &str) -> bool {
+    if matches!(word, "-" | "+" | "*" | ">") {
+        return true;
+    }
+    if !word.is_empty() && word.len() <= 6 && word.bytes().all(|b| b == b'#') {
+        return true;
+    }
+    // Ordered-list marker: 1-9 ASCII digits followed by a single `.` or `)`.
+    if let Some(rest) = word.strip_suffix('.').or_else(|| word.strip_suffix(')')) {
+        return !rest.is_empty() && rest.len() <= 9 && rest.bytes().all(|b| b.is_ascii_digit());
+    }
+    false
+}
+
+/// Backslash-escape the punctuation in `word` that would otherwise trigger
+/// block-level reparsing if it started a line (see `dangerous_line_start`).
+/// All escaped characters are CommonMark-escapable, so this is
+/// meaning-preserving: the escaped form re-parses as the literal character.
+fn escape_line_start(word: &str) -> String {
+    if let Some(rest) = word.strip_suffix('.').or_else(|| word.strip_suffix(')')) {
+        let marker = &word[rest.len()..];
+        return format!("{rest}\\{marker}");
+    }
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(c) => format!("\\{c}{}", chars.as_str()),
+        None => word.to_string(),
+    }
+}
+
 fn wrap_tokens(tokens: &[Token], width: usize, reflow: bool) -> Vec<String> {
     let mut lines = Vec::new();
     let mut cur = String::new();
-    for t in tokens {
+    let mut iter = tokens.iter().peekable();
+    while let Some(t) = iter.next() {
         match t {
             Token::Break => {
                 lines.push(format!("{cur}  "));
                 cur.clear();
             }
             Token::Word(w) => {
+                // A dangerous line start (bullet/blockquote/heading/ordered
+                // marker) only matters when more content will share the
+                // line with it; a marker alone on its own line is just
+                // text, not block syntax.
+                let followed_by_more = matches!(iter.peek(), Some(Token::Word(_)));
                 if cur.is_empty() {
-                    cur.push_str(w);
+                    // `w` is the very first token on this line (either the
+                    // start of the paragraph or right after a hard break),
+                    // so there is no previous line to force it onto:
+                    // escape it in place (fallback mechanism).
+                    if followed_by_more && dangerous_line_start(w) {
+                        cur.push_str(&escape_line_start(w));
+                    } else {
+                        cur.push_str(w);
+                    }
                 } else if !reflow || cur.chars().count() + 1 + w.chars().count() <= width {
+                    cur.push(' ');
+                    cur.push_str(w);
+                } else if followed_by_more && dangerous_line_start(w) {
+                    // Primary mechanism: rather than start a new line with a
+                    // token that would re-parse as block syntax, force it
+                    // onto the current line even though that exceeds
+                    // `width` (the formatter already tolerates over-width
+                    // lines for long words/URLs).
                     cur.push(' ');
                     cur.push_str(w);
                 } else {
