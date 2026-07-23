@@ -342,19 +342,14 @@ const CREATION_VERBS: &[&str] = &[
 ];
 
 /// Whether a body line reads as an instruction to create/write a file, used
-/// by [`BrokenFileReference`] to exempt skill-authored paths. Matches whole
-/// alphabetic words case-insensitively against [`CREATION_VERBS`], so
-/// `regenerate` does not spuriously match `generate`. Intent is judged for
-/// the whole line, not bound to a column, so a creation instruction and an
-/// unrelated broken reference sharing one line cannot be told apart — an
-/// accepted narrow limitation (see the caller).
+/// by [`BrokenFileReference`] to exempt skill-authored paths. Tokenizes via
+/// the shared [`crate::text::words`] so it matches whole words the same way
+/// the other rules do — `regenerate` does not spuriously match `generate`.
+/// Intent is judged for the whole line, not bound to a column, so a creation
+/// instruction and an unrelated broken reference sharing one line cannot be
+/// told apart — an accepted narrow limitation (see the caller).
 fn has_creation_intent(line: &str) -> bool {
-    line.split(|c: char| !c.is_ascii_alphabetic())
-        .filter(|w| !w.is_empty())
-        .any(|w| {
-            let lower = w.to_ascii_lowercase();
-            CREATION_VERBS.contains(&lower.as_str())
-        })
+    crate::text::words(line).any(|w| CREATION_VERBS.contains(&w.as_str()))
 }
 
 /// A target with any trailing `#anchor` / `?query` stripped — the part that
