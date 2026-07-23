@@ -37,11 +37,45 @@ pub fn discover_companion_files(skill: &Skill) -> Vec<PathBuf> {
     files
 }
 
+/// Returns true if `name` (a bare file name, not a path) is a recognized
+/// license file: `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT` (any
+/// extension), or a name whose stem starts with `LICENSE-` / `LICENCE-`
+/// (e.g. `LICENSE-APACHE`). Matching is case-insensitive on the stem.
+///
+/// Lives here beside [`discover_companion_files`] because recognizing a
+/// license file is a companion-file naming concern; callers decide what to
+/// do with the classification. `SL303` uses it to exempt bundled license
+/// boilerplate from its token-budget check.
+#[must_use]
+pub(crate) fn is_license_file(name: &str) -> bool {
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let stem = stem.to_ascii_lowercase();
+    matches!(stem.as_str(), "license" | "licence" | "copying" | "copyright")
+        || stem.starts_with("license-")
+        || stem.starts_with("licence-")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parse_skill;
     use std::io::Write;
+
+    #[test]
+    fn is_license_file_matches_bare_license_names() {
+        assert!(is_license_file("LICENSE"));
+        assert!(is_license_file("LICENSE.txt"));
+        assert!(is_license_file("license.md"));
+        assert!(is_license_file("COPYING"));
+        assert!(is_license_file("LICENSE-APACHE"));
+    }
+
+    #[test]
+    fn is_license_file_rejects_lookalikes() {
+        assert!(!is_license_file("reference.md"));
+        assert!(!is_license_file("licenses.md"));
+        assert!(!is_license_file("my-license-guide.md"));
+    }
 
     fn write_skill(dir: &std::path::Path) -> PathBuf {
         std::fs::create_dir_all(dir).unwrap();
