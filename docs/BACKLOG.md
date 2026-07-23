@@ -1,17 +1,12 @@
 # Backlog
 
-Open items as of `877721f` (MVP baseline `9bf467a` → `2e29dff`, plus the
-markdown-parsing unification on top). Nothing here blocks the four shipped
-surfaces (`check`, `fmt`, `score`, `mcp`); these are known gaps, deliberate
-deferrals, and follow-ups surfaced by the two-axis review.
+Open items as of `10a5644` (MVP baseline `9bf467a` → `2e29dff`, plus the
+markdown-parsing unification and the vendored-corpus fixture on top). Nothing
+here blocks the four shipped surfaces (`check`, `fmt`, `score`, `mcp`); these
+are known gaps, deliberate deferrals, and follow-ups surfaced by the two-axis
+review.
 
 ## Correctness gaps
-
-### MCP `score_skill` cannot detect overlap
-`crates/adept_cli/src/commands/mcp.rs` passes `[skill]` as the skillset, so
-overlap detection over MCP is inert — a skill is only ever compared against
-itself. Fixing this needs a directory argument (or sibling discovery) that the
-MCP tool schema does not currently express.
 
 ### Residual SL104 false positives
 7 findings remain on the anthropics/skills corpus, down from 55. The survivors
@@ -124,8 +119,9 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
 - **`adept::markdown::build::collect_inlines` never coalesces adjacent `Text`
   events.** A backslash escape splits one word into several `Inline::Text`
   nodes with nothing between them. `adept_fmt` now defends against this locally
-  (see the reflow fix in `877721f`), but the surprise is still in the shared
-  AST for any other consumer.
+  (`build_tokens` coalesces adjacent `Text` before splitting words — landed in
+  `877721f`, collapsed to a single exhaustive `match` in `c596f8b`), but the
+  surprise is still in the shared AST for any other consumer.
 
 ## API and consistency
 
@@ -166,8 +162,8 @@ rediscovered as bugs:
 
 ## Pre-publish checklist
 
-- Decide the MCP overlap and reference-link behaviours above — both change
-  observable output, so they are cheaper to settle before there are users.
+- Decide the reference-link behaviour above — it changes observable output,
+  so it is cheaper to settle before there are users.
 - `score` has never run against a live endpoint. Testing is mock-only by
   design; one manual run against a real OpenAI-compatible endpoint would
   confirm the request shape before release.

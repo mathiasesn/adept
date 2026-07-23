@@ -16,7 +16,7 @@ use std::io::{BufRead, Write};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use adept::{AnthropicSkillParser, LintConfig, Linter, SkillParser};
+use adept::{AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
 use adept_fmt::{format_str, FmtConfig};
 use adept_score::{LlmConfig, OpenAiCompatClient, ScoreOptions};
 use serde_json::{json, Value};
@@ -178,6 +178,7 @@ fn handle_tools_list() -> Value {
                 "properties": {
                     "path": { "type": "string", "description": "Path to a SKILL.md file or skill directory." },
                     "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." },
+                    "directory": { "type": "string", "description": "Skills root to search for sibling skills when detecting overlap. Defaults to the parent directory of `path`; required to get overlap detection when scoring raw `content`." },
                     "model": { "type": "string", "description": "Override the model to score with (defaults to ADEPT_MODEL)." },
                     "base_url": { "type": "string", "description": "Override the OpenAI-compatible base URL (defaults to ADEPT_BASE_URL or the OpenAI API)." }
                 },
@@ -290,6 +291,64 @@ fn format_skill_tool(arguments: &Value) -> (String, bool) {
     }
 }
 
+/// Build the skillset used for overlap detection in `score_skill`.
+///
+/// Overlap detection is pairwise, so a skillset containing only the target
+/// skill can never surface an overlap — the skill is compared against itself.
+/// Mirror the `adept score` CLI: discover sibling skills so the target is
+/// adjudicated against its neighbours.
+///
+/// The search root is `directory` if given. Otherwise, for a real on-disk
+/// `path` (the synthetic `"SKILL.md"` default used for raw `content` is not
+/// treated as a location), it is the parent of the skill's *own* directory —
+/// in the standard `<root>/<skill-name>/SKILL.md` layout, that is `<root>`,
+/// where the sibling skill directories live. (`discover` walks recursively,
+/// so searching the skill's own directory would only ever re-find itself.)
+/// When neither is available, fall back to the target alone — overlap is
+/// genuinely undetectable then. The target skill is always included so its
+/// own pairs are considered even if discovery (e.g. from `content` that
+/// differs from disk) would miss it.
+fn overlap_skillset(arguments: &Value, path: &std::path::Path, skill: &Skill) -> Vec<Skill> {
+    let search_root = arguments
+        .get("directory")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            // Only treat `path` as a filesystem location when the caller
+            // actually passed one, not the synthetic `read_source` default.
+            arguments.get("path").and_then(Value::as_str).map(|_| {
+                // The skill's own directory: the file's parent, or the given
+                // directory itself. Siblings live one level above that.
+                let skill_dir = if path.is_dir() {
+                    path.to_path_buf()
+                } else {
+                    path.parent()
+                        .map(std::path::Path::to_path_buf)
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                };
+                skill_dir
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or(skill_dir)
+            })
+        });
+
+    let Some(root) = search_root else {
+        return vec![skill.clone()];
+    };
+
+    let mut skills = SkillSet::discover(&root)
+        .map(|set| set.skills)
+        .unwrap_or_default();
+    if !skills
+        .iter()
+        .any(|s| s.frontmatter.name == skill.frontmatter.name)
+    {
+        skills.push(skill.clone());
+    }
+    skills
+}
+
 /// `score_skill` MCP tool: runs LLM-assisted scoring, given a resolvable
 /// `ADEPT_MODEL`/`ADEPT_BASE_URL`/`ADEPT_API_KEY` (or `model`/`base_url`
 /// arguments). Never panics or hangs: a missing/unresolvable LLM config, a
@@ -334,7 +393,7 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
 
     let client = OpenAiCompatClient::new(resolved.clone());
     let options = ScoreOptions::for_model(&resolved.model, adept::Tokenizer::default());
-    let skillset = [skill.clone()];
+    let skillset = overlap_skillset(arguments, &path, &skill);
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
@@ -441,6 +500,64 @@ mod tests {
         let response = handle_message(&request.to_string()).expect("expected a response");
         let parsed: Value = serde_json::from_str(&response).unwrap();
         assert!(parsed.get("error").is_some());
+    }
+
+    fn write_skill(dir: &std::path::Path, name: &str, description: &str) -> std::path::PathBuf {
+        let skill_dir = dir.join(name);
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        let path = skill_dir.join("SKILL.md");
+        std::fs::write(
+            &path,
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n\nBody.\n"),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn overlap_skillset_discovers_siblings_from_path_parent() {
+        let root = tempfile::tempdir().unwrap();
+        let target_path = write_skill(root.path(), "alpha", "Does alpha things. Use when alpha.");
+        write_skill(root.path(), "beta", "Does beta things. Use when beta.");
+
+        let (source, path) = read_source(&json!({ "path": target_path.to_str().unwrap() })).unwrap();
+        let skill = AnthropicSkillParser.parse_str(&path, &source).unwrap();
+
+        let skillset =
+            overlap_skillset(&json!({ "path": target_path.to_str().unwrap() }), &path, &skill);
+
+        let names: Vec<&str> = skillset.iter().map(|s| s.frontmatter.name.as_str()).collect();
+        assert!(names.contains(&"alpha"), "target must be present: {names:?}");
+        assert!(names.contains(&"beta"), "sibling must be discovered: {names:?}");
+    }
+
+    #[test]
+    fn overlap_skillset_falls_back_to_target_for_raw_content() {
+        // No `path` and no `directory`: overlap is genuinely undetectable,
+        // but the target must still be present so scoring proceeds.
+        let path = std::path::PathBuf::from("SKILL.md");
+        let skill = AnthropicSkillParser.parse_str(&path, SAMPLE_SKILL).unwrap();
+        let skillset = overlap_skillset(&json!({ "content": SAMPLE_SKILL }), &path, &skill);
+        assert_eq!(skillset.len(), 1);
+        assert_eq!(skillset[0].frontmatter.name, "sample");
+    }
+
+    #[test]
+    fn overlap_skillset_honors_explicit_directory_for_content() {
+        let root = tempfile::tempdir().unwrap();
+        write_skill(root.path(), "gamma", "Does gamma things. Use when gamma.");
+
+        let path = std::path::PathBuf::from("SKILL.md");
+        let skill = AnthropicSkillParser.parse_str(&path, SAMPLE_SKILL).unwrap();
+        let skillset = overlap_skillset(
+            &json!({ "content": SAMPLE_SKILL, "directory": root.path().to_str().unwrap() }),
+            &path,
+            &skill,
+        );
+
+        let names: Vec<&str> = skillset.iter().map(|s| s.frontmatter.name.as_str()).collect();
+        assert!(names.contains(&"gamma"), "directory sibling: {names:?}");
+        assert!(names.contains(&"sample"), "target appended: {names:?}");
     }
 
     #[test]
