@@ -1,13 +1,13 @@
 # Backlog
 
-Open items as of `99cc8a9` (MVP baseline `9bf467a` → `2e29dff`, plus the
-markdown-parsing unification, the vendored-corpus fixture, the MCP
-`score_skill` sibling-discovery fix, and the reflow leaning-toothpick fix on
-top). Nothing
+Open items as of `9a83b69` (MVP baseline `9bf467a` → `2e29dff`, plus the
+markdown-parsing unification, the vendored-corpus fixture, the reflow
+leaning-toothpick fix, and the shared sibling-root rule on top). Nothing
 here blocks the four shipped surfaces (`check`, `fmt`, `score`, `mcp`); these
 are known gaps, deliberate deferrals, and follow-ups surfaced by the two-axis
-review. `score` and `mcp` now share one sibling-root rule (`adept::sibling_root`),
-resolving the divergence previously tracked here.
+review. `score` and `mcp` now discover sibling skills through one shared
+`adept::sibling_root` (the parent of the skill's own directory), resolving the
+divergence previously tracked here.
 
 ## Correctness gaps
 
