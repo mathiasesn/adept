@@ -177,6 +177,11 @@ fn sl303_companion_file_bloat_fires() {
 }
 
 #[test]
+fn sl303_exempts_bundled_license_files() {
+    assert_no_codes("sl303_license_exempt", &["SL303"]);
+}
+
+#[test]
 fn sl401_duplicate_skill_name_fires() {
     assert_set_fires("cross_sl401", "SL401");
 }

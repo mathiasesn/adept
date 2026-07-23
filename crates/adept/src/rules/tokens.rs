@@ -79,14 +79,37 @@ impl SkillRule for BodyTokenBudget {
 /// `SL303` `companion-file-bloat`: a companion file (any file other than
 /// SKILL.md in the skill's directory) exceeds
 /// [`LintConfig::companion_file_max_tokens`].
+///
+/// Bundled license files (e.g. `LICENSE.txt`, `LICENSE-APACHE`) are exempt:
+/// they are boilerplate legal text, not skill content, and commonly exceed
+/// any reasonable token budget without being a documentation smell.
 pub struct CompanionFileBloat;
 
 impl_rule!(CompanionFileBloat, "SL303", "companion-file-bloat", Warning);
+
+/// Returns true if `name` (a bare file name, not a path) is a recognized
+/// license file: `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT` (any
+/// extension), or a name whose stem starts with `LICENSE-` / `LICENCE-`
+/// (e.g. `LICENSE-APACHE`). Matching is case-insensitive on the stem.
+fn is_license_file(name: &str) -> bool {
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let stem = stem.to_ascii_lowercase();
+    matches!(stem.as_str(), "license" | "licence" | "copying" | "copyright")
+        || stem.starts_with("license-")
+        || stem.starts_with("licence-")
+}
 
 impl SkillRule for CompanionFileBloat {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
         for path in crate::companion::discover_companion_files(skill) {
+            let is_license = path
+                .file_name()
+                .map(|n| is_license_file(&n.to_string_lossy()))
+                .unwrap_or(false);
+            if is_license {
+                continue;
+            }
             let Ok(contents) = fs::read_to_string(&path) else {
                 continue; // binary or unreadable companion file; not a token-budget concern
             };
@@ -112,5 +135,26 @@ impl SkillRule for CompanionFileBloat {
             }
         }
         diagnostics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_license_file;
+
+    #[test]
+    fn matches_bare_license_names() {
+        assert!(is_license_file("LICENSE"));
+        assert!(is_license_file("LICENSE.txt"));
+        assert!(is_license_file("license.md"));
+        assert!(is_license_file("COPYING"));
+        assert!(is_license_file("LICENSE-APACHE"));
+    }
+
+    #[test]
+    fn rejects_lookalikes() {
+        assert!(!is_license_file("reference.md"));
+        assert!(!is_license_file("licenses.md"));
+        assert!(!is_license_file("my-license-guide.md"));
     }
 }
