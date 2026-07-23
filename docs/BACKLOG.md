@@ -1,6 +1,6 @@
 # Backlog
 
-Open items as of `f1f82c6` (MVP baseline `9bf467a` → `2e29dff`, plus the
+Open items as of `993758f` (MVP baseline `9bf467a` → `2e29dff`, plus the
 markdown-parsing unification, the vendored-corpus fixture, the reflow
 leaning-toothpick fix, the shared sibling-root rule, and the SL303
 bundled-license exemption on top). Nothing
@@ -79,9 +79,9 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
 - ~~**No fixture exercises a real skills corpus.**~~ Done: 10 Apache-2.0 skills
   are vendored under `crates/adept/tests/fixtures/corpus/` at upstream
   `1f630fdf9259cec4a14913127dfd7c3b69ef72eb`, and `tests/corpus.rs` snapshots the
-  linter's output over them (27 diagnostics, after the SL303 license exemption
-below). The manual clone-build-diff ritual
-  is retired. What remains narrowed to the items below.
+  linter's output over them (27 diagnostics, after the SL303 license
+  exemption below). The manual clone-build-diff ritual is retired. What
+  remains narrowed to the items below.
 - **The corpus cannot cover the SL104 residuals.** `anthropics/skills` is not
   uniformly licensed: `docx`, `pdf`, `pptx` and `xlsx` are source-available, not
   open source, so they are not vendored — and they are exactly the skills whose
@@ -109,14 +109,16 @@ below). The manual clone-build-diff ritual
   `algorithmic-art` and `claude-api` corpus skills and the formerly-`#[ignore]`d
   repros pass, with added regression tests for the thematic-break/setext/tilde
   cases.
-- ~~**`SL303` flags bundled `LICENSE.txt` files.**~~ Fixed at `f1f82c6`.
-  SL303 now exempts bundled license files (`LICENSE`/`LICENCE`/`COPYING`/
-  `COPYRIGHT` any extension, plus `LICENSE-*` variants) via `is_license_file`
-  in `crates/adept/src/rules/tokens.rs`; the exemption is scoped to the rule,
-  leaving the shared `discover_companion_files` walk and `adept_score`'s
-  token-bloat view untouched. The corpus snapshot dropped from 36 to 27
-  diagnostics (the 9 per-skill `LICENSE.txt` findings are gone), and
-  `docs/RULES.md` records the exemption.
+- ~~**`SL303` flags bundled `LICENSE.txt` files.**~~ Fixed across `f1f82c6`
+  (exemption) and `993758f` (cleanup). SL303 now exempts bundled license
+  files (`LICENSE`/`LICENCE`/`COPYING`/`COPYRIGHT` any extension, plus
+  `LICENSE-*` variants) via `adept::companion::is_license_file`, which lives
+  beside `discover_companion_files` because recognizing a license file is a
+  companion-file naming concern; the *application* (the skip) is scoped to the
+  SL303 rule, so the shared discovery walk and `adept_score`'s token-bloat
+  view are untouched. The corpus snapshot dropped from 36 to 27 diagnostics
+  (the 9 per-skill `LICENSE.txt` findings are gone), and `docs/RULES.md`
+  records the exemption.
 - **Diagnostic rendering has no display-root option.** `reporting.rs` renders
   `d.path.display()` verbatim — always the absolute discovery path — so
   `tests/corpus.rs` rewrites each `Diagnostic::path` to be corpus-relative in
