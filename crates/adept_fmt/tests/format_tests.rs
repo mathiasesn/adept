@@ -355,6 +355,156 @@ fn wrapped_line_starting_with_plus_is_not_reparsed_as_list_in_blockquote() {
     );
 }
 
+/// Formats `body` (wrapped in a skill) once, returning just the formatted
+/// full source (frontmatter included). Used by the `marker_like` tests below
+/// to inspect the actual wrapped output, not just its idempotency.
+fn format_body(body: &str) -> String {
+    let cfg = FmtConfig::default();
+    format_str(&skill_source(body), &cfg).expect("should format")
+}
+
+/// Only the Markdown body portion of a formatted `SKILL.md` (i.e. everything
+/// after the closing `---` of the frontmatter), so marker checks below don't
+/// false-positive on the frontmatter's own `---` delimiters.
+fn body_only(formatted: &str) -> &str {
+    let mut parts = formatted.splitn(3, "---\n");
+    parts.next(); // before opening ---
+    parts.next(); // frontmatter content, up to closing ---
+    parts.next().unwrap_or("")
+}
+
+/// None of the lines in the body of `formatted` may be exactly `marker` —
+/// that would mean a marker-shaped token was emitted alone at a line start,
+/// which re-parses as block syntax (thematic break / setext underline /
+/// blockquote / etc.) on the next pass.
+fn assert_no_bare_marker_line(formatted: &str, marker: &str) {
+    assert!(
+        !body_only(formatted).lines().any(|l| l == marker),
+        "formatted output has a bare `{marker}` line, which reparses as block syntax:\n{formatted}"
+    );
+}
+
+/// Each of these bodies places a marker-shaped token (`---`/`===`/`-`/`***`)
+/// right after a hard line break (`  \n`), which is exactly the case
+/// `wrap_tokens` cannot avoid by gluing onto a previous line — the buffer is
+/// empty because the hard break just flushed it — so it must hit the escape
+/// fallback in `escape_line_start` instead. This deterministically forces
+/// the marker to a line start regardless of `line_width`, unlike relying on
+/// width-based wrapping to land exactly there.
+#[test]
+fn wrapped_line_starting_with_thematic_break_dashes_is_not_reparsed_as_hr() {
+    let body = "some text before the break  \n--- and then some trailing prose after the marker\n";
+    let formatted = format_body(body);
+    assert_no_bare_marker_line(&formatted, "---");
+    let formatted_twice =
+        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "reflow changed meaning on the second pass"
+    );
+}
+
+#[test]
+fn wrapped_line_starting_with_setext_h1_underline_is_not_reparsed_as_heading() {
+    let body = "some text before the break  \n=== and then some trailing prose after the marker\n";
+    let formatted = format_body(body);
+    assert_no_bare_marker_line(&formatted, "===");
+    let formatted_twice =
+        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "reflow changed meaning on the second pass"
+    );
+}
+
+#[test]
+fn wrapped_line_starting_with_lone_dash_is_not_reparsed_as_setext_or_hr() {
+    let body = "some text before the break  \n- and then some trailing prose after the marker\n";
+    let formatted = format_body(body);
+    assert_no_bare_marker_line(&formatted, "-");
+    let formatted_twice =
+        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "reflow changed meaning on the second pass"
+    );
+}
+
+#[test]
+fn wrapped_line_starting_with_thematic_break_stars_is_not_reparsed_as_hr() {
+    let body = "some text before the break  \n*** and then some trailing prose after the marker\n";
+    let formatted = format_body(body);
+    assert_no_bare_marker_line(&formatted, "***");
+    let formatted_twice =
+        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "reflow changed meaning on the second pass"
+    );
+}
+
+/// Semantic-preservation check: the formatted body's CommonMark event stream
+/// must not gain a `Rule` or `Heading` event that wasn't in the source —
+/// i.e. the mid-paragraph `***` truly stays inline text and doesn't get
+/// reinterpreted as a thematic break by the round trip.
+#[test]
+fn wrapped_thematic_break_token_does_not_introduce_rule_event() {
+    let body = "some text before the break  \n*** and then some trailing prose after the marker\n";
+    let source = skill_source(body);
+    let formatted = format_str(&source, &FmtConfig::default()).expect("should format");
+
+    // Both `source` and `formatted` include the `---` frontmatter fence,
+    // which the raw CommonMark parser (not being frontmatter-aware) reads as
+    // a thematic break in its own right — so compare *counts*, not just
+    // presence, to isolate whether the mid-paragraph `***` specifically
+    // introduced a new one.
+    let source_rules = adept::markdown::parser(&source)
+        .filter(|e| matches!(e, Event::Rule))
+        .count();
+    let formatted_rules = adept::markdown::parser(&formatted)
+        .filter(|e| matches!(e, Event::Rule))
+        .count();
+    assert_eq!(
+        source_rules, formatted_rules,
+        "formatting changed the number of Rule events (mid-paragraph `***` was reinterpreted as a thematic break):\n{formatted}"
+    );
+
+    let source_has_heading =
+        adept::markdown::parser(&source).any(|e| matches!(e, Event::Start(Tag::Heading { .. })));
+    let formatted_has_heading =
+        adept::markdown::parser(&formatted).any(|e| matches!(e, Event::Start(Tag::Heading { .. })));
+    assert_eq!(
+        source_has_heading, formatted_has_heading,
+        "formatting changed whether the body contains a Heading event"
+    );
+}
+
+#[test]
+fn wrapped_line_starting_with_blockquote_marker_is_not_reparsed_as_nested_quote() {
+    // The source escapes `>` (`\>`) so pulldown-cmark parses it as a literal
+    // `>` text token rather than a nested blockquote start; the hard break
+    // right before it then forces that literal `>` to be the very first
+    // token `wrap_tokens` sees on a fresh line, exactly the case the escape
+    // fallback in `escape_line_start` exists for.
+    let body =
+        "> some text before the break  \n> \\> and then some trailing prose after the marker\n";
+    let formatted = format_body(body);
+    // Inside a blockquote every physical line is prefixed with `> `, so a
+    // bare `>` token that lands at a wrapped line start would itself read
+    // back as `> >`, i.e. a nested blockquote — check for that shape too.
+    let body_text = body_only(&formatted);
+    assert!(
+        !body_text.lines().any(|l| l == ">" || l == "> >"),
+        "formatted output has a line that reparses as a nested blockquote:\n{formatted}"
+    );
+    let formatted_twice =
+        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "reflow changed meaning on the second pass"
+    );
+}
+
 // --- Regression tests for the unbounded-recursion stack overflow (nested
 // `Block::BlockQuote` / `Block::List` in `markdown::build`/`markdown::print`
 // had no depth bound). These must not abort the process; a panic would also

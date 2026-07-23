@@ -261,15 +261,23 @@ fn wrap_paragraph(inline: &[Inline], cfg: &FmtConfig) -> Vec<String> {
     wrap_tokens(&tokens, cfg.line_width, cfg.reflow_prose)
 }
 
-/// True when `word`, if it were the first token on a line followed by more
-/// content, would re-parse as CommonMark block syntax on the next format
-/// pass (a bullet/blockquote/heading marker or ordered-list marker). Used by
+/// True when `word` would be interpreted as CommonMark block-starting syntax
+/// were it to appear as the first token on a line — a bullet/blockquote/ATX
+/// heading marker, an ordered-list marker, a thematic break (`---`, `***`,
+/// `___`), or a setext underline (`===`, or a lone `-`). Used by
 /// `wrap_tokens` to keep reflow idempotent: width-only line breaking can
-/// otherwise strand a mid-sentence punctuation token (e.g. a bare `-`) at
-/// the start of a wrapped continuation line, silently turning prose into a
-/// nested list on the next pass (the "leaning toothpick" bug).
-fn dangerous_line_start(word: &str) -> bool {
-    if matches!(word, "-" | "+" | "*" | ">") {
+/// otherwise strand a mid-sentence marker-shaped token (e.g. a bare `-` or a
+/// `***` separator) at the start of a wrapped continuation line, silently
+/// turning prose into a list/heading/rule on the next pass (the "leaning
+/// toothpick" bug). Note this is intentionally unconditional — it does not
+/// matter whether more content follows on the line, since a paragraph's
+/// genuine first token can never itself be marker-like (the source would
+/// have parsed as a list/blockquote/heading/etc. instead, not a paragraph),
+/// so `wrap_tokens` only ever needs to keep marker-like tokens off of
+/// *wrapped* line starts — forbidding them unconditionally is simplest and
+/// only costs an occasional over-width line, same as long words/URLs.
+fn marker_like(word: &str) -> bool {
+    if word == ">" {
         return true;
     }
     if !word.is_empty() && word.len() <= 6 && word.bytes().all(|b| b == b'#') {
@@ -277,15 +285,36 @@ fn dangerous_line_start(word: &str) -> bool {
     }
     // Ordered-list marker: 1-9 ASCII digits followed by a single `.` or `)`.
     if let Some(rest) = word.strip_suffix('.').or_else(|| word.strip_suffix(')')) {
-        return !rest.is_empty() && rest.len() <= 9 && rest.bytes().all(|b| b.is_ascii_digit());
+        if !rest.is_empty() && rest.len() <= 9 && rest.bytes().all(|b| b.is_ascii_digit()) {
+            return true;
+        }
     }
-    false
+    // A run of a single repeated character can be a bullet marker, a setext
+    // underline, or a thematic break depending on the character and length.
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !chars.all(|c| c == first) {
+        return false;
+    }
+    let len = word.chars().count();
+    match first {
+        '-' => true,                 // bullet `-`, setext H2 `---`, thematic break
+        '=' => true,                 // setext H1 `===`
+        '+' => len == 1,             // bullet `+`
+        '*' => len == 1 || len >= 3, // bullet `*`, thematic break `***` (len 2 is safe)
+        '_' => len >= 3,             // thematic break `___`
+        _ => false,
+    }
 }
 
 /// Backslash-escape the punctuation in `word` that would otherwise trigger
-/// block-level reparsing if it started a line (see `dangerous_line_start`).
-/// All escaped characters are CommonMark-escapable, so this is
-/// meaning-preserving: the escaped form re-parses as the literal character.
+/// block-level reparsing if it started a line (see `marker_like`). All
+/// escaped characters are CommonMark-escapable, so this is
+/// meaning-preserving: the escaped form re-parses as the literal character,
+/// e.g. `\-`, `\>`, `\##`, `\===` (escaping just the leading `=` already
+/// stops the rest from reading as a setext underline), `\***`, `\___`.
 fn escape_line_start(word: &str) -> String {
     if let Some(rest) = word.strip_suffix('.').or_else(|| word.strip_suffix(')')) {
         let marker = &word[rest.len()..];
@@ -301,25 +330,21 @@ fn escape_line_start(word: &str) -> String {
 fn wrap_tokens(tokens: &[Token], width: usize, reflow: bool) -> Vec<String> {
     let mut lines = Vec::new();
     let mut cur = String::new();
-    let mut iter = tokens.iter().peekable();
-    while let Some(t) = iter.next() {
+    for t in tokens {
         match t {
             Token::Break => {
                 lines.push(format!("{cur}  "));
                 cur.clear();
             }
             Token::Word(w) => {
-                // A dangerous line start (bullet/blockquote/heading/ordered
-                // marker) only matters when more content will share the
-                // line with it; a marker alone on its own line is just
-                // text, not block syntax.
-                let followed_by_more = matches!(iter.peek(), Some(Token::Word(_)));
                 if cur.is_empty() {
-                    // `w` is the very first token on this line (either the
-                    // start of the paragraph or right after a hard break),
-                    // so there is no previous line to force it onto:
-                    // escape it in place (fallback mechanism).
-                    if followed_by_more && dangerous_line_start(w) {
+                    // `w` is the very first token on this line. If this is
+                    // the paragraph's genuine first token it can never be
+                    // marker-like (see `marker_like`'s doc comment), so this
+                    // escape path only actually fires right after a hard
+                    // `Token::Break` — the fallback mechanism for when there
+                    // is no previous line to force `w` onto instead.
+                    if marker_like(w) {
                         cur.push_str(&escape_line_start(w));
                     } else {
                         cur.push_str(w);
@@ -327,7 +352,7 @@ fn wrap_tokens(tokens: &[Token], width: usize, reflow: bool) -> Vec<String> {
                 } else if !reflow || cur.chars().count() + 1 + w.chars().count() <= width {
                     cur.push(' ');
                     cur.push_str(w);
-                } else if followed_by_more && dangerous_line_start(w) {
+                } else if marker_like(w) {
                     // Primary mechanism: rather than start a new line with a
                     // token that would re-parse as block syntax, force it
                     // onto the current line even though that exceeds
