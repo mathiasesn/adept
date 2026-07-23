@@ -298,7 +298,9 @@ fn marker_like(word: &str) -> bool {
     if !chars.all(|c| c == first) {
         return false;
     }
-    let len = word.chars().count();
+    // Every char is `first`, and each arm below only matches ASCII markers,
+    // so the byte length equals the char count — no second UTF-8 pass needed.
+    let len = word.len();
     match first {
         '-' => true,     // bullet `-`, setext H2 `---`, thematic break
         '=' => true,     // setext H1 `===`
@@ -356,15 +358,15 @@ fn wrap_tokens(tokens: &[Token], width: usize, reflow: bool) -> Vec<String> {
                     } else {
                         cur.push_str(w);
                     }
-                } else if !reflow || cur.chars().count() + 1 + w.chars().count() <= width {
-                    cur.push(' ');
-                    cur.push_str(w);
-                } else if marker_like(w) {
+                } else if !reflow
+                    || cur.chars().count() + 1 + w.chars().count() <= width
                     // Primary mechanism: rather than start a new line with a
-                    // token that would re-parse as block syntax, force it
-                    // onto the current line even though that exceeds
-                    // `width` (the formatter already tolerates over-width
-                    // lines for long words/URLs).
+                    // token that would re-parse as block syntax, force a
+                    // marker-like word onto the current line even past `width`
+                    // (the formatter already tolerates over-width lines for
+                    // long words/URLs).
+                    || marker_like(w)
+                {
                     cur.push(' ');
                     cur.push_str(w);
                 } else {

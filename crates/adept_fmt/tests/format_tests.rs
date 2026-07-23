@@ -251,14 +251,10 @@ fn corpus_dir() -> std::path::PathBuf {
 }
 
 /// Skills whose `SKILL.md` is known not to round-trip idempotently under
-/// `FmtConfig::default()` (`reflow_prose: true`). Previously this held
-/// "algorithmic-art" and "claude-api", both hit by the "leaning toothpick"
-/// class of bug where prose reflow could wrap a line so that its first token
-/// became something CommonMark treats as block-starting syntax on re-parse
-/// (a `-`/`+`/`*` bullet marker) even though it was mid-sentence punctuation
-/// in the source. `wrap_tokens` now guards against dangerous line starts
-/// (see `dangerous_line_start` in `adept_fmt::print`), so both are fixed and
-/// this list is empty; kept as a named slot for any future entries.
+/// `FmtConfig::default()` (`reflow_prose: true`). Empty since `wrap_tokens`'
+/// `marker_like` guard fixed the "leaning toothpick" bug (formerly held
+/// "algorithmic-art" and "claude-api"); kept as a named slot for future
+/// entries.
 const KNOWN_NON_IDEMPOTENT: &[&str] = &[];
 
 /// `format(format(x)) == format(x)` for every vendored corpus `SKILL.md`,
@@ -363,14 +359,15 @@ fn format_body(body: &str) -> String {
     format_str(&skill_source(body), &cfg).expect("should format")
 }
 
-/// Only the Markdown body portion of a formatted `SKILL.md` (i.e. everything
-/// after the closing `---` of the frontmatter), so marker checks below don't
-/// false-positive on the frontmatter's own `---` delimiters.
-fn body_only(formatted: &str) -> &str {
-    let mut parts = formatted.splitn(3, "---\n");
-    parts.next(); // before opening ---
-    parts.next(); // frontmatter content, up to closing ---
-    parts.next().unwrap_or("")
+/// The Markdown body of a formatted `SKILL.md` (everything after the
+/// frontmatter), via the real parser rather than a hand-rolled split, so
+/// marker checks below don't false-positive on the frontmatter's own `---`
+/// delimiters.
+fn body_of(formatted: &str) -> String {
+    AnthropicSkillParser
+        .parse_str(Path::new("SKILL.md"), formatted)
+        .expect("formatted output should parse")
+        .body
 }
 
 /// None of the lines in the body of `formatted` may be exactly `marker` —
@@ -379,9 +376,25 @@ fn body_only(formatted: &str) -> &str {
 /// blockquote / etc.) on the next pass.
 fn assert_no_bare_marker_line(formatted: &str, marker: &str) {
     assert!(
-        !body_only(formatted).lines().any(|l| l == marker),
+        !body_of(formatted).lines().any(|l| l == marker),
         "formatted output has a bare `{marker}` line, which reparses as block syntax:\n{formatted}"
     );
+}
+
+/// Format `body`, assert no line in its body is exactly `marker`, then assert
+/// the format is idempotent. Returns the formatted source for any further
+/// checks. Collapses the format-twice-and-compare tail shared by the
+/// marker-guard regression tests below.
+fn assert_marker_idempotent(body: &str, marker: &str) -> String {
+    let formatted = format_body(body);
+    assert_no_bare_marker_line(&formatted, marker);
+    let formatted_twice =
+        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "reflow changed meaning on the second pass"
+    );
+    formatted
 }
 
 /// Each of these bodies places a marker-shaped token (`---`/`===`/`-`/`***`)
@@ -393,27 +406,17 @@ fn assert_no_bare_marker_line(formatted: &str, marker: &str) {
 /// width-based wrapping to land exactly there.
 #[test]
 fn wrapped_line_starting_with_thematic_break_dashes_is_not_reparsed_as_hr() {
-    let body = "some text before the break  \n--- and then some trailing prose after the marker\n";
-    let formatted = format_body(body);
-    assert_no_bare_marker_line(&formatted, "---");
-    let formatted_twice =
-        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
-    assert_eq!(
-        formatted, formatted_twice,
-        "reflow changed meaning on the second pass"
+    assert_marker_idempotent(
+        "some text before the break  \n--- and then some trailing prose after the marker\n",
+        "---",
     );
 }
 
 #[test]
 fn wrapped_line_starting_with_setext_h1_underline_is_not_reparsed_as_heading() {
-    let body = "some text before the break  \n=== and then some trailing prose after the marker\n";
-    let formatted = format_body(body);
-    assert_no_bare_marker_line(&formatted, "===");
-    let formatted_twice =
-        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
-    assert_eq!(
-        formatted, formatted_twice,
-        "reflow changed meaning on the second pass"
+    assert_marker_idempotent(
+        "some text before the break  \n=== and then some trailing prose after the marker\n",
+        "===",
     );
 }
 
@@ -439,14 +442,7 @@ fn wrapped_line_starting_with_lone_dash_is_not_reparsed_as_setext_or_hr() {
     let body = format!(
         "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii{filler} - jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu\n"
     );
-    let formatted = format_body(&body);
-    assert_no_bare_marker_line(&formatted, "-");
-    let formatted_twice =
-        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
-    assert_eq!(
-        formatted, formatted_twice,
-        "reflow changed meaning on the second pass"
-    );
+    assert_marker_idempotent(&body, "-");
 }
 
 /// NOTE: this does not exercise `marker_like`'s `'*'` arm at all. Every `*`
@@ -459,14 +455,9 @@ fn wrapped_line_starting_with_lone_dash_is_not_reparsed_as_setext_or_hr() {
 /// and idempotent even across a hard line break.
 #[test]
 fn escaped_asterisk_run_after_hard_break_stays_literal_and_idempotent() {
-    let body = "some text before the break  \n*** and then some trailing prose after the marker\n";
-    let formatted = format_body(body);
-    assert_no_bare_marker_line(&formatted, "***");
-    let formatted_twice =
-        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
-    assert_eq!(
-        formatted, formatted_twice,
-        "reflow changed meaning on the second pass"
+    assert_marker_idempotent(
+        "some text before the break  \n*** and then some trailing prose after the marker\n",
+        "***",
     );
 }
 
@@ -519,7 +510,7 @@ fn wrapped_line_starting_with_blockquote_marker_is_not_reparsed_as_nested_quote(
     // Inside a blockquote every physical line is prefixed with `> `, so a
     // bare `>` token that lands at a wrapped line start would itself read
     // back as `> >`, i.e. a nested blockquote — check for that shape too.
-    let body_text = body_only(&formatted);
+    let body_text = body_of(&formatted);
     assert!(
         !body_text.lines().any(|l| l == ">" || l == "> >"),
         "formatted output has a line that reparses as a nested blockquote:\n{formatted}"
@@ -549,14 +540,7 @@ fn wrapped_line_starting_with_tilde_fence_is_not_reparsed_as_code_block() {
         "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii{filler} ~~~ rest jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu\n"
     );
     let source = skill_source(&body);
-    let formatted = format_str(&source, &FmtConfig::default()).expect("should format");
-    assert_no_bare_marker_line(&formatted, "~~~");
-    let formatted_twice =
-        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
-    assert_eq!(
-        formatted, formatted_twice,
-        "reflow changed meaning on the second pass"
-    );
+    let formatted = assert_marker_idempotent(&body, "~~~");
 
     // Semantic-preservation: formatting must not introduce a CodeBlock event
     // that the source lacked.
