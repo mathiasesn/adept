@@ -417,10 +417,29 @@ fn wrapped_line_starting_with_setext_h1_underline_is_not_reparsed_as_heading() {
     );
 }
 
+/// Unlike the hard-break repros above, a bare `-` cannot be placed right
+/// after a hard break in the *source*: a line beginning `- <content>` is a
+/// genuine CommonMark list item marker, so the source itself would parse as
+/// a real list (interrupting the paragraph), and the wrap/escape path in
+/// `wrap_tokens` would never even be reached — that would make the test
+/// vacuous. Instead this forces a mid-*prose* ` - ` token to land at a
+/// *width-wrapped* continuation line start (the primary mechanism: gluing
+/// `w` onto the previous line even past `line_width`, rather than starting a
+/// new line with it). The padding below was picked by probing
+/// `wrap_tokens`'s break points directly and confirmed: with the `'-' =>
+/// true` arm of `marker_like` temporarily reverted to `false`, this exact
+/// body produces `format(x) != format(format(x))` (the dash lands alone on
+/// its own continuation line, i.e. `- jjjj kkkk ...`, which CommonMark then
+/// reparses as a real list item on the next pass); restored, it stays
+/// idempotent because the dash is forced back onto the prior (over-width)
+/// line instead.
 #[test]
 fn wrapped_line_starting_with_lone_dash_is_not_reparsed_as_setext_or_hr() {
-    let body = "some text before the break  \n- and then some trailing prose after the marker\n";
-    let formatted = format_body(body);
+    let filler = "x".repeat(55);
+    let body = format!(
+        "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii{filler} - jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu\n"
+    );
+    let formatted = format_body(&body);
     assert_no_bare_marker_line(&formatted, "-");
     let formatted_twice =
         format_str(&formatted, &FmtConfig::default()).expect("should format twice");
@@ -430,8 +449,16 @@ fn wrapped_line_starting_with_lone_dash_is_not_reparsed_as_setext_or_hr() {
     );
 }
 
+/// NOTE: this does not exercise `marker_like`'s `'*'` arm at all. Every `*`
+/// is backslash-escaped by `escape_text` while `build_tokens` tokenizes the
+/// paragraph, so a bare `***` token never survives to reach `wrap_tokens` —
+/// it arrives as `\*\*\*`, which is not a uniform run of `*` and so isn't
+/// `marker_like` regardless. This is a legitimate regression test for that
+/// *other* mechanism instead: it pins down that `escape_text`'s
+/// pre-escaping keeps a mid-prose `***`/thematic-break-shaped run literal
+/// and idempotent even across a hard line break.
 #[test]
-fn wrapped_line_starting_with_thematic_break_stars_is_not_reparsed_as_hr() {
+fn escaped_asterisk_run_after_hard_break_stays_literal_and_idempotent() {
     let body = "some text before the break  \n*** and then some trailing prose after the marker\n";
     let formatted = format_body(body);
     assert_no_bare_marker_line(&formatted, "***");
@@ -502,6 +529,48 @@ fn wrapped_line_starting_with_blockquote_marker_is_not_reparsed_as_nested_quote(
     assert_eq!(
         formatted, formatted_twice,
         "reflow changed meaning on the second pass"
+    );
+}
+
+/// A mid-prose `~~~` (tilde code-fence opener) reflowed to a wrapped line
+/// start would otherwise open a fenced code block on the next pass — `~` is
+/// not escaped by `escape_text` (unlike `*`/`_`), so this genuinely
+/// exercises `marker_like`'s `'~'` arm via width-based wrapping, not a hard
+/// break. The padding was confirmed by probing `wrap_tokens` directly: with
+/// the `'~' => len >= 3` arm removed, `format(x) != format(format(x))` for
+/// this exact body (the second pass turns `~~~ rest ...` into a real
+/// ```` ```rest ...``` ```` fenced code block); restored, it stays
+/// idempotent because `~~~` is forced back onto the prior (over-width)
+/// line.
+#[test]
+fn wrapped_line_starting_with_tilde_fence_is_not_reparsed_as_code_block() {
+    let filler = "x".repeat(53);
+    let body = format!(
+        "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii{filler} ~~~ rest jjjj kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt uuuu\n"
+    );
+    let source = skill_source(&body);
+    let formatted = format_str(&source, &FmtConfig::default()).expect("should format");
+    assert_no_bare_marker_line(&formatted, "~~~");
+    let formatted_twice =
+        format_str(&formatted, &FmtConfig::default()).expect("should format twice");
+    assert_eq!(
+        formatted, formatted_twice,
+        "reflow changed meaning on the second pass"
+    );
+
+    // Semantic-preservation: formatting must not introduce a CodeBlock event
+    // that the source lacked.
+    let source_has_code_block =
+        adept::markdown::parser(&source).any(|e| matches!(e, Event::Start(Tag::CodeBlock(_))));
+    let formatted_has_code_block =
+        adept::markdown::parser(&formatted).any(|e| matches!(e, Event::Start(Tag::CodeBlock(_))));
+    assert_eq!(
+        source_has_code_block, formatted_has_code_block,
+        "formatting changed whether the body contains a CodeBlock event:\n{formatted}"
+    );
+    assert!(
+        !formatted_has_code_block,
+        "mid-prose `~~~` was reinterpreted as a fenced code block:\n{formatted}"
     );
 }
 

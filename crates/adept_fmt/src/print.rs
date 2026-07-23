@@ -300,11 +300,18 @@ fn marker_like(word: &str) -> bool {
     }
     let len = word.chars().count();
     match first {
-        '-' => true,                 // bullet `-`, setext H2 `---`, thematic break
-        '=' => true,                 // setext H1 `===`
-        '+' => len == 1,             // bullet `+`
-        '*' => len == 1 || len >= 3, // bullet `*`, thematic break `***` (len 2 is safe)
-        '_' => len >= 3,             // thematic break `___`
+        '-' => true,     // bullet `-`, setext H2 `---`, thematic break
+        '=' => true,     // setext H1 `===`
+        '+' => len == 1, // bullet `+`
+        // `escape_text` already backslash-escapes every `*` and `_` while
+        // tokenizing, so these two arms are currently unreachable in
+        // practice — kept as a defensive backstop.
+        '*' => len == 1 || len >= 3,
+        '_' => len >= 3,
+        // `~` is NOT escaped by `escape_text`, so a bare `~~~`+ run of tildes
+        // reaches `wrap_tokens` intact and opens a fenced code block if it
+        // lands at a wrapped line start (`~~` len 2 is strikethrough, safe).
+        '~' => len >= 3,
         _ => false,
     }
 }
