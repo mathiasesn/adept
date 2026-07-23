@@ -306,13 +306,14 @@ fn build_tokens(items: &[Inline], cfg: &FmtConfig) -> Vec<Token> {
         run.clear();
     };
     for item in items {
-        if let Inline::Text(s) = item {
-            text_run.push_str(s);
-            continue;
+        // Every non-text inline ends the current text run before it is handled,
+        // so an escape-induced `Text` boundary (see the comment above) never
+        // counts as a word boundary. `Text` itself just extends the run.
+        if !matches!(item, Inline::Text(_)) {
+            flush_text_run(&mut text_run, &mut out);
         }
-        flush_text_run(&mut text_run, &mut out);
         match item {
-            Inline::Text(_) => unreachable!("handled by the `if let` above"),
+            Inline::Text(s) => text_run.push_str(s),
             Inline::Code(s) => out.push(Token::Word(render_code_span(s))),
             Inline::Emphasis(children) => glue(
                 &mut out,
