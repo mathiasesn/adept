@@ -389,7 +389,44 @@ fn is_intended_file_reference(target: &str) -> bool {
     if target.chars().any(|c| "*?[]{}<>$".contains(c)) {
         return false; // glob metacharacter or template placeholder (`{lang}`, `<VAR>`, `$VAR`)
     }
+    if is_archive_internal_path(path_part(target)) {
+        return false; // OOXML part name, not a file next to SKILL.md
+    }
     true
+}
+
+/// The reserved top-level part names of an Open Packaging Conventions (OPC)
+/// container — the roots an OOXML file (`.docx`/`.pptx`/`.xlsx`) unzips to,
+/// per ECMA-376 Part 1 (Office Open XML) and Part 2 (OPC, ISO/IEC 29500).
+/// Skills that manipulate Office documents describe editing these internal
+/// parts (`word/document.xml`, `ppt/slides/slideN.xml`), which are format
+/// constants, not files bundled next to SKILL.md — so a reference to one is
+/// not a broken reference. The set is closed by the standard, so this is
+/// verifiable against the spec rather than against any particular skill.
+const OPC_ROOTS: &[&str] = &["word", "ppt", "xl", "docProps", "_rels", "customXml"];
+
+/// Whether `path` is an OOXML archive-internal part: a multi-segment path
+/// whose first segment is a reserved [`OPC_ROOTS`] name *and* which ends in a
+/// part extension (`.xml` or `.rels`), e.g. `word/document.xml`,
+/// `ppt/slides/slideN.xml`, `xl/worksheets/sheet1.xml`. A bare `word` with no
+/// `/` is not a part reference and is left alone.
+///
+/// The extension gate matters because the roots (`word`, `ppt`, `xl`) are
+/// short, collision-prone directory names. Without it, a genuinely broken
+/// reference to a non-part file a skill happens to bundle under such a
+/// directory (a helper script `xl/helper.py`, a typo `word/nots.md`) would be
+/// silently swallowed by this Error-severity rule. OOXML parts are XML or
+/// relationship documents, so gating on `.xml`/`.rels` keeps those broken
+/// references firing while still exempting the real part names.
+fn is_archive_internal_path(path: &str) -> bool {
+    let Some((root, _)) = path.split_once('/') else {
+        return false; // no path segment; a bare `word` is not a part
+    };
+    if !OPC_ROOTS.contains(&root) {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".xml") || lower.ends_with(".rels")
 }
 
 #[cfg(test)]
@@ -499,6 +536,53 @@ mod tests {
         assert!(!has_creation_intent("Nothing here references files"));
         assert!(has_creation_intent("Save to path"));
         assert!(!has_creation_intent("regenerated the report"));
+    }
+
+    #[test]
+    fn ooxml_archive_internal_paths_are_not_broken_references() {
+        // The two references that actually fire in the source-available
+        // `docx`/`pptx` skills at the vendored corpus pin: OOXML part names,
+        // which are format constants (ECMA-376), not files next to SKILL.md.
+        assert!(run(&BrokenFileReference, "Edit `word/document.xml`.\n").is_empty());
+        assert!(run(&BrokenFileReference, "Edit `ppt/slides/slideN.xml`.\n").is_empty());
+        // Other reserved roots, for future-proofing.
+        for path in [
+            "xl/worksheets/sheet1.xml",
+            "docProps/core.xml",
+            "customXml/item1.xml",
+        ] {
+            assert!(
+                run(&BrokenFileReference, &format!("See `{path}`.\n")).is_empty(),
+                "{path} should be exempt as an OOXML part"
+            );
+        }
+        // `_rels/.rels` is the real OPC relationships part (no `.xml`); it is
+        // not a backtick code-span candidate, so assert the predicate directly.
+        assert!(is_archive_internal_path("_rels/.rels"));
+    }
+
+    #[test]
+    fn opc_root_lookalikes_still_fire() {
+        // A path whose first segment merely resembles a part name is a normal
+        // relative reference — the exemption is anchored to the exact reserved
+        // roots, not a fuzzy prefix. `word` with no `/` is not a part either.
+        let found = run(&BrokenFileReference, "See `words/glossary.md`.\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(is_archive_internal_path("word/document.xml"));
+        assert!(!is_archive_internal_path("word")); // no path segment
+        assert!(!is_archive_internal_path("words/x.md")); // not a reserved root
+    }
+
+    #[test]
+    fn broken_non_part_under_opc_root_still_fires() {
+        // A non-part file (helper script, doc) under an OOXML root is a genuine
+        // broken reference, not an archive part: the exemption is gated on the
+        // `.xml`/`.rels` part extension, so short collision-prone roots like
+        // `xl/` cannot silently swallow a typo'd `.py`/`.md` reference.
+        let found = run(&BrokenFileReference, "Run `xl/helper.py`.\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(!is_archive_internal_path("xl/helper.py"));
+        assert!(!is_archive_internal_path("word/notes.md"));
     }
 
     #[test]

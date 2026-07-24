@@ -30,15 +30,30 @@ path would need column tracking through the markdown query layer. This
 removed the 3 corpus `skill-creator` → `evals/evals.json` findings (corpus
 snapshot 27 → 24) and is regression-covered in `rules/structure.rs`.
 
-The remaining survivors are the **archive-aware** cases that live only in the
-non-vendored source-available skills (`docx`, `pdf`, `pptx`, `xlsx`): zip-
-internal paths (`word/document.xml`) and template filenames (`slideN.xml`).
-These are *not reproducible in-repo* — the corpus README forbids vendoring
-those skills — so any detection heuristic (recognizing OOXML-internal roots,
-template placeholders) can only be tested against synthetic fixtures, not the
-real inputs. Deferred until those skills can be licensed for real coverage;
-building unverifiable suppression into an Error-severity rule is the wrong
-trade. See the corpus README before attempting.
+The **archive-internal** cases are now handled. They live only in the
+non-vendored source-available skills (`docx`, `pdf`, `pptx`, `xlsx`), so the
+concern was that any heuristic could be tested only against synthetic
+fixtures, not the real inputs — the wrong trade for an Error-severity rule.
+Resolved by anchoring the exemption to a *standard* rather than to the skills:
+`is_intended_file_reference` now exempts OOXML Open Packaging Conventions part
+names (`is_archive_internal_path`, first path segment in `OPC_ROOTS` —
+`word`/`ppt`/`xl`/`docProps`/`_rels`/`customXml`), which are constants fixed by
+ECMA-376 / ISO/IEC 29500, independently verifiable against the spec. The
+exemption is gated on the part extension (`.xml`/`.rels`) so a broken
+reference to a non-part file under an OOXML root (`xl/helper.py`) still fires.
+
+The residual was also **smaller than recorded here**. Characterized against
+upstream at the vendored pin (mirroring the rule: fenced/indented code
+excluded, existence checked against the real bundled tree), the *entire* live
+FP set was two references — `word/document.xml` (docx) and
+`ppt/slides/slideN.xml` (pptx). `pdf` and `xlsx` produce **zero** SL104
+findings: `xlsx`'s `xl/...xml` mentions are all in code blocks or bare prose
+(never extracted), and `pdf`'s `FORMS.md`/`REFERENCE.md` are bare prose words,
+not links or code spans (and are bundled anyway, as `forms.md`/`reference.md`).
+The lone template case (`ppt/slides/slideN.xml`) carries a `ppt/` root, so the
+root check covers it; no separate numbered-template pattern is needed. Both
+fixes are regression-covered in `rules/structure.rs` and documented in
+`docs/RULES.md`.
 
 History: at `130398d` there were exactly 7, and moving SL104 onto the shared
 `pulldown-cmark` lexer neither fixed nor worsened them — they were judgement
@@ -103,15 +118,17 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
   linter's output over them (24 diagnostics, after the SL303 license
   exemption and the SL104 creation-intent exemption below). The manual
   clone-build-diff ritual is retired. What remains narrowed to the items below.
-- **The corpus cannot cover the SL104 residuals.** `anthropics/skills` is not
-  uniformly licensed: `docx`, `pdf`, `pptx` and `xlsx` are source-available, not
-  open source, so they are not vendored — and they are exactly the skills whose
-  zip-internal paths and template filenames produce the remaining SL104 false
-  positives. The corpus's own SL104 finding — `skill-creator` →
-  `evals/evals.json` — is now suppressed by the creation-intent exemption
-  (see Correctness gaps), so the corpus produces 0 SL104 findings. **The
-  archive/template residuals remain manually verified, not corpus-covered.**
-  Three more skills (`canvas-design`,
+- **The corpus cannot vendor the source-available skills, but the SL104
+  archive residuals no longer need it.** `anthropics/skills` is not uniformly
+  licensed: `docx`, `pdf`, `pptx` and `xlsx` are source-available, not open
+  source, so they are not vendored. They were the skills whose OOXML part-name
+  references produced the archive-internal SL104 false positives — now exempted
+  via `is_archive_internal_path` (see Correctness gaps), anchored to ECMA-376
+  and regression-tested against the two real references characterized from
+  upstream, so the exemption is verified without redistributing the skills.
+  The corpus's own SL104 finding — `skill-creator` → `evals/evals.json` — is
+  suppressed by the creation-intent exemption, so the corpus produces 0 SL104
+  findings. Three more skills (`canvas-design`,
   `theme-factory`, `web-artifacts-builder`) are excluded for carrying binary
   assets. Do not "helpfully" refresh the pin; see the corpus README.
 - **Setext handling has no real-world coverage.** The corpus contains no setext

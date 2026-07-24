@@ -77,6 +77,16 @@ reference to it is skipped, including later read/update mentions ("if
 deliberately excluded, since they imply the file should already exist.
 Intent is detected per line, so a genuine broken reference sharing a line
 with an unrelated creation instruction is not currently flagged.
+
+It also exempts OOXML archive-internal part names — a path whose first
+segment is a reserved Open Packaging Conventions root (`word/`, `ppt/`,
+`xl/`, `docProps/`, `_rels/`, `customXml/`) *and* which ends in a part
+extension (`.xml`/`.rels`), e.g. `word/document.xml` or
+`ppt/slides/slideN.xml`. Skills that manipulate Office documents describe
+editing these parts, which are constants fixed by ECMA-376 / ISO/IEC 29500,
+not files bundled next to SKILL.md. The extension gate keeps a genuinely
+broken reference to a non-part file under such a directory (`xl/helper.py`)
+firing.
 **Fix:** fix the path, or add the missing file next to SKILL.md.
 
 ### SL105 `setext-heading` (Info)
