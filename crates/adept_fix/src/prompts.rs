@@ -1,13 +1,6 @@
 //! All prompt templates used by `adept_fix`, gathered in one module so they
-//! can be audited and versioned, mirroring `adept_score::prompts`. Bump
-//! [`PROMPT_VERSION`] whenever a template's wording changes in a way that
-//! could change what candidates the model produces.
-
-/// A version string identifying which revision of these templates produced
-/// a given fix attempt. Not currently stamped onto [`crate::FixReport`] (it
-/// has no report-versioning field, unlike `adept_score::ScoreReport`), but
-/// kept for parity and for future use if that changes.
-pub const PROMPT_VERSION: &str = "adept_fix-prompts-v1";
+//! can be audited, mirroring `adept_score::prompts`. Template rendering
+//! (`render`) is shared with `adept_score` rather than duplicated here.
 
 /// System prompt for a description-scoped fix request (`SL301`
 /// `description-tokens-over-budget` and/or `SL206` `no-negative-guidance`).
@@ -48,39 +41,3 @@ Respond with strict JSON only, no commentary, in exactly this shape:
 ///
 /// Format with `skill_name`, `description`, `body`, and `violations`.
 pub const BODY_FIX_USER_TEMPLATE: &str = "Skill name: {skill_name}\n\nDescription (context only):\n{description}\n\nCurrent body:\n{body}\n\nViolations to fix:\n{violations}";
-
-/// Render a template containing `{placeholder}` tokens by substituting each
-/// `(name, value)` pair in `substitutions`.
-///
-/// A tiny helper rather than a templating dependency, matching
-/// `adept_score::prompts`'s (private) equivalent — every template above is
-/// a fixed, fully-enumerated set of placeholders.
-pub fn render(template: &str, substitutions: &[(&str, &str)]) -> String {
-    let mut out = template.to_string();
-    for (key, value) in substitutions {
-        out = out.replace(&format!("{{{key}}}"), value);
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn render_substitutes_all_placeholders() {
-        let out = render(
-            DESCRIPTION_FIX_USER_TEMPLATE,
-            &[
-                ("skill_name", "pdf-filler"),
-                ("description", "Fills PDF forms"),
-                ("body", "Body text"),
-                ("violations", "- SL301: too long"),
-            ],
-        );
-        assert!(out.contains("pdf-filler"));
-        assert!(out.contains("Fills PDF forms"));
-        assert!(out.contains("Body text"));
-        assert!(out.contains("SL301"));
-    }
-}

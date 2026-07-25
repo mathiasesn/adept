@@ -11,7 +11,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 use crate::token::TokenCounter;
 
-use super::{impl_rule, FixKind, LintConfig, Rule, SkillRule};
+use super::{impl_rule, FixKind, FixRegion, LintConfig, Rule, SkillRule};
 
 /// `SL301` `description-tokens-over-budget`: the description exceeds
 /// [`LintConfig::description_max_tokens`].
@@ -22,7 +22,8 @@ impl_rule!(
     "SL301",
     "description-tokens-over-budget",
     Error,
-    Llm
+    Llm,
+    Description
 );
 
 impl SkillRule for DescriptionTokenBudget {
@@ -56,7 +57,8 @@ impl_rule!(
     "SL302",
     "body-tokens-over-budget",
     Error,
-    Llm
+    Llm,
+    Body
 );
 
 impl SkillRule for BodyTokenBudget {

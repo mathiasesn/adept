@@ -7,6 +7,9 @@
 //! candidate produced for an `SL302` violation must be checked here before
 //! it can be accepted.
 
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
 use adept::{Skill, TokenCounter};
 
 use crate::candidate::FixCandidate;
@@ -47,7 +50,12 @@ pub struct ConservationError {
 /// across (candidate SKILL.md + all candidate companion files) must be at
 /// least `original_total * (1.0 - CONTENT_TOLERANCE)`, where `original_total`
 /// is computed over `original`'s SKILL.md source plus every pre-existing
-/// companion file discovered on disk alongside it.
+/// companion file in `original_companions`.
+///
+/// `original_companions` is the full set of the original skill's companion
+/// files (path -> contents), read once by the caller — this function never
+/// touches disk, so it can be called every round without re-reading or
+/// re-tokenizing files that haven't changed.
 ///
 /// # Errors
 /// Returns [`ConservationError`] if the candidate's total falls below the
@@ -56,30 +64,26 @@ pub fn conserves_content(
     original: &Skill,
     candidate: &FixCandidate,
     tokens: &TokenCounter,
+    original_companions: &BTreeMap<PathBuf, String>,
 ) -> Result<(), ConservationError> {
-    let original_companion_paths = adept::discover_companion_files(original);
-    let original_companion_tokens: usize = original_companion_paths
-        .iter()
-        .filter_map(|path| std::fs::read_to_string(path).ok())
-        .map(|contents| tokens.count(&contents))
+    let original_companion_tokens: usize = original_companions
+        .values()
+        .map(|contents| tokens.count(contents))
         .sum();
     let original_tokens = tokens.count(&original.source) + original_companion_tokens;
 
     // The candidate's companion total must cover the same file set as the
     // original's: every pre-existing companion the candidate didn't touch
-    // still carries its on-disk content over unchanged, so it must be
+    // still carries its original content over unchanged, so it must be
     // counted too — otherwise a large untouched companion makes the
     // candidate look like it lost content it never touched.
     let mut candidate_companion_tokens = 0usize;
-    for path in &original_companion_paths {
-        let contents = match candidate.companions.get(path) {
-            Some(contents) => contents.clone(),
-            None => std::fs::read_to_string(path).unwrap_or_default(),
-        };
-        candidate_companion_tokens += tokens.count(&contents);
+    for (path, original_contents) in original_companions {
+        let contents = candidate.companions.get(path).unwrap_or(original_contents);
+        candidate_companion_tokens += tokens.count(contents);
     }
     for (path, contents) in &candidate.companions {
-        if !original_companion_paths.contains(path) {
+        if !original_companions.contains_key(path) {
             candidate_companion_tokens += tokens.count(contents);
         }
     }
@@ -137,38 +141,26 @@ mod tests {
                 "word ".repeat(800),
             )]),
         };
-        assert!(conserves_content(&original, &candidate, &counter).is_ok());
+        let original_companions = BTreeMap::new();
+        assert!(conserves_content(&original, &candidate, &counter, &original_companions).is_ok());
     }
 
     /// Regression test for the conservation guard false-rejecting when a
-    /// large pre-existing companion is on disk but never touched by the
-    /// candidate: the candidate's companion total must still count that
-    /// file's on-disk content, not just what's in `candidate.companions`.
+    /// large pre-existing companion the candidate never touched: the
+    /// candidate's companion total must still count that file's original
+    /// content, not just what's in `candidate.companions`.
     #[test]
     fn accepts_candidate_that_leaves_a_large_pre_existing_companion_untouched() {
         let counter = TokenCounter::default();
 
-        let dir = std::env::temp_dir().join(format!(
-            "adept_fix_relocate_test_untouched_companion_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let skill_path = dir.join("SKILL.md");
-        let untouched_path = dir.join("UNTOUCHED.md");
-
         let body = "word ".repeat(50);
         let source = format!("---\nname: demo\ndescription: A demo skill for tests\n---\n{body}");
-        std::fs::write(&skill_path, &source).unwrap();
+        let untouched_path = PathBuf::from("/nonexistent/adept_fix_relocate_test/UNTOUCHED.md");
         // A large pre-existing companion the model never edits.
         let untouched_content = "word ".repeat(5000);
-        std::fs::write(&untouched_path, &untouched_content).unwrap();
 
         let original = Skill {
-            path: skill_path,
+            path: PathBuf::from("/nonexistent/adept_fix_relocate_test/SKILL.md"),
             frontmatter: adept::Frontmatter {
                 name: "demo".into(),
                 name_line: 2,
@@ -182,6 +174,7 @@ mod tests {
             body_line_offset: 5,
             source: source.clone(),
         };
+        let original_companions = BTreeMap::from([(untouched_path, untouched_content)]);
 
         // Candidate leaves the body (and thus total content) unchanged and
         // touches no companions at all — a pure no-op, which must be
@@ -192,11 +185,9 @@ mod tests {
         };
 
         assert!(
-            conserves_content(&original, &candidate, &counter).is_ok(),
+            conserves_content(&original, &candidate, &counter, &original_companions).is_ok(),
             "guard must not penalize an untouched pre-existing companion"
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -210,7 +201,9 @@ mod tests {
             ),
             companions: BTreeMap::new(),
         };
-        let err = conserves_content(&original, &candidate, &counter).unwrap_err();
+        let original_companions = BTreeMap::new();
+        let err =
+            conserves_content(&original, &candidate, &counter, &original_companions).unwrap_err();
         assert!(err.candidate_tokens < err.min_allowed_tokens);
     }
 }

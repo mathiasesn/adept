@@ -55,8 +55,22 @@ pub enum FixKind {
     /// Fixable by a deterministic, mechanical transformation.
     Deterministic,
     /// Fixable, but only by an LLM able to understand and rewrite content
-    /// (e.g. rephrasing a description or trimming prose).
-    Llm,
+    /// (e.g. rephrasing a description or trimming prose). Carries which
+    /// part of the skill the fix touches, so callers like `adept_fix` can
+    /// batch same-region diagnostics into one request without maintaining
+    /// their own rule-code lists.
+    Llm(FixRegion),
+}
+
+/// Which part of a [`Skill`] an [`FixKind::Llm`] rule's diagnostics are
+/// about, i.e. which field an `adept_fix` request needs to rewrite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FixRegion {
+    /// The rule's diagnostics are about `Frontmatter::description`.
+    Description,
+    /// The rule's diagnostics are about the SKILL.md body.
+    Body,
 }
 
 /// A rule that checks a single [`Skill`] in isolation.
@@ -84,9 +98,15 @@ pub trait SetRule: Rule {
 /// dozen lines of boilerplate.
 macro_rules! impl_rule {
     ($ty:ty, $code:literal, $name:literal, $severity:ident) => {
-        impl_rule!($ty, $code, $name, $severity, None);
+        impl_rule!(@impl $ty, $code, $name, $severity, FixKind::None);
     };
-    ($ty:ty, $code:literal, $name:literal, $severity:ident, $fix_kind:ident) => {
+    ($ty:ty, $code:literal, $name:literal, $severity:ident, Deterministic) => {
+        impl_rule!(@impl $ty, $code, $name, $severity, FixKind::Deterministic);
+    };
+    ($ty:ty, $code:literal, $name:literal, $severity:ident, Llm, $region:ident) => {
+        impl_rule!(@impl $ty, $code, $name, $severity, FixKind::Llm(FixRegion::$region));
+    };
+    (@impl $ty:ty, $code:literal, $name:literal, $severity:ident, $fix_kind:expr) => {
         impl Rule for $ty {
             fn code(&self) -> &'static str {
                 $code
@@ -98,7 +118,7 @@ macro_rules! impl_rule {
                 Severity::$severity
             }
             fn fix_kind(&self) -> FixKind {
-                FixKind::$fix_kind
+                $fix_kind
             }
         }
     };
@@ -539,13 +559,21 @@ mod tests {
     #[test]
     fn only_expected_rules_are_tagged_llm_fixable() {
         let registry = Registry::new();
-        let llm_codes: HashSet<&'static str> = registry
+        let llm_codes: HashMap<&'static str, FixRegion> = registry
             .all_meta()
             .into_iter()
-            .filter(|m| m.fix_kind == FixKind::Llm)
-            .map(|m| m.code)
+            .filter_map(|m| match m.fix_kind {
+                FixKind::Llm(region) => Some((m.code, region)),
+                _ => None,
+            })
             .collect();
-        let expected: HashSet<&'static str> = ["SL206", "SL301", "SL302"].into_iter().collect();
+        let expected: HashMap<&'static str, FixRegion> = [
+            ("SL206", FixRegion::Description),
+            ("SL301", FixRegion::Description),
+            ("SL302", FixRegion::Body),
+        ]
+        .into_iter()
+        .collect();
         assert_eq!(llm_codes, expected);
 
         let missing_description = registry

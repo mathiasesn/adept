@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 use crate::token::TokenCounter;
 
-use super::{impl_rule, FixKind, LintConfig, Rule, SkillRule};
+use super::{impl_rule, FixKind, FixRegion, LintConfig, Rule, SkillRule};
 
 const TRIGGER_PHRASES: &[&str] = &[
     "use when",
@@ -215,7 +215,8 @@ impl_rule!(
     "SL206",
     "no-negative-guidance",
     Info,
-    Llm
+    Llm,
+    Description
 );
 
 impl SkillRule for NoNegativeGuidance {

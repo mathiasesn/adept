@@ -102,8 +102,8 @@ async fn preview_computes_but_writes_nothing() {
     let options = adept_fix::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
 
     let report = adept_fix::fix_skill(&mock, &skill, &options).await.unwrap();
-    assert!(report.accepted, "{report:?}");
-    assert!(!report.files.is_empty());
+    assert!(report.accepted(), "{report:?}");
+    assert!(report.files().is_some());
 
     // Preview never writes: the on-disk file must be untouched.
     let after = read_fixture_source(dir.path());
@@ -124,9 +124,9 @@ async fn write_all_transactionally_clears_fixable_findings() {
     let options = adept_fix::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
 
     let report = adept_fix::fix_skill(&mock, &skill, &options).await.unwrap();
-    assert!(report.accepted, "{report:?}");
+    assert!(report.accepted(), "{report:?}");
 
-    adept_fix::write_all_transactionally(&report.files).unwrap();
+    adept_fix::write_all_transactionally(report.files().unwrap()).unwrap();
 
     // Re-lint the written result: SL301/SL206 must be gone.
     let rewritten = adept::parse_skill(&path).unwrap();
@@ -161,7 +161,7 @@ async fn check_equivalent_reports_pending_changes_when_over_budget() {
     let report = adept_fix::fix_skill(&mock, &skill, &options).await.unwrap();
     // Pending changes: files non-empty is the --check-equivalent "would
     // change" signal, i.e. exit 1.
-    assert!(!report.files.is_empty());
+    assert!(report.files().is_some());
 }
 
 #[tokio::test]
@@ -172,8 +172,8 @@ async fn check_equivalent_reports_clean_on_already_clean_skill() {
     let options = adept_fix::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
 
     let report = adept_fix::fix_skill(&mock, &skill, &options).await.unwrap();
-    assert!(report.files.is_empty());
-    assert!(!report.accepted);
+    assert!(report.files().is_none());
+    assert!(!report.accepted());
 }
 
 #[tokio::test]
@@ -191,8 +191,8 @@ async fn rejected_rewrite_leaves_original_file_unchanged() {
     let options = adept_fix::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
 
     let report = adept_fix::fix_skill(&mock, &skill, &options).await.unwrap();
-    assert!(!report.accepted, "{report:?}");
-    assert!(report.files.is_empty());
+    assert!(!report.accepted(), "{report:?}");
+    assert!(report.files().is_none());
 
     // Nothing was written by fix_skill itself; the file on disk must be
     // byte-for-byte unchanged.

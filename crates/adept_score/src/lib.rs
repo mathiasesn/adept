@@ -14,7 +14,7 @@
 mod client;
 mod mock;
 mod overlap;
-mod prompts;
+pub mod prompts;
 mod report;
 mod tokens;
 mod triggering;

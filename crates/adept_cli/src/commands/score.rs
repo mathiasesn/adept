@@ -1,42 +1,25 @@
 //! `adept score`.
 
 use adept::{Skill, SkillSet};
-use adept_score::{
-    LlmConfig, OpenAiCompatClient, ScoreOptions, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
-};
+use adept_score::ScoreOptions;
 
 use crate::cli::{OutputFormat, ScoreArgs};
-use crate::config::AdeptConfig;
+use crate::config::{build_runtime, resolve_llm_client, AdeptConfig};
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_USAGE_ERROR: i32 = 2;
 
 /// Run `adept score`, building its own `tokio` runtime and a real
-/// [`OpenAiCompatClient`]. Returns the process exit code.
+/// [`adept_score::OpenAiCompatClient`]. Returns the process exit code.
 pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
-    let llm_config = LlmConfig {
-        base_url: args
-            .base_url
-            .clone()
-            .or_else(|| config.score.base_url.clone()),
-        api_key: None,
-        model: args.model.clone().or_else(|| config.score.model.clone()),
+    let base_url = args
+        .base_url
+        .clone()
+        .or_else(|| config.score.base_url.clone());
+    let model = args.model.clone().or_else(|| config.score.model.clone());
+    let Some((client, resolved)) = resolve_llm_client("score", base_url, model) else {
+        return EXIT_USAGE_ERROR;
     };
-
-    let resolved = match llm_config.resolve() {
-        Ok(resolved) => resolved,
-        Err(_) => {
-            eprintln!("adept: error: could not resolve an LLM model to score with.");
-            eprintln!(
-                "  set one of: --model <MODEL>, config file `[score] model = \"...\"`, or the {ENV_MODEL} environment variable"
-            );
-            eprintln!(
-                "  optionally also set {ENV_BASE_URL} (defaults to the OpenAI API) and {ENV_API_KEY}"
-            );
-            return EXIT_USAGE_ERROR;
-        }
-    };
-    let client = OpenAiCompatClient::new(resolved.clone());
 
     let (skill, skillset) = match load_skill_and_set(&args.path) {
         Ok(pair) => pair,
@@ -53,12 +36,8 @@ pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
         .unwrap_or_default();
     let options = build_options(args, &resolved.model, tokenizer);
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(err) => {
-            eprintln!("adept: error: failed to start async runtime: {err}");
-            return EXIT_USAGE_ERROR;
-        }
+    let Some(runtime) = build_runtime() else {
+        return EXIT_USAGE_ERROR;
     };
 
     let report = runtime.block_on(adept_score::score_skill(

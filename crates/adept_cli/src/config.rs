@@ -8,9 +8,64 @@ use std::path::{Path, PathBuf};
 
 use adept::LintConfig;
 use adept_fmt::FmtConfig;
+use adept_score::{
+    LlmConfig, OpenAiCompatClient, ResolvedLlmConfig, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
+};
 use serde::Deserialize;
 
 const CONFIG_FILE_NAME: &str = "adept.toml";
+
+/// Resolve an LLM client and its resolved configuration for `adept score` or
+/// `adept fix`, given the CLI/config-file `base_url`/`model` overrides for
+/// that command's own section.
+///
+/// `section` names the config-file table to mention in the error message
+/// (`"score"` or `"fix"`) — the two sections are resolved fully
+/// independently (no cross-fallback between them), only sharing the
+/// `ADEPT_*` environment variables via [`LlmConfig::resolve`].
+///
+/// On failure, prints the same three-line guidance both commands used to
+/// print separately (naming `section`) and returns `None`.
+#[must_use]
+pub fn resolve_llm_client(
+    section: &str,
+    base_url: Option<String>,
+    model: Option<String>,
+) -> Option<(OpenAiCompatClient, ResolvedLlmConfig)> {
+    let llm_config = LlmConfig {
+        base_url,
+        api_key: None,
+        model,
+    };
+    let resolved = match llm_config.resolve() {
+        Ok(resolved) => resolved,
+        Err(_) => {
+            eprintln!("adept: error: could not resolve an LLM model to {section} with.");
+            eprintln!(
+                "  set one of: --model <MODEL>, config file `[{section}] model = \"...\"`, or the {ENV_MODEL} environment variable"
+            );
+            eprintln!(
+                "  optionally also set {ENV_BASE_URL} (defaults to the OpenAI API) and {ENV_API_KEY}"
+            );
+            return None;
+        }
+    };
+    let client = OpenAiCompatClient::new(resolved.clone());
+    Some((client, resolved))
+}
+
+/// Build the `tokio` runtime `adept score`/`adept fix` drive their single
+/// async call from, printing the shared error message on failure.
+#[must_use]
+pub fn build_runtime() -> Option<tokio::runtime::Runtime> {
+    match tokio::runtime::Runtime::new() {
+        Ok(rt) => Some(rt),
+        Err(err) => {
+            eprintln!("adept: error: failed to start async runtime: {err}");
+            None
+        }
+    }
+}
 
 /// LLM-related settings that can be set via config file, layered under CLI
 /// flags and `ADEPT_*` environment variables by [`adept_score::LlmConfig::resolve`].

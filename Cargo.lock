@@ -50,6 +50,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "tempfile",
  "thiserror",
  "tokio",
 ]

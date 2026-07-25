@@ -2,11 +2,10 @@
 
 use adept::{Skill, SkillSet};
 use adept_fix::{fix_skill, write_all_transactionally, FixOptions, FixReport, DEFAULT_MAX_ROUNDS};
-use adept_score::{LlmConfig, OpenAiCompatClient, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL};
 
 use crate::cli::{FixArgs, OutputFormat};
 use crate::commands::check::apply_select_ignore;
-use crate::config::AdeptConfig;
+use crate::config::{build_runtime, resolve_llm_client, AdeptConfig};
 
 /// Exit code contract: 0 = clean/no pending changes, 1 = changes pending
 /// (`--check`), 2 = usage/I/O error.
@@ -15,31 +14,16 @@ pub const EXIT_CHANGES_PENDING: i32 = 1;
 pub const EXIT_USAGE_ERROR: i32 = 2;
 
 /// Run `adept fix`, building its own `tokio` runtime and a real
-/// [`OpenAiCompatClient`]. Returns the process exit code.
+/// [`adept_score::OpenAiCompatClient`]. Returns the process exit code.
 pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
-    let llm_config = LlmConfig {
-        base_url: args
-            .base_url
-            .clone()
-            .or_else(|| config.fix.base_url.clone()),
-        api_key: None,
-        model: args.model.clone().or_else(|| config.fix.model.clone()),
+    let base_url = args
+        .base_url
+        .clone()
+        .or_else(|| config.fix.base_url.clone());
+    let model = args.model.clone().or_else(|| config.fix.model.clone());
+    let Some((client, resolved)) = resolve_llm_client("fix", base_url, model) else {
+        return EXIT_USAGE_ERROR;
     };
-
-    let resolved = match llm_config.resolve() {
-        Ok(resolved) => resolved,
-        Err(_) => {
-            eprintln!("adept: error: could not resolve an LLM model to fix with.");
-            eprintln!(
-                "  set one of: --model <MODEL>, config file `[fix] model = \"...\"`, or the {ENV_MODEL} environment variable"
-            );
-            eprintln!(
-                "  optionally also set {ENV_BASE_URL} (defaults to the OpenAI API) and {ENV_API_KEY}"
-            );
-            return EXIT_USAGE_ERROR;
-        }
-    };
-    let client = OpenAiCompatClient::new(resolved.clone());
 
     let tokenizer = args
         .tokenizer
@@ -76,12 +60,8 @@ pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
         return EXIT_USAGE_ERROR;
     }
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(rt) => rt,
-        Err(err) => {
-            eprintln!("adept: error: failed to start async runtime: {err}");
-            return EXIT_USAGE_ERROR;
-        }
+    let Some(runtime) = build_runtime() else {
+        return EXIT_USAGE_ERROR;
     };
 
     let mut reports: Vec<FixReport> = Vec::new();
@@ -96,44 +76,42 @@ pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
         }
     }
 
+    let mode = Mode::resolve(args);
+
     let mut any_pending = false;
     let mut written = 0usize;
 
     for report in &reports {
-        if !report.files.is_empty() {
+        let files = report.files();
+        if files.is_some() {
             any_pending = true;
         }
 
-        match args.format {
-            OutputFormat::Human => {
-                if args.diff {
-                    print!("{}", report.diff);
-                } else if !args.check {
-                    print!("{}", report.render());
-                }
-            }
-            OutputFormat::Json => {
-                if !args.check {
-                    match serde_json::to_string_pretty(report) {
-                        Ok(json) => println!("{json}"),
-                        Err(err) => {
-                            eprintln!("adept: error: failed to render JSON: {err}");
-                            return EXIT_USAGE_ERROR;
-                        }
+        match (args.format, mode) {
+            (OutputFormat::Human, Mode::Check | Mode::Diff) => print!("{}", report.diff),
+            (OutputFormat::Human, Mode::Report | Mode::Write) => print!("{}", report.render()),
+            (OutputFormat::Json, Mode::Check | Mode::Diff | Mode::Report | Mode::Write) => {
+                match serde_json::to_string_pretty(report) {
+                    Ok(json) => println!("{json}"),
+                    Err(err) => {
+                        eprintln!("adept: error: failed to render JSON: {err}");
+                        return EXIT_USAGE_ERROR;
                     }
                 }
             }
         }
 
-        if args.write && !report.files.is_empty() {
-            if let Err(err) = write_all_transactionally(&report.files) {
-                eprintln!(
-                    "adept: error: failed to write fixes for {}: {err}",
-                    report.skill_name
-                );
-                return EXIT_USAGE_ERROR;
+        if args.write {
+            if let Some(files) = files {
+                if let Err(err) = write_all_transactionally(files) {
+                    eprintln!(
+                        "adept: error: failed to write fixes for {}: {err}",
+                        report.skill_name
+                    );
+                    return EXIT_USAGE_ERROR;
+                }
+                written += 1;
             }
-            written += 1;
         }
     }
 
@@ -145,15 +123,53 @@ pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
         );
     }
 
-    if args.check {
-        return if any_pending {
-            EXIT_CHANGES_PENDING
-        } else {
-            EXIT_OK
-        };
+    match mode {
+        Mode::Check if any_pending => EXIT_CHANGES_PENDING,
+        _ => EXIT_OK,
     }
+}
 
-    EXIT_OK
+/// Which of `adept fix`'s mutually-exclusive display behaviors is active,
+/// resolved once from `FixArgs`'s `write`/`check`/`diff` flags instead of
+/// branching on the raw booleans (with `!args.check` as an implicit guard)
+/// at three separate call sites.
+///
+/// `write` and `check` are mutually exclusive at the `clap` level
+/// (`conflicts_with`); `diff` may combine with either. Precedence when it
+/// does: `--check` drives the exit code and prints the same diff `--diff`
+/// would, so `--diff --check` is simply `--check`; otherwise `--diff`
+/// selects diff-only output; otherwise the
+/// full report is printed (identically whether or not `--write` is also
+/// set, since `--write` only changes whether files are written, not what is
+/// printed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// No `--write`/`--check`/`--diff`: print the full report, exit 0.
+    Report,
+    /// `--diff` (without `--check`): print only the unified diff, exit 0.
+    Diff,
+    /// `--check`: print the unified diff; exit 1 iff any skill has pending
+    /// changes, else 0. Never writes (`clap` forbids combining with
+    /// `--write`). Printing the diff rather than staying silent matches
+    /// `adept fmt --check`, so CI output shows *what* would change.
+    Check,
+    /// `--write` (without `--check`/`--diff`): print the full report, write
+    /// pending files, exit 0 (2 on I/O error).
+    Write,
+}
+
+impl Mode {
+    fn resolve(args: &FixArgs) -> Self {
+        if args.check {
+            Self::Check
+        } else if args.diff {
+            Self::Diff
+        } else if args.write {
+            Self::Write
+        } else {
+            Self::Report
+        }
+    }
 }
 
 fn build_options(

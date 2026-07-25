@@ -1,8 +1,5 @@
 //! `adept fmt`.
 
-use std::io::Write as _;
-use std::path::Path;
-
 use adept::SkillSet;
 use adept_fmt::{check_skill, format_skill, FmtConfig};
 
@@ -107,25 +104,6 @@ fn handle_skill(
     }
 
     let formatted = format_skill(skill, config)?;
-    write_atomically(&skill.path, &formatted)?;
+    adept_fix::write_atomically(&skill.path, &formatted)?;
     Ok(true)
-}
-
-/// Write `contents` to `path` atomically: write to a temp file in the same
-/// directory, then rename over the original. Never leaves the original
-/// file clobbered if the write fails partway through.
-fn write_atomically(path: &Path, contents: &str) -> std::io::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let tmp_path = dir.join(format!(
-        ".{}.adept-tmp",
-        path.file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "SKILL.md".to_string())
-    ));
-    {
-        let mut tmp_file = std::fs::File::create(&tmp_path)?;
-        tmp_file.write_all(contents.as_bytes())?;
-        tmp_file.sync_all()?;
-    }
-    std::fs::rename(&tmp_path, path)
 }

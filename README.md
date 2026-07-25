@@ -169,7 +169,7 @@ accepted
 | Flag | Purpose |
 | ------------- | ----------------------------------------------------------- |
 | `--write`     | Apply pending changes to disk (atomic, all-or-nothing per skill). |
-| `--check`     | Exit `1` if any skill has pending changes; prints nothing else. |
+| `--check`     | Exit `1` if any skill has pending changes; prints the diff, like `fmt --check`. |
 | `--diff`      | Print only the unified diff, not the full report.            |
 | `--select` / `--ignore` | Restrict which rule codes/names are attempted, same as `check`. |
 | `--max-rounds <n>` | Bound the fix/re-lint retry loop (default `2`).          |

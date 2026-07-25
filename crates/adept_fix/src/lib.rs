@@ -7,19 +7,22 @@
 //! entry point, [`fix_skill`], is `async fn`; callers are expected to drive
 //! it from a `tokio` runtime, same as `adept_score::score_skill`.
 //!
-//! [`fix_skill`] only *computes* a candidate rewrite (a [`FixReport`] with
-//! pending `files`) — it never writes to disk. Callers that want to apply
-//! the result pass `report.files` to [`writer::write_all_transactionally`].
-//! This keeps the whole fix loop testable without touching the filesystem
-//! for anything but reading the original skill's companion files.
+//! [`fix_skill`] only *computes* a candidate rewrite (a [`FixReport`] whose
+//! [`FixReport::files`] are the pending writes, if accepted) — it never
+//! writes to disk. Callers that want to apply the result pass those files to
+//! [`writer::write_all_transactionally`]. This keeps the whole fix loop
+//! testable without touching the filesystem for anything but reading the
+//! original skill's companion files, once, up front.
 //!
 //! Only [`adept::FixKind::Llm`] diagnostics from single-skill
 //! ([`adept::SkillRule`]) checks are ever attempted: today that is `SL301`
 //! (`description-tokens-over-budget`), `SL206` (`no-negative-guidance`) —
-//! batched into one description-scoped request, since both only ever touch
-//! the `description` field — and `SL302` (`body-tokens-over-budget`), a
-//! second, body-scoped request. Cross-skill (`SetRule`) findings are never
-//! rewritten.
+//! both tagged with [`adept::FixRegion::Description`] and so batched into
+//! one description-scoped request — and `SL302` (`body-tokens-over-budget`),
+//! tagged [`adept::FixRegion::Body`] and sent as a second, body-scoped
+//! request. Which region a rule's diagnostics belong to is metadata on the
+//! rule itself (`Rule::fix_kind`); this crate hard-codes no rule-code list.
+//! Cross-skill (`SetRule`) findings are never rewritten.
 
 mod candidate;
 pub mod diff;
@@ -31,17 +34,17 @@ pub mod writer;
 pub use candidate::{resolve_companion_path, CompanionEdit, FixCandidate, FixResponse};
 pub use options::{FixOptions, DEFAULT_MAX_ROUNDS};
 pub use prompts::{
-    render, BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, DESCRIPTION_FIX_SYSTEM,
-    DESCRIPTION_FIX_USER_TEMPLATE, PROMPT_VERSION,
+    BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, DESCRIPTION_FIX_SYSTEM, DESCRIPTION_FIX_USER_TEMPLATE,
 };
 pub use relocate::{conserves_content, ConservationError, CONTENT_TOLERANCE};
-pub use writer::write_all_transactionally;
+pub use writer::{write_all_transactionally, write_atomically};
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use adept::{
-    AdeptError, AnthropicSkillParser, Diagnostic, FixKind, Linter, Skill, SkillParser, TokenCounter,
+    discover_companion_files, AdeptError, AnthropicSkillParser, Diagnostic, FixKind, FixRegion,
+    Linter, Skill, SkillParser, TokenCounter,
 };
 use adept_score::{ChatMessage, ChatRequest, LlmClient, LlmError};
 
@@ -82,6 +85,27 @@ pub enum FixError {
     Io(#[from] std::io::Error),
 }
 
+/// The outcome of attempting to fix a skill's LLM-fixable lint diagnostics:
+/// the single source of truth for whether a fix landed, replacing what used
+/// to be three hand-kept-consistent [`FixReport`] fields (`accepted`,
+/// `rejected_reason`, `files`).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum FixOutcome {
+    /// `attempted` was empty: there was nothing to fix.
+    NothingToDo,
+    /// At least one round produced a candidate that struck diagnostics
+    /// strictly smaller than what it started from. `files` are the pending
+    /// writes: full new contents for SKILL.md and every touched companion
+    /// file, keyed by absolute path. Never written by this crate — pass to
+    /// [`writer::write_all_transactionally`] to apply.
+    Accepted { files: BTreeMap<PathBuf, String> },
+    /// Every round attempted was rejected, either because no candidate
+    /// improved on the original or because a candidate tripped the
+    /// [`relocate::conserves_content`] guard.
+    Rejected { reason: String },
+}
+
 /// The result of attempting to fix a skill's LLM-fixable lint diagnostics.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FixReport {
@@ -100,27 +124,31 @@ pub struct FixReport {
     pub residual: Vec<Diagnostic>,
     /// How many rounds were run (0 if `attempted` was empty).
     pub rounds_used: usize,
-    /// Whether at least one round produced a candidate that struck
-    /// diagnostics strictly smaller than what it started from (i.e.
-    /// `files` is non-empty and ready to write).
-    pub accepted: bool,
     /// A unified diff across every changed/created file. Empty when
     /// nothing changed.
     pub diff: String,
-    /// Pending writes: full new contents for SKILL.md and every touched
-    /// companion file, keyed by absolute path. Empty when `accepted` is
-    /// `false`. Never written by this crate — pass to
-    /// [`writer::write_all_transactionally`] to apply.
-    pub files: BTreeMap<PathBuf, String>,
-    /// Why the final round's candidate was rejected, if `accepted` is
-    /// `false` and at least one round ran. `None` when nothing was
-    /// attempted, or when a candidate was accepted. Populated for both
-    /// rejection paths: a candidate that didn't shrink the fixable set, and
-    /// one that tripped the [`relocate::conserves_content`] guard.
-    pub rejected_reason: Option<String>,
+    /// Whether a fix was accepted, rejected, or never attempted, and the
+    /// data specific to each case.
+    pub outcome: FixOutcome,
 }
 
 impl FixReport {
+    /// Whether a candidate was accepted (equivalent to matching
+    /// `FixOutcome::Accepted`).
+    #[must_use]
+    pub fn accepted(&self) -> bool {
+        matches!(self.outcome, FixOutcome::Accepted { .. })
+    }
+
+    /// The pending writes if a candidate was accepted, `None` otherwise.
+    #[must_use]
+    pub fn files(&self) -> Option<&BTreeMap<PathBuf, String>> {
+        match &self.outcome {
+            FixOutcome::Accepted { files } => Some(files),
+            _ => None,
+        }
+    }
+
     /// Render a short human-readable summary (per-rule resolved/residual
     /// status) followed by the unified diff, if any.
     #[must_use]
@@ -143,12 +171,10 @@ impl FixReport {
         for d in &self.residual {
             out.push_str(&format!("  residual  {} {}\n", d.code, d.message));
         }
-        if self.accepted {
-            out.push_str("accepted\n");
-        } else if let Some(reason) = &self.rejected_reason {
-            out.push_str(&format!("rejected: {reason}\n"));
-        } else {
-            out.push_str("rejected: no candidate improved on the original\n");
+        match &self.outcome {
+            FixOutcome::Accepted { .. } => out.push_str("accepted\n"),
+            FixOutcome::Rejected { reason } => out.push_str(&format!("rejected: {reason}\n")),
+            FixOutcome::NothingToDo => {}
         }
 
         if !self.diff.is_empty() {
@@ -159,12 +185,6 @@ impl FixReport {
         out
     }
 }
-
-/// Rule codes whose diagnostics are batched into a single description-scope
-/// fix request (both only ever touch `Frontmatter::description`).
-const DESCRIPTION_SCOPED_CODES: &[&str] = &["SL301", "SL206"];
-/// Rule codes whose diagnostics are sent as a body-scope fix request.
-const BODY_SCOPED_CODES: &[&str] = &["SL302"];
 
 /// Whether `code`/`name` is selected for fixing under `options`: not
 /// excluded by `ignore`, and either `select` is empty or contains it.
@@ -177,8 +197,11 @@ fn is_selected(code: &str, name: &str, options: &FixOptions) -> bool {
 }
 
 /// Filter `diagnostics` down to the ones eligible for LLM-assisted fixing:
-/// `FixKind::Llm`, a known description/body scope, and not excluded by
-/// `options.select`/`options.ignore`.
+/// `FixKind::Llm`, and not excluded by `options.select`/`options.ignore`.
+///
+/// Which rule codes carry `FixKind::Llm` (and which region they touch) is
+/// entirely rule-side metadata (see `adept::Rule::fix_kind`); this crate
+/// hard-codes no rule-code list of its own.
 fn fixable(diagnostics: &[Diagnostic], linter: &Linter, options: &FixOptions) -> Vec<Diagnostic> {
     diagnostics
         .iter()
@@ -186,16 +209,23 @@ fn fixable(diagnostics: &[Diagnostic], linter: &Linter, options: &FixOptions) ->
             let Some(meta) = linter.registry().by_code(d.code) else {
                 return false;
             };
-            if meta.fix_kind != FixKind::Llm {
-                return false;
-            }
-            if !DESCRIPTION_SCOPED_CODES.contains(&d.code) && !BODY_SCOPED_CODES.contains(&d.code) {
+            if !matches!(meta.fix_kind, FixKind::Llm(_)) {
                 return false;
             }
             is_selected(meta.code, meta.name, options)
         })
         .cloned()
         .collect()
+}
+
+/// The [`FixRegion`] a diagnostic's rule is tagged with, or `None` if it
+/// isn't `FixKind::Llm` (shouldn't happen for anything that survived
+/// [`fixable`], but keeps this total rather than panicking).
+fn region_of(code: &str, linter: &Linter) -> Option<FixRegion> {
+    match linter.registry().by_code(code)?.fix_kind {
+        FixKind::Llm(region) => Some(region),
+        _ => None,
+    }
 }
 
 /// Render a bullet-list "violations" block for a group of diagnostics,
@@ -214,20 +244,39 @@ fn render_violations(diagnostics: &[&Diagnostic], budget_line: &str) -> String {
     out
 }
 
-/// Send one description-scope fix request (batching `SL301`/`SL206`
-/// diagnostics) and return the model's parsed response.
-async fn request_description_fix(
+/// Send one region-scoped fix request — description-scope batches
+/// `SL301`/`SL206` diagnostics, body-scope sends `SL302` — and return the
+/// model's parsed response. The two request shapes differ only in system
+/// prompt, user template, and the budget wording, so both share this one
+/// implementation, parameterized by [`FixRegion`].
+async fn request_region_fix(
     client: &dyn LlmClient,
     skill: &Skill,
+    region: FixRegion,
     diagnostics: &[&Diagnostic],
     options: &FixOptions,
 ) -> Result<FixResponse, FixError> {
-    let budget_line = format!(
-        "The description MUST be at most {} {} tokens.",
-        options.lint_config.description_max_tokens, options.tokenizer
-    );
-    let user = prompts::render(
-        prompts::DESCRIPTION_FIX_USER_TEMPLATE,
+    let (system, template, budget_line) = match region {
+        FixRegion::Description => (
+            prompts::DESCRIPTION_FIX_SYSTEM,
+            prompts::DESCRIPTION_FIX_USER_TEMPLATE,
+            format!(
+                "The description MUST be at most {} {} tokens.",
+                options.lint_config.description_max_tokens, options.tokenizer
+            ),
+        ),
+        FixRegion::Body => (
+            prompts::BODY_FIX_SYSTEM,
+            prompts::BODY_FIX_USER_TEMPLATE,
+            format!(
+                "The body MUST be at most {} {} tokens.",
+                options.lint_config.body_max_tokens, options.tokenizer
+            ),
+        ),
+    };
+
+    let user = adept_score::prompts::render(
+        template,
         &[
             ("skill_name", skill.frontmatter.name.as_str()),
             ("description", skill.frontmatter.description.as_str()),
@@ -237,10 +286,7 @@ async fn request_description_fix(
     );
     let request = ChatRequest::new(
         options.model.clone(),
-        vec![
-            ChatMessage::system(prompts::DESCRIPTION_FIX_SYSTEM),
-            ChatMessage::user(user),
-        ],
+        vec![ChatMessage::system(system), ChatMessage::user(user)],
     )
     .with_temperature(0.0)
     .with_json_response(true);
@@ -249,39 +295,68 @@ async fn request_description_fix(
     FixResponse::parse(&response.content)
 }
 
-/// Send one body-scope fix request (`SL302`) and return the model's parsed
-/// response.
-async fn request_body_fix(
-    client: &dyn LlmClient,
-    skill: &Skill,
-    diagnostics: &[&Diagnostic],
-    options: &FixOptions,
-) -> Result<FixResponse, FixError> {
-    let budget_line = format!(
-        "The body MUST be at most {} {} tokens.",
-        options.lint_config.body_max_tokens, options.tokenizer
-    );
-    let user = prompts::render(
-        prompts::BODY_FIX_USER_TEMPLATE,
-        &[
-            ("skill_name", skill.frontmatter.name.as_str()),
-            ("description", skill.frontmatter.description.as_str()),
-            ("body", skill.body.as_str()),
-            ("violations", &render_violations(diagnostics, &budget_line)),
-        ],
-    );
-    let request = ChatRequest::new(
-        options.model.clone(),
-        vec![
-            ChatMessage::system(prompts::BODY_FIX_SYSTEM),
-            ChatMessage::user(user),
-        ],
-    )
-    .with_temperature(0.0)
-    .with_json_response(true);
+/// Read `path`'s contents, treating "file not found" as an empty string —
+/// the state of a companion file a fix round is about to create for the
+/// first time. Other I/O errors are propagated.
+fn read_or_empty(path: &std::path::Path) -> Result<String, FixError> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(contents),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(FixError::Io(err)),
+    }
+}
 
-    let response = client.chat(request).await?;
-    FixResponse::parse(&response.content)
+/// Build a candidate SKILL.md source from `working` with `new_description`
+/// and `new_body` substituted in, canonicalized by `adept_fmt`.
+fn build_candidate_source(
+    working: &Skill,
+    new_description: String,
+    new_body: String,
+    fmt_config: &adept_fmt::FmtConfig,
+) -> Result<String, FixError> {
+    let mut candidate_frontmatter = working.frontmatter.clone();
+    candidate_frontmatter.description = new_description;
+    let candidate_skill_for_fmt = Skill {
+        path: working.path.clone(),
+        frontmatter: candidate_frontmatter,
+        body: new_body,
+        body_line_offset: working.body_line_offset,
+        source: working.source.clone(),
+    };
+    Ok(adept_fmt::format_skill(
+        &candidate_skill_for_fmt,
+        fmt_config,
+    )?)
+}
+
+/// Assemble full new contents for every companion file a round's response
+/// touched: resolve and sandbox each edit's path, then append it to that
+/// file's current content.
+///
+/// "Current content" prefers an in-progress (already-pending) version from
+/// an earlier round in `best_files` over `original_companions`, so a second
+/// round editing the same companion appends to what round one produced
+/// instead of clobbering it. `original_companions` was read once, up front,
+/// by the caller — this never touches disk.
+fn assemble_companions(
+    companion_edits: &[CompanionEdit],
+    skill_dir: &std::path::Path,
+    skill_path: &std::path::Path,
+    best_files: &BTreeMap<PathBuf, String>,
+    original_companions: &BTreeMap<PathBuf, String>,
+) -> Result<BTreeMap<PathBuf, String>, FixError> {
+    let mut companions: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for edit in companion_edits {
+        let resolved = candidate::resolve_companion_path(skill_dir, &edit.path, skill_path)?;
+        let existing = best_files
+            .get(&resolved)
+            .or_else(|| original_companions.get(&resolved))
+            .cloned()
+            .unwrap_or_default();
+        let merged = format!("{existing}{}", edit.appended_content);
+        companions.insert(resolved, merged);
+    }
+    Ok(companions)
 }
 
 /// Attempt to fix `skill`'s LLM-fixable lint diagnostics.
@@ -291,9 +366,10 @@ async fn request_body_fix(
 /// but never auto-rewritten here (see the module docs).
 ///
 /// See the module docs for the overall loop. This function never writes to
-/// disk (beyond reading pre-existing companion files to assemble full new
-/// contents and to run the conservation guard); pass `report.files` to
-/// [`writer::write_all_transactionally`] to apply an accepted result.
+/// disk (beyond reading pre-existing companion files, once, up front, to
+/// assemble full new contents and to run the conservation guard); pass
+/// [`FixReport::files`] to [`writer::write_all_transactionally`] to apply an
+/// accepted result.
 ///
 /// # Errors
 /// Returns [`FixError`] if an LLM call fails, a response is malformed, a
@@ -317,10 +393,8 @@ pub async fn fix_skill(
             resolved: Vec::new(),
             residual: Vec::new(),
             rounds_used: 0,
-            accepted: false,
             diff: String::new(),
-            files: BTreeMap::new(),
-            rejected_reason: None,
+            outcome: FixOutcome::NothingToDo,
         });
     }
 
@@ -329,6 +403,15 @@ pub async fn fix_skill(
         .parent()
         .map(std::path::Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
+
+    // Read every pre-existing companion file exactly once, up front. Every
+    // round below (the guard, companion assembly, and the final diff) reads
+    // from this map instead of the filesystem, since the original content
+    // never changes across rounds.
+    let mut original_companions: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for path in discover_companion_files(skill) {
+        original_companions.insert(path.clone(), read_or_empty(&path)?);
+    }
 
     let mut working = skill.clone();
     let mut current: Vec<Diagnostic> = attempted.clone();
@@ -345,11 +428,11 @@ pub async fn fix_skill(
 
         let description_group: Vec<&Diagnostic> = current
             .iter()
-            .filter(|d| DESCRIPTION_SCOPED_CODES.contains(&d.code))
+            .filter(|d| region_of(d.code, &linter) == Some(FixRegion::Description))
             .collect();
         let body_group: Vec<&Diagnostic> = current
             .iter()
-            .filter(|d| BODY_SCOPED_CODES.contains(&d.code))
+            .filter(|d| region_of(d.code, &linter) == Some(FixRegion::Body))
             .collect();
 
         let mut new_description = working.frontmatter.description.clone();
@@ -357,15 +440,22 @@ pub async fn fix_skill(
         let mut companion_edits: Vec<CompanionEdit> = Vec::new();
 
         if !description_group.is_empty() {
-            let response =
-                request_description_fix(client, &working, &description_group, options).await?;
+            let response = request_region_fix(
+                client,
+                &working,
+                FixRegion::Description,
+                &description_group,
+                options,
+            )
+            .await?;
             if let Some(description) = response.description {
                 new_description = description;
             }
         }
 
         if !body_group.is_empty() {
-            let response = request_body_fix(client, &working, &body_group, options).await?;
+            let response =
+                request_region_fix(client, &working, FixRegion::Body, &body_group, options).await?;
             if let Some(body) = response.body {
                 new_body = body;
             }
@@ -374,46 +464,26 @@ pub async fn fix_skill(
             }
         }
 
-        let mut candidate_frontmatter = working.frontmatter.clone();
-        candidate_frontmatter.description = new_description;
-        let candidate_skill_for_fmt = Skill {
-            path: working.path.clone(),
-            frontmatter: candidate_frontmatter,
-            body: new_body,
-            body_line_offset: working.body_line_offset,
-            source: working.source.clone(),
-        };
-        let formatted = adept_fmt::format_skill(&candidate_skill_for_fmt, &options.fmt_config)?;
+        let formatted =
+            build_candidate_source(&working, new_description, new_body, &options.fmt_config)?;
 
-        let mut companions: BTreeMap<PathBuf, String> = BTreeMap::new();
-        for edit in &companion_edits {
-            let resolved = candidate::resolve_companion_path(&skill_dir, &edit.path, &skill.path)?;
-            // Prefer an in-progress (already-pending) version of this file
-            // from an earlier round over the on-disk original, so a second
-            // round editing the same companion appends to what round one
-            // produced instead of clobbering it and feeding the
-            // conservation guard a stale original (see FixError::Io docs
-            // for the disk-read fallback below).
-            let existing = if let Some(pending) = best_files.get(&resolved) {
-                pending.clone()
-            } else {
-                match std::fs::read_to_string(&resolved) {
-                    Ok(contents) => contents,
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-                    Err(err) => return Err(FixError::Io(err)),
-                }
-            };
-            let merged = format!("{existing}{}", edit.appended_content);
-            companions.insert(resolved, merged);
-        }
+        let companions = assemble_companions(
+            &companion_edits,
+            &skill_dir,
+            &skill.path,
+            &best_files,
+            &original_companions,
+        )?;
 
         let fix_candidate = FixCandidate {
             skill_source: formatted.clone(),
-            companions: companions.clone(),
+            companions,
         };
 
         if !body_group.is_empty() {
-            if let Err(err) = relocate::conserves_content(skill, &fix_candidate, &tokens) {
+            if let Err(err) =
+                relocate::conserves_content(skill, &fix_candidate, &tokens, &original_companions)
+            {
                 rejected_reason = Some(format!(
                     "candidate lost content instead of relocating it ({err})"
                 ));
@@ -429,7 +499,7 @@ pub async fn fix_skill(
             accepted = true;
             working = candidate_skill;
             best_files.insert(skill.path.clone(), formatted);
-            for (path, contents) in companions {
+            for (path, contents) in fix_candidate.companions {
                 best_files.insert(path, contents);
             }
             current = candidate_fixable;
@@ -453,20 +523,21 @@ pub async fn fix_skill(
     let diff = if accepted {
         let mut originals: BTreeMap<PathBuf, String> = BTreeMap::new();
         originals.insert(skill.path.clone(), skill.source.clone());
-        for path in best_files.keys() {
-            if path == &skill.path {
-                continue;
-            }
-            let existing = match std::fs::read_to_string(path) {
-                Ok(contents) => contents,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
-                Err(err) => return Err(FixError::Io(err)),
-            };
-            originals.insert(path.clone(), existing);
+        for (path, contents) in &original_companions {
+            originals.insert(path.clone(), contents.clone());
         }
         diff::render_multi_file_diff(&originals, &best_files)
     } else {
         String::new()
+    };
+
+    let outcome = if accepted {
+        FixOutcome::Accepted { files: best_files }
+    } else {
+        FixOutcome::Rejected {
+            reason: rejected_reason
+                .unwrap_or_else(|| "no candidate improved on the original".to_string()),
+        }
     };
 
     Ok(FixReport {
@@ -475,14 +546,8 @@ pub async fn fix_skill(
         resolved,
         residual,
         rounds_used,
-        accepted,
         diff,
-        files: if accepted {
-            best_files
-        } else {
-            BTreeMap::new()
-        },
-        rejected_reason: if accepted { None } else { rejected_reason },
+        outcome,
     })
 }
 
@@ -505,31 +570,18 @@ mod tests {
         path
     }
 
-    fn tempdir(tag: &str) -> PathBuf {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let dir = std::env::temp_dir().join(format!(
-            "adept_fix_lib_test_{tag}_{}_{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     fn base_options() -> FixOptions {
         FixOptions::for_model("test-model", Tokenizer::O200kBase)
     }
 
     #[tokio::test]
     async fn description_rewrite_batches_sl301_and_sl206() {
-        let dir = tempdir("description");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         // A description over budget (many repeated words) and with no
         // negative guidance triggers both SL301 and SL206.
         let long_description = "extracts data from PDF files ".repeat(15);
-        let path = write_skill(&dir, long_description.trim(), "# Demo\n\nBody text.\n");
+        let path = write_skill(dir, long_description.trim(), "# Demo\n\nBody text.\n");
         let skill = adept::parse_skill(&path).unwrap();
 
         let short_description =
@@ -546,23 +598,25 @@ mod tests {
         assert!(user_content.contains("SL301"));
         assert!(user_content.contains("SL206"));
 
-        assert!(report.accepted);
+        assert!(report.accepted());
         assert!(report.residual.is_empty());
-        assert!(report.files.contains_key(&path));
-        assert!(report.files[&path].contains(short_description));
+        let files = report
+            .files()
+            .expect("accepted candidate has pending files");
+        assert!(files.contains_key(&path));
+        assert!(files[&path].contains(short_description));
         // Regression test for B5: a fix fully resolved in round 1 must
         // report 1 round used, not 2.
         assert_eq!(report.rounds_used, 1);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn body_relocation_moves_content_to_companion() {
-        let dir = tempdir("relocation");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let long_body = format!("# Demo\n\n{}", "word ".repeat(2000));
         let path = write_skill(
-            &dir,
+            dir,
             "Does a thing. Do not use for other things.",
             &long_body,
         );
@@ -582,14 +636,15 @@ mod tests {
         let options = base_options();
         let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
-        assert!(report.accepted, "{report:?}");
+        assert!(report.accepted(), "{report:?}");
         assert!(report.residual.is_empty(), "{:?}", report.residual);
-        assert!(report.files.contains_key(&path));
+        let files = report
+            .files()
+            .expect("accepted candidate has pending files");
+        assert!(files.contains_key(&path));
         let reference_path = dir.join("REFERENCE.md");
-        assert!(report.files.contains_key(&reference_path));
-        assert!(report.files[&reference_path].contains("word word"));
-
-        std::fs::remove_dir_all(&dir).ok();
+        assert!(files.contains_key(&reference_path));
+        assert!(files[&reference_path].contains("word word"));
     }
 
     /// Regression test for B1: a model response that truncates the body to
@@ -598,10 +653,11 @@ mod tests {
     /// no companions to check against.
     #[tokio::test]
     async fn body_truncation_with_no_companion_edits_is_rejected() {
-        let dir = tempdir("truncation");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let long_body = format!("# Demo\n\n{}", "word ".repeat(2000));
         let path = write_skill(
-            &dir,
+            dir,
             "Does a thing. Do not use for other things.",
             &long_body,
         );
@@ -617,19 +673,17 @@ mod tests {
         let options = base_options();
         let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
-        assert!(!report.accepted);
-        assert!(report.files.is_empty());
+        assert!(!report.accepted());
+        assert!(report.files().is_none());
         assert!(!report.residual.is_empty());
-        let reason = report
-            .rejected_reason
-            .as_deref()
-            .expect("rejection reason populated");
+        let reason = match &report.outcome {
+            FixOutcome::Rejected { reason } => reason.as_str(),
+            other => panic!("expected a rejection, got {other:?}"),
+        };
         assert!(
             reason.contains("lost content") || reason.contains("relocat"),
             "{reason}"
         );
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Regression test for B3: a second round that edits the same companion
@@ -639,13 +693,14 @@ mod tests {
     /// work.
     #[tokio::test]
     async fn two_round_companion_edit_carries_forward_prior_round_content() {
-        let dir = tempdir("two_round");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         // No negative guidance (SL206) and a heavily over-budget body
         // (SL302), so both a description-scope and a body-scope request
         // fire in round 1.
         let long_body = format!("# Demo\n\n{}", "word ".repeat(3000));
         let path = write_skill(
-            &dir,
+            dir,
             "Does a thing with many words for testing purposes here",
             &long_body,
         );
@@ -677,13 +732,14 @@ mod tests {
         let options = base_options();
         let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
-        assert!(report.accepted, "{report:?}");
+        assert!(report.accepted(), "{report:?}");
         assert!(report.residual.is_empty(), "{:?}", report.residual);
         assert_eq!(report.rounds_used, 2);
 
         let reference_path = dir.join("REFERENCE.md");
         let contents = report
-            .files
+            .files()
+            .expect("accepted candidate has pending files")
             .get(&reference_path)
             .expect("REFERENCE.md pending");
         assert!(
@@ -691,16 +747,15 @@ mod tests {
             "round 2 clobbered round 1's companion content: {contents}"
         );
         assert!(contents.contains("roundtwo"));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn model_makes_it_worse_is_rejected() {
-        let dir = tempdir("worse");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let long_body = format!("# Demo\n\n{}", "word ".repeat(2000));
         let path = write_skill(
-            &dir,
+            dir,
             "Does a thing. Do not use for other things.",
             &long_body,
         );
@@ -714,18 +769,17 @@ mod tests {
         let options = base_options();
         let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
-        assert!(!report.accepted);
-        assert!(report.files.is_empty());
+        assert!(!report.accepted());
+        assert!(report.files().is_none());
         assert!(!report.residual.is_empty());
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn select_and_ignore_restrict_attempted_set() {
-        let dir = tempdir("select");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let long_description = "extracts data from PDF files ".repeat(15);
-        let path = write_skill(&dir, long_description.trim(), "# Demo\n\nBody text.\n");
+        let path = write_skill(dir, long_description.trim(), "# Demo\n\nBody text.\n");
         let skill = adept::parse_skill(&path).unwrap();
 
         let mut options = base_options();
@@ -745,15 +799,14 @@ mod tests {
         let report = fix_skill(&mock, &skill, &options).await.unwrap();
         assert!(report.attempted.iter().all(|d| d.code != "SL206"));
         assert!(report.attempted.iter().any(|d| d.code == "SL301"));
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]
     async fn no_fixable_diagnostics_is_a_noop() {
-        let dir = tempdir("noop");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
         let path = write_skill(
-            &dir,
+            dir,
             "Extracts data from PDF forms. Do not use for scanned images.",
             "# Demo\n\nShort body.\n",
         );
@@ -764,10 +817,8 @@ mod tests {
         let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
         assert!(report.attempted.is_empty());
-        assert!(!report.accepted);
-        assert!(report.files.is_empty());
+        assert!(!report.accepted());
+        assert!(report.files().is_none());
         assert_eq!(mock.call_count(), 0);
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
