@@ -32,7 +32,12 @@ pub struct ScoreFileConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct FixFileConfig {
+    /// The model identifier to request for fix rewrites, e.g.
+    /// `"gpt-4o-mini"`. `None` falls back to `--model` or `ADEPT_MODEL`;
+    /// with none of those set, `adept fix` exits 2.
     pub model: Option<String>,
+    /// The base URL of the OpenAI-compatible endpoint to call. `None` falls
+    /// back to `--base-url`, `ADEPT_BASE_URL`, or the OpenAI default.
     pub base_url: Option<String>,
     /// Which `tiktoken-rs` BPE encoding to use for token counting. `None`
     /// falls back to [`adept::Tokenizer::default`] (`o200k_base`).

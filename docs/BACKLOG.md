@@ -73,6 +73,29 @@ Documented in `crates/adept_fmt`, each visible as an unexpected diff to users:
 - Text escaping covers a conservative subset rather than every line-start
   ambiguity.
 
+### `adept fix` writes are not cross-file atomic
+`adept_fix::write_all_transactionally` writes every file in a batch to a
+sibling temp file first and only renames into place once all temp writes
+have succeeded, so a normal I/O error never partially applies a batch. But
+each `rename` is atomic only *per file*, not across the whole batch — a
+crash or power loss between the first and last rename in a multi-file fix
+(SKILL.md plus one or more relocated companion files) can leave the batch
+partially applied. Accepted known limitation: there is no cross-file
+transaction log, and the exposure window is short (all fallible work
+happens before any rename). Documented in `crates/adept_fix/src/writer.rs`.
+
+### `adept fix` never rewrites cross-skill (`SetRule`) findings
+Only single-skill (`SkillRule`) diagnostics tagged `FixKind::Llm` (`SL206`,
+`SL301`, `SL302`) are ever attempted by `fix_skill` — cross-skill findings
+from `SetRule`s (`SL401` `duplicate-skill-name`, `SL402`
+`similar-description`, `SL403` `overlapping-trigger-phrasing`) are reported
+by `adept check` as usual but `adept fix` never attempts to resolve them.
+This is deliberate, not an oversight: a cross-skill rewrite would need to
+reconcile changes across multiple skills' files in one candidate, which is
+a materially different (and riskier) problem than the single-skill
+description/body rewrites `fix_skill` does today. Accepted known
+limitation; see `crates/adept_fix/src/lib.rs` module docs.
+
 ### Parse errors bypass the rule pipeline
 `SL001`/`SL002`/`SL003` are synthesized by a `match` on `AdeptError` in
 `Linter::lint_set`, which re-inlines the enable/severity logic that

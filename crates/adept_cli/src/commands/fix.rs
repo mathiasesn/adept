@@ -8,6 +8,8 @@ use crate::cli::{FixArgs, OutputFormat};
 use crate::commands::check::apply_select_ignore;
 use crate::config::AdeptConfig;
 
+/// Exit code contract: 0 = clean/no pending changes, 1 = changes pending
+/// (`--check`), 2 = usage/I/O error.
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_CHANGES_PENDING: i32 = 1;
 pub const EXIT_USAGE_ERROR: i32 = 2;
@@ -82,10 +84,9 @@ pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
         }
     };
 
-    let skillset = skills.clone();
     let mut reports: Vec<FixReport> = Vec::new();
     for skill in &skills {
-        let report = runtime.block_on(fix_skill(&client, skill, &skillset, &options));
+        let report = runtime.block_on(fix_skill(&client, skill, &options));
         match report {
             Ok(report) => reports.push(report),
             Err(err) => {
@@ -130,7 +131,7 @@ pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
                     "adept: error: failed to write fixes for {}: {err}",
                     report.skill_name
                 );
-                return 2;
+                return EXIT_USAGE_ERROR;
             }
             written += 1;
         }
@@ -187,10 +188,9 @@ fn build_options(
 pub async fn run_with_client(
     client: &dyn adept_score::LlmClient,
     skill: &Skill,
-    skillset: &[Skill],
     options: &FixOptions,
 ) -> Result<String, adept_fix::FixError> {
-    let report = fix_skill(client, skill, skillset, options).await?;
+    let report = fix_skill(client, skill, options).await?;
     Ok(report.render())
 }
 
@@ -269,7 +269,7 @@ mod tests {
         let skill = sample_skill();
         let options = FixOptions::for_model("test-model", adept::Tokenizer::default());
 
-        let rendered = run_with_client(&mock, &skill, &[], &options).await.unwrap();
+        let rendered = run_with_client(&mock, &skill, &options).await.unwrap();
         assert!(rendered.contains("adept fix: pdf-filler"));
         assert!(rendered.contains("no LLM-fixable diagnostics found"));
     }

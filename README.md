@@ -147,6 +147,45 @@ adept: error: could not resolve an LLM model to score with.
   optionally also set ADEPT_BASE_URL (defaults to the OpenAI API) and ADEPT_API_KEY
 ```
 
+## `adept fix`
+
+LLM-assisted autofix for the lint diagnostics that need rewriting rather
+than a mechanical transform (`SL206 no-negative-guidance`, `SL301
+description-tokens-over-budget`, `SL302 body-tokens-over-budget`).
+**Preview by default** — it never touches disk unless you pass `--write`:
+
+```console
+$ adept fix path/to/skill/SKILL.md
+adept fix: pdf-filler
+1 round used
+  resolved  SL302 SKILL.md body is 1842 tokens, over the budget of 1500
+accepted
+
+--- SKILL.md
++++ SKILL.md
+...
+```
+
+| Flag | Purpose |
+| ------------- | ----------------------------------------------------------- |
+| `--write`     | Apply pending changes to disk (atomic, all-or-nothing per skill). |
+| `--check`     | Exit `1` if any skill has pending changes; prints nothing else. |
+| `--diff`      | Print only the unified diff, not the full report.            |
+| `--select` / `--ignore` | Restrict which rule codes/names are attempted, same as `check`. |
+| `--max-rounds <n>` | Bound the fix/re-lint retry loop (default `2`).          |
+| `--model <M>` / `--base-url <U>` | LLM overrides, resolved against `[fix]`, not `[score]`. |
+
+Uses the same `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY`
+environment variables and `--model`/`--base-url` flags as `adept score`,
+but resolved against the independent `[fix]` config section (see
+Configuration below) — `adept fix` can point at a different model than
+`adept score`. If no model can be resolved, it exits `2` with the same
+kind of actionable message `adept score` gives.
+
+A fix candidate for `SL302` is rejected (even if it clears the diagnostic)
+unless it *relocates* content into companion files rather than deleting
+it — the token-conservation guard in `adept_fix::relocate`.
+
 ## `adept mcp`
 
 Runs `adept` as an MCP server over stdio, exposing the static/offline
@@ -203,9 +242,18 @@ line-width = 100
 
 [score]
 model = "gpt-4o-mini"
-base-url = "https://api.openai.com/v1"
+base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
+
+[fix]
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+tokenizer = "o200k_base"  # or "cl100k_base"
+max_rounds = 2             # falls back to adept_fix::DEFAULT_MAX_ROUNDS
 ```
+
+`[fix]` is fully independent of `[score]` — set both if you want `fix` and
+`score` to use different models.
 
 Precedence: CLI flag > config file value > built-in default.
 

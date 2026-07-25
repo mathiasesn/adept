@@ -76,11 +76,6 @@ pub enum FixError {
         path: String,
     },
 
-    /// A candidate for an `SL302` body relocation lost content instead of
-    /// moving it; see [`relocate::conserves_content`].
-    #[error(transparent)]
-    Conservation(#[from] ConservationError),
-
     /// An I/O error reading an original companion file while assembling or
     /// checking a candidate.
     #[error("I/O error: {0}")]
@@ -117,6 +112,12 @@ pub struct FixReport {
     /// `false`. Never written by this crate — pass to
     /// [`writer::write_all_transactionally`] to apply.
     pub files: BTreeMap<PathBuf, String>,
+    /// Why the final round's candidate was rejected, if `accepted` is
+    /// `false` and at least one round ran. `None` when nothing was
+    /// attempted, or when a candidate was accepted. Populated for both
+    /// rejection paths: a candidate that didn't shrink the fixable set, and
+    /// one that tripped the [`relocate::conserves_content`] guard.
+    pub rejected_reason: Option<String>,
 }
 
 impl FixReport {
@@ -142,11 +143,13 @@ impl FixReport {
         for d in &self.residual {
             out.push_str(&format!("  residual  {} {}\n", d.code, d.message));
         }
-        out.push_str(if self.accepted {
-            "accepted\n"
+        if self.accepted {
+            out.push_str("accepted\n");
+        } else if let Some(reason) = &self.rejected_reason {
+            out.push_str(&format!("rejected: {reason}\n"));
         } else {
-            "rejected: no candidate improved on the original\n"
-        });
+            out.push_str("rejected: no candidate improved on the original\n");
+        }
 
         if !self.diff.is_empty() {
             out.push('\n');
@@ -281,10 +284,11 @@ async fn request_body_fix(
     FixResponse::parse(&response.content)
 }
 
-/// Attempt to fix `skill`'s LLM-fixable lint diagnostics, against
-/// `skillset` for context (currently unused beyond being part of the public
-/// surface for future cross-skill-aware prompting; only `skill`'s own
-/// diagnostics are ever attempted).
+/// Attempt to fix `skill`'s LLM-fixable lint diagnostics.
+///
+/// Only `skill`'s own single-skill (`SkillRule`) diagnostics are ever
+/// attempted; cross-skill (`SetRule`) findings are reported by `adept check`
+/// but never auto-rewritten here (see the module docs).
 ///
 /// See the module docs for the overall loop. This function never writes to
 /// disk (beyond reading pre-existing companion files to assemble full new
@@ -298,7 +302,6 @@ async fn request_body_fix(
 pub async fn fix_skill(
     client: &dyn LlmClient,
     skill: &Skill,
-    _skillset: &[Skill],
     options: &FixOptions,
 ) -> Result<FixReport, FixError> {
     let linter = Linter::new(options.lint_config.clone())?;
@@ -317,6 +320,7 @@ pub async fn fix_skill(
             accepted: false,
             diff: String::new(),
             files: BTreeMap::new(),
+            rejected_reason: None,
         });
     }
 
@@ -331,12 +335,13 @@ pub async fn fix_skill(
     let mut best_files: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut accepted = false;
     let mut rounds_used = 0;
+    let mut rejected_reason: Option<String> = None;
 
     for round in 1..=options.max_rounds {
-        rounds_used = round;
         if current.is_empty() {
             break;
         }
+        rounds_used = round;
 
         let description_group: Vec<&Diagnostic> = current
             .iter()
@@ -383,7 +388,21 @@ pub async fn fix_skill(
         let mut companions: BTreeMap<PathBuf, String> = BTreeMap::new();
         for edit in &companion_edits {
             let resolved = candidate::resolve_companion_path(&skill_dir, &edit.path, &skill.path)?;
-            let existing = std::fs::read_to_string(&resolved).unwrap_or_default();
+            // Prefer an in-progress (already-pending) version of this file
+            // from an earlier round over the on-disk original, so a second
+            // round editing the same companion appends to what round one
+            // produced instead of clobbering it and feeding the
+            // conservation guard a stale original (see FixError::Io docs
+            // for the disk-read fallback below).
+            let existing = if let Some(pending) = best_files.get(&resolved) {
+                pending.clone()
+            } else {
+                match std::fs::read_to_string(&resolved) {
+                    Ok(contents) => contents,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+                    Err(err) => return Err(FixError::Io(err)),
+                }
+            };
             let merged = format!("{existing}{}", edit.appended_content);
             companions.insert(resolved, merged);
         }
@@ -393,8 +412,13 @@ pub async fn fix_skill(
             companions: companions.clone(),
         };
 
-        if !body_group.is_empty() && !companions.is_empty() {
-            relocate::conserves_content(skill, &fix_candidate, &tokens)?;
+        if !body_group.is_empty() {
+            if let Err(err) = relocate::conserves_content(skill, &fix_candidate, &tokens) {
+                rejected_reason = Some(format!(
+                    "candidate lost content instead of relocating it ({err})"
+                ));
+                break;
+            }
         }
 
         let candidate_skill = AnthropicSkillParser.parse_str(&skill.path, &formatted)?;
@@ -410,6 +434,7 @@ pub async fn fix_skill(
             }
             current = candidate_fixable;
         } else {
+            rejected_reason = Some("no candidate improved on the original".to_string());
             break;
         }
     }
@@ -432,7 +457,11 @@ pub async fn fix_skill(
             if path == &skill.path {
                 continue;
             }
-            let existing = std::fs::read_to_string(path).unwrap_or_default();
+            let existing = match std::fs::read_to_string(path) {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(err) => return Err(FixError::Io(err)),
+            };
             originals.insert(path.clone(), existing);
         }
         diff::render_multi_file_diff(&originals, &best_files)
@@ -453,6 +482,7 @@ pub async fn fix_skill(
         } else {
             BTreeMap::new()
         },
+        rejected_reason: if accepted { None } else { rejected_reason },
     })
 }
 
@@ -508,7 +538,7 @@ mod tests {
             MockLlmClient::with_texts(vec![format!(r#"{{"description": "{short_description}"}}"#)]);
 
         let options = base_options();
-        let report = fix_skill(&mock, &skill, &[], &options).await.unwrap();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
         assert_eq!(mock.call_count(), 1);
         let request = &mock.calls()[0];
@@ -520,6 +550,9 @@ mod tests {
         assert!(report.residual.is_empty());
         assert!(report.files.contains_key(&path));
         assert!(report.files[&path].contains(short_description));
+        // Regression test for B5: a fix fully resolved in round 1 must
+        // report 1 round used, not 2.
+        assert_eq!(report.rounds_used, 1);
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -547,7 +580,7 @@ mod tests {
         let mock = MockLlmClient::with_texts(vec![response]);
 
         let options = base_options();
-        let report = fix_skill(&mock, &skill, &[], &options).await.unwrap();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
         assert!(report.accepted, "{report:?}");
         assert!(report.residual.is_empty(), "{:?}", report.residual);
@@ -555,6 +588,109 @@ mod tests {
         let reference_path = dir.join("REFERENCE.md");
         assert!(report.files.contains_key(&reference_path));
         assert!(report.files[&reference_path].contains("word word"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test for B1: a model response that truncates the body to
+    /// clear `SL302` but proposes zero `companion_edits` must be rejected by
+    /// the conservation guard, not silently accepted just because there are
+    /// no companions to check against.
+    #[tokio::test]
+    async fn body_truncation_with_no_companion_edits_is_rejected() {
+        let dir = tempdir("truncation");
+        let long_body = format!("# Demo\n\n{}", "word ".repeat(2000));
+        let path = write_skill(
+            &dir,
+            "Does a thing. Do not use for other things.",
+            &long_body,
+        );
+        let skill = adept::parse_skill(&path).unwrap();
+
+        // Well under budget, so the candidate would otherwise be accepted —
+        // but it deletes almost all the content instead of relocating it,
+        // and proposes no companion_edits at all.
+        let short_body = "# Demo\n\nShort.\n";
+        let response = serde_json::json!({ "body": short_body }).to_string();
+        let mock = MockLlmClient::with_texts(vec![response]);
+
+        let options = base_options();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
+
+        assert!(!report.accepted);
+        assert!(report.files.is_empty());
+        assert!(!report.residual.is_empty());
+        let reason = report
+            .rejected_reason
+            .as_deref()
+            .expect("rejection reason populated");
+        assert!(
+            reason.contains("lost content") || reason.contains("relocat"),
+            "{reason}"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Regression test for B3: a second round that edits the same companion
+    /// file an earlier round already relocated content into must build on
+    /// that in-progress content, not re-read the (still nonexistent, since
+    /// nothing has been written to disk yet) file and clobber round one's
+    /// work.
+    #[tokio::test]
+    async fn two_round_companion_edit_carries_forward_prior_round_content() {
+        let dir = tempdir("two_round");
+        // No negative guidance (SL206) and a heavily over-budget body
+        // (SL302), so both a description-scope and a body-scope request
+        // fire in round 1.
+        let long_body = format!("# Demo\n\n{}", "word ".repeat(3000));
+        let path = write_skill(
+            &dir,
+            "Does a thing with many words for testing purposes here",
+            &long_body,
+        );
+        let skill = adept::parse_skill(&path).unwrap();
+
+        // Round 1: resolves SL206, but only partially relocates the body —
+        // still over budget, so SL302 survives into round 2.
+        let round1_description =
+            r#"{"description": "Does a thing. Do not use for other things."}"#.to_string();
+        let round1_body = serde_json::json!({
+            "body": format!("# Demo\n\n{}", "word ".repeat(1600)),
+            "companion_edits": [
+                {"path": "REFERENCE.md", "appended_content": "roundone ".repeat(1400)}
+            ]
+        })
+        .to_string();
+        // Round 2: fully resolves SL302 by relocating the rest, appending
+        // to the same companion file.
+        let round2_body = serde_json::json!({
+            "body": "# Demo\n\nSee REFERENCE.md for details.\n",
+            "companion_edits": [
+                {"path": "REFERENCE.md", "appended_content": "roundtwo ".repeat(1600)}
+            ]
+        })
+        .to_string();
+
+        let mock = MockLlmClient::with_texts(vec![round1_description, round1_body, round2_body]);
+
+        let options = base_options();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
+
+        assert!(report.accepted, "{report:?}");
+        assert!(report.residual.is_empty(), "{:?}", report.residual);
+        assert_eq!(report.rounds_used, 2);
+
+        let reference_path = dir.join("REFERENCE.md");
+        let contents = report
+            .files
+            .get(&reference_path)
+            .expect("REFERENCE.md pending");
+        assert!(
+            contents.contains("roundone"),
+            "round 2 clobbered round 1's companion content: {contents}"
+        );
+        assert!(contents.contains("roundtwo"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -576,7 +712,7 @@ mod tests {
         let mock = MockLlmClient::with_texts(vec![response.clone(), response]);
 
         let options = base_options();
-        let report = fix_skill(&mock, &skill, &[], &options).await.unwrap();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
         assert!(!report.accepted);
         assert!(report.files.is_empty());
@@ -597,7 +733,7 @@ mod tests {
         let mock = MockLlmClient::with_texts(vec![
             r#"{"description": "Extracts data. Do not use for anything else."}"#,
         ]);
-        let report = fix_skill(&mock, &skill, &[], &options).await.unwrap();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
         assert_eq!(report.attempted.len(), 1);
         assert_eq!(report.attempted[0].code, "SL206");
 
@@ -606,7 +742,7 @@ mod tests {
         let mock = MockLlmClient::with_texts(vec![
             r#"{"description": "Extracts data from PDF forms reliably every time now."}"#,
         ]);
-        let report = fix_skill(&mock, &skill, &[], &options).await.unwrap();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
         assert!(report.attempted.iter().all(|d| d.code != "SL206"));
         assert!(report.attempted.iter().any(|d| d.code == "SL301"));
 
@@ -625,7 +761,7 @@ mod tests {
         let mock = MockLlmClient::with_texts(Vec::<String>::new());
 
         let options = base_options();
-        let report = fix_skill(&mock, &skill, &[], &options).await.unwrap();
+        let report = fix_skill(&mock, &skill, &options).await.unwrap();
 
         assert!(report.attempted.is_empty());
         assert!(!report.accepted);

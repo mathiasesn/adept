@@ -57,18 +57,32 @@ pub fn conserves_content(
     candidate: &FixCandidate,
     tokens: &TokenCounter,
 ) -> Result<(), ConservationError> {
-    let original_companion_tokens: usize = adept::discover_companion_files(original)
+    let original_companion_paths = adept::discover_companion_files(original);
+    let original_companion_tokens: usize = original_companion_paths
         .iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
         .map(|contents| tokens.count(&contents))
         .sum();
     let original_tokens = tokens.count(&original.source) + original_companion_tokens;
 
-    let candidate_companion_tokens: usize = candidate
-        .companions
-        .values()
-        .map(|contents| tokens.count(contents))
-        .sum();
+    // The candidate's companion total must cover the same file set as the
+    // original's: every pre-existing companion the candidate didn't touch
+    // still carries its on-disk content over unchanged, so it must be
+    // counted too — otherwise a large untouched companion makes the
+    // candidate look like it lost content it never touched.
+    let mut candidate_companion_tokens = 0usize;
+    for path in &original_companion_paths {
+        let contents = match candidate.companions.get(path) {
+            Some(contents) => contents.clone(),
+            None => std::fs::read_to_string(path).unwrap_or_default(),
+        };
+        candidate_companion_tokens += tokens.count(&contents);
+    }
+    for (path, contents) in &candidate.companions {
+        if !original_companion_paths.contains(path) {
+            candidate_companion_tokens += tokens.count(contents);
+        }
+    }
     let candidate_tokens = tokens.count(&candidate.skill_source) + candidate_companion_tokens;
 
     let min_allowed_tokens = (original_tokens as f64 * (1.0 - CONTENT_TOLERANCE)).floor() as usize;
@@ -124,6 +138,65 @@ mod tests {
             )]),
         };
         assert!(conserves_content(&original, &candidate, &counter).is_ok());
+    }
+
+    /// Regression test for the conservation guard false-rejecting when a
+    /// large pre-existing companion is on disk but never touched by the
+    /// candidate: the candidate's companion total must still count that
+    /// file's on-disk content, not just what's in `candidate.companions`.
+    #[test]
+    fn accepts_candidate_that_leaves_a_large_pre_existing_companion_untouched() {
+        let counter = TokenCounter::default();
+
+        let dir = std::env::temp_dir().join(format!(
+            "adept_fix_relocate_test_untouched_companion_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let skill_path = dir.join("SKILL.md");
+        let untouched_path = dir.join("UNTOUCHED.md");
+
+        let body = "word ".repeat(50);
+        let source = format!("---\nname: demo\ndescription: A demo skill for tests\n---\n{body}");
+        std::fs::write(&skill_path, &source).unwrap();
+        // A large pre-existing companion the model never edits.
+        let untouched_content = "word ".repeat(5000);
+        std::fs::write(&untouched_path, &untouched_content).unwrap();
+
+        let original = Skill {
+            path: skill_path,
+            frontmatter: adept::Frontmatter {
+                name: "demo".into(),
+                name_line: 2,
+                description: "A demo skill for tests".into(),
+                description_line: 3,
+                license: None,
+                license_line: None,
+                extra: Default::default(),
+            },
+            body: body.clone(),
+            body_line_offset: 5,
+            source: source.clone(),
+        };
+
+        // Candidate leaves the body (and thus total content) unchanged and
+        // touches no companions at all — a pure no-op, which must be
+        // accepted since nothing was lost.
+        let candidate = FixCandidate {
+            skill_source: source,
+            companions: BTreeMap::new(),
+        };
+
+        assert!(
+            conserves_content(&original, &candidate, &counter).is_ok(),
+            "guard must not penalize an untouched pre-existing companion"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

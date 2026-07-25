@@ -12,7 +12,7 @@ adept = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
-similar = "2"
+similar = { workspace = true }
 
 [dev-dependencies]
 # Only the formatter's test-side semantic oracle inspects raw events; the

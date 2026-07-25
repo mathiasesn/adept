@@ -34,8 +34,8 @@ pub trait Rule: Send + Sync {
     /// The severity this rule reports at unless overridden by [`LintConfig`].
     fn default_severity(&self) -> Severity;
     /// Whether (and how) diagnostics from this rule can be automatically
-    /// fixed. Defaults to [`FixKind::None`]; a future `adept_fix` crate uses
-    /// this to select which diagnostics it may attempt to fix.
+    /// fixed. Defaults to [`FixKind::None`]; the `adept_fix` crate uses this
+    /// to select which diagnostics it may attempt to fix.
     fn fix_kind(&self) -> FixKind {
         FixKind::None
     }
@@ -44,7 +44,7 @@ pub trait Rule: Send + Sync {
 /// How (if at all) a rule's diagnostics can be automatically fixed.
 ///
 /// This is metadata only: `adept` itself never fixes anything. It exists so
-/// a future `adept_fix` crate can select which diagnostics it may attempt to
+/// the `adept_fix` crate can select which diagnostics it may attempt to
 /// resolve, without hard-coding a rule-code list of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
