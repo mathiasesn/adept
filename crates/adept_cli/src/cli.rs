@@ -32,6 +32,8 @@ pub enum Command {
     Fmt(FmtArgs),
     /// Score a skill's triggering accuracy, token bloat, and overlaps using an LLM.
     Score(ScoreArgs),
+    /// Fix LLM-fixable lint diagnostics in one or more SKILL.md files using an LLM.
+    Fix(FixArgs),
     /// Run adept as an MCP server over stdio.
     Mcp,
 }
@@ -151,4 +153,54 @@ pub struct ScoreArgs {
     /// tokenizer`).
     #[arg(long, value_enum)]
     pub tokenizer: Option<TokenizerArg>,
+}
+
+#[derive(Debug, Parser)]
+pub struct FixArgs {
+    /// Files or directories to fix.
+    #[arg(required = true)]
+    pub paths: Vec<PathBuf>,
+
+    /// Write the fixed files to disk.
+    #[arg(short, long, conflicts_with = "check")]
+    pub write: bool,
+
+    /// Don't write any files; exit 1 if anything would change.
+    #[arg(long, conflicts_with = "write")]
+    pub check: bool,
+
+    /// Print a unified diff of what would change, without writing files.
+    #[arg(long)]
+    pub diff: bool,
+
+    /// Only run these rules (rule codes or kebab-case names, comma-separated
+    /// or repeated).
+    #[arg(long, value_delimiter = ',')]
+    pub select: Vec<String>,
+
+    /// Disable these rules (rule codes or kebab-case names, comma-separated
+    /// or repeated).
+    #[arg(long, value_delimiter = ',')]
+    pub ignore: Vec<String>,
+
+    /// The model to use for fixing (falls back to `ADEPT_MODEL`).
+    #[arg(long)]
+    pub model: Option<String>,
+
+    /// The OpenAI-compatible base URL (falls back to `ADEPT_BASE_URL`).
+    #[arg(long)]
+    pub base_url: Option<String>,
+
+    /// The maximum number of fix rounds to attempt before giving up.
+    #[arg(long)]
+    pub max_rounds: Option<usize>,
+
+    /// Which `tiktoken-rs` BPE encoding to count tokens with (default
+    /// `o200k-base`; overrides the config file's `[fix] tokenizer`).
+    #[arg(long, value_enum)]
+    pub tokenizer: Option<TokenizerArg>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    pub format: OutputFormat,
 }

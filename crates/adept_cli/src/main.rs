@@ -1,8 +1,8 @@
 //! `adept`: an extremely fast linter and formatter for Agent Skills.
 //!
-//! This binary wires together the `adept` (core/rules), `adept_fmt`, and
-//! `adept_score` library crates into four subcommands: `check`, `fmt`,
-//! `score`, and `mcp`.
+//! This binary wires together the `adept` (core/rules), `adept_fmt`,
+//! `adept_score`, and `adept_fix` library crates into five subcommands:
+//! `check`, `fmt`, `score`, `fix`, and `mcp`.
 
 mod cli;
 mod commands;
@@ -48,6 +48,14 @@ fn run(cli: &Cli) -> i32 {
                 Err(code) => return code,
             };
             commands::score::run(args, &config)
+        }
+        Command::Fix(args) => {
+            let target = first_path(&args.paths).to_path_buf();
+            let config = match load_config(cli.config.as_deref(), &target) {
+                Ok(config) => config,
+                Err(code) => return code,
+            };
+            commands::fix::run(args, &config, cli.quiet)
         }
         Command::Mcp => commands::mcp::serve(),
     }

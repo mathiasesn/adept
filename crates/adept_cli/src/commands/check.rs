@@ -125,7 +125,7 @@ fn print_summary(diagnostics: &[Diagnostic]) {
 /// [`LintConfig::disabled`] set. `--select` (if non-empty) disables every
 /// rule *except* those named; `--ignore` then additionally disables the
 /// named rules.
-fn apply_select_ignore(config: &mut LintConfig, select: &[String], ignore: &[String]) {
+pub(crate) fn apply_select_ignore(config: &mut LintConfig, select: &[String], ignore: &[String]) {
     if !select.is_empty() {
         let registry = Registry::new();
         let selected: std::collections::HashSet<&str> = select.iter().map(String::as_str).collect();

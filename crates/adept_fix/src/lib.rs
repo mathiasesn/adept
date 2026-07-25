@@ -88,7 +88,7 @@ pub enum FixError {
 }
 
 /// The result of attempting to fix a skill's LLM-fixable lint diagnostics.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FixReport {
     /// The skill's name, at the time fixing started.
     pub skill_name: String,

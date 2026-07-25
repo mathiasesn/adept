@@ -24,6 +24,24 @@ pub struct ScoreFileConfig {
     pub tokenizer: Option<adept::Tokenizer>,
 }
 
+/// LLM-related settings for `adept fix`, layered under CLI flags and
+/// `ADEPT_*` environment variables by [`adept_score::LlmConfig::resolve`].
+/// Kept fully independent of [`ScoreFileConfig`]: `[fix]` never falls back
+/// to `[score]` or vice versa — the only shared fallback is the `ADEPT_*`
+/// environment variables.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct FixFileConfig {
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    /// Which `tiktoken-rs` BPE encoding to use for token counting. `None`
+    /// falls back to [`adept::Tokenizer::default`] (`o200k_base`).
+    pub tokenizer: Option<adept::Tokenizer>,
+    /// The maximum number of fix rounds to attempt before giving up.
+    /// `None` falls back to [`adept_fix::DEFAULT_MAX_ROUNDS`].
+    pub max_rounds: Option<usize>,
+}
+
 /// The full deserialized shape of an `adept.toml` config file.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -31,6 +49,7 @@ pub struct AdeptConfig {
     pub lint: LintConfig,
     pub fmt: FmtConfig,
     pub score: ScoreFileConfig,
+    pub fix: FixFileConfig,
 }
 
 /// Error loading or parsing a config file.
@@ -150,5 +169,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("nope.toml");
         assert!(resolve_config(Some(&missing), dir.path()).is_err());
+    }
+
+    #[test]
+    fn fix_and_score_sections_are_parsed_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("adept.toml"),
+            "[score]\nmodel = \"score-model\"\n\n[fix]\nmodel = \"fix-model\"\nmax_rounds = 5\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(None, dir.path()).unwrap();
+        assert_eq!(config.score.model.as_deref(), Some("score-model"));
+        assert_eq!(config.fix.model.as_deref(), Some("fix-model"));
+        assert_eq!(config.fix.max_rounds, Some(5));
+        assert_eq!(config.score.base_url, None);
+        assert_eq!(config.fix.base_url, None);
     }
 }

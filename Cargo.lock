@@ -24,6 +24,7 @@ name = "adept_cli"
 version = "0.1.0"
 dependencies = [
  "adept",
+ "adept_fix",
  "adept_fmt",
  "adept_score",
  "anyhow",
