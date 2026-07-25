@@ -1,11 +1,13 @@
 # Backlog
 
-Open items as of `930803f` (MVP baseline `9bf467a` → `2e29dff`, plus the
+Open items as of `43b6733` (MVP baseline `9bf467a` → `2e29dff`, plus the
 markdown-parsing unification, the vendored-corpus fixture, the reflow
 leaning-toothpick fix, the shared sibling-root rule, the SL303
-bundled-license exemption, and the SL104 creation-intent exemption on top).
+bundled-license exemption, the SL104 creation-intent exemption, and the
+`adept fix` command on top).
 Nothing
-here blocks the four shipped surfaces (`check`, `fmt`, `score`, `mcp`); these
+here blocks the five shipped surfaces (`check`, `fmt`, `score`, `fix`, `mcp`);
+these
 are known gaps, deliberate deferrals, and follow-ups surfaced by the two-axis
 review. `score` and `mcp` now discover sibling skills through one shared
 `adept::sibling_root` (the parent of the skill's own directory), resolving the
@@ -124,6 +126,20 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
 - `Skill` retains both `source` and `body`, ~2× file bytes per skill.
   `source` plus a body offset would halve it.
 
+`adept fix` has its own, differently-shaped performance item — its cost is
+network latency, not CPU:
+
+- **Per-skill LLM calls run sequentially.** `commands/fix.rs` loops over the
+  discovered skills and `block_on`s one `fix_skill` at a time, so fixing N
+  skills costs N × (rounds × request latency) even though the calls are
+  independent. Buffering them through a bounded `futures` concurrency limit is
+  the single biggest wall-clock win available for multi-skill runs. Deliberately
+  deferred out of the cleanup pass because it is a **behavior** change, not a
+  simplification: it reorders which skill's error aborts the run (today the
+  first in path order, always) and changes rate-limit exposure against the
+  configured endpoint. Wants its own task, with a concurrency cap sourced from
+  `[fix]` config rather than hardcoded.
+
 ## Test coverage
 
 - **Prose reflow is partly covered.** The proptest still excludes tables,
@@ -210,6 +226,27 @@ Deliberately not done, since `check` runs ~18ms against a 1s target
   `score` can still reach different conclusions about the same pair.
 - **`--statistics` prints counts in addition to diagnostics**, not instead of.
   One line in `check.rs` if instead-of is wanted.
+- **`FixFileConfig` and `ScoreFileConfig` are structurally identical.** Both
+  carry `model`, `base_url` and `tokenizer` (`fix` adds `max_rounds`), and both
+  resolve through the same shared `resolve_llm_client` helper. A
+  `#[serde(flatten)]`ed common `LlmFileConfig` would remove the duplication, at
+  the cost of making the two sections harder to document independently. Not
+  worth it at three fields; revisit if a third LLM-backed command appears or
+  the shared field set grows. The independence of the `[fix]` and `[score]`
+  *sections* is a spec requirement and must survive any such refactor — this is
+  about the Rust structs, not the TOML surface.
+- **`FixKind::Deterministic` is a documented placeholder with no
+  implementors.** It exists so the tag's shape does not have to change when
+  mechanical autofixes land (spec non-goal: "those belong on a future
+  `check --fix`"). Retained deliberately; do not delete it as dead code.
+- **`adept_fix` is the one crate that depends on its siblings.** ARCHI's
+  layering rule is otherwise one-way (everything depends on `adept`, siblings
+  never on each other), but the spec explicitly mandates reusing
+  `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather
+  than duplicating HTTP/auth or printer code. Recorded in `docs/ARCHI.md` as a
+  top-of-stack composing crate that nothing else may depend on. The alternative
+  — moving the `LlmClient` stack down into `adept` — would restore the
+  original invariant at the cost of putting `reqwest` in the core crate.
 - **`SL105`'s fix suggestion reads oddly for hash-prefixed headings.** For
   `#hashtag\n========` it suggests ``write it as `# #hashtag` ``, which is
   correct CommonMark but looks like a typo. Cosmetic; the message would need to
@@ -260,6 +297,11 @@ rediscovered as bugs:
 
 - Decide the reference-link behaviour above — it changes observable output,
   so it is cheaper to settle before there are users.
-- `score` has never run against a live endpoint. Testing is mock-only by
-  design; one manual run against a real OpenAI-compatible endpoint would
-  confirm the request shape before release.
+- `score` and `fix` have never run against a live endpoint. Testing is
+  mock-only by design; one manual run of each against a real
+  OpenAI-compatible endpoint would confirm the request shape before release.
+  `fix` is the more important of the two to exercise: unlike `score` it
+  *writes*, and its accept/reject gate has only ever seen `MockLlmClient`
+  responses shaped by hand — a real model's JSON (fenced, truncated, or
+  ignoring the companion-edit contract) is the untested input class. Run it
+  with the default preview mode first, not `--write`.
