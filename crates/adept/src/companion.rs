@@ -50,8 +50,10 @@ pub fn discover_companion_files(skill: &Skill) -> Vec<PathBuf> {
 pub(crate) fn is_license_file(name: &str) -> bool {
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
     let stem = stem.to_ascii_lowercase();
-    matches!(stem.as_str(), "license" | "licence" | "copying" | "copyright")
-        || stem.starts_with("license-")
+    matches!(
+        stem.as_str(),
+        "license" | "licence" | "copying" | "copyright"
+    ) || stem.starts_with("license-")
         || stem.starts_with("licence-")
 }
 

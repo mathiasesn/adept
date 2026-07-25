@@ -8,7 +8,7 @@ use crate::skillset::SkillSet;
 use crate::text::{jaccard, word_bag};
 use crate::token::TokenCounter;
 
-use super::{impl_rule, LintConfig, Rule, SetRule};
+use super::{impl_rule, FixKind, LintConfig, Rule, SetRule};
 
 /// `SL401` `duplicate-skill-name`: two or more skills share the same
 /// frontmatter `name`.

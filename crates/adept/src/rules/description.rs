@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 use crate::token::TokenCounter;
 
-use super::{impl_rule, LintConfig, Rule, SkillRule};
+use super::{impl_rule, FixKind, LintConfig, Rule, SkillRule};
 
 const TRIGGER_PHRASES: &[&str] = &[
     "use when",
@@ -210,7 +210,13 @@ impl SkillRule for RestatesName {
 /// since not every skill needs negative guidance.
 pub struct NoNegativeGuidance;
 
-impl_rule!(NoNegativeGuidance, "SL206", "no-negative-guidance", Info);
+impl_rule!(
+    NoNegativeGuidance,
+    "SL206",
+    "no-negative-guidance",
+    Info,
+    Llm
+);
 
 impl SkillRule for NoNegativeGuidance {
     fn check(

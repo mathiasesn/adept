@@ -33,6 +33,30 @@ pub trait Rule: Send + Sync {
     fn name(&self) -> &'static str;
     /// The severity this rule reports at unless overridden by [`LintConfig`].
     fn default_severity(&self) -> Severity;
+    /// Whether (and how) diagnostics from this rule can be automatically
+    /// fixed. Defaults to [`FixKind::None`]; a future `adept_fix` crate uses
+    /// this to select which diagnostics it may attempt to fix.
+    fn fix_kind(&self) -> FixKind {
+        FixKind::None
+    }
+}
+
+/// How (if at all) a rule's diagnostics can be automatically fixed.
+///
+/// This is metadata only: `adept` itself never fixes anything. It exists so
+/// a future `adept_fix` crate can select which diagnostics it may attempt to
+/// resolve, without hard-coding a rule-code list of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FixKind {
+    /// Not automatically fixable; requires a human to address.
+    #[default]
+    None,
+    /// Fixable by a deterministic, mechanical transformation.
+    Deterministic,
+    /// Fixable, but only by an LLM able to understand and rewrite content
+    /// (e.g. rephrasing a description or trimming prose).
+    Llm,
 }
 
 /// A rule that checks a single [`Skill`] in isolation.
@@ -60,6 +84,9 @@ pub trait SetRule: Rule {
 /// dozen lines of boilerplate.
 macro_rules! impl_rule {
     ($ty:ty, $code:literal, $name:literal, $severity:ident) => {
+        impl_rule!($ty, $code, $name, $severity, None);
+    };
+    ($ty:ty, $code:literal, $name:literal, $severity:ident, $fix_kind:ident) => {
         impl Rule for $ty {
             fn code(&self) -> &'static str {
                 $code
@@ -69,6 +96,9 @@ macro_rules! impl_rule {
             }
             fn default_severity(&self) -> Severity {
                 Severity::$severity
+            }
+            fn fix_kind(&self) -> FixKind {
+                FixKind::$fix_kind
             }
         }
     };
@@ -85,6 +115,8 @@ pub struct RuleMeta {
     pub name: &'static str,
     /// The default severity for this rule.
     pub default_severity: Severity,
+    /// Whether (and how) this rule's diagnostics can be automatically fixed.
+    pub fix_kind: FixKind,
 }
 
 /// The set of all known rules.
@@ -107,6 +139,7 @@ const PARSE_ERROR_META: [RuleMeta; 1] = [RuleMeta {
     code: "SL003",
     name: "malformed-frontmatter",
     default_severity: Severity::Error,
+    fix_kind: FixKind::None,
 }];
 
 impl Registry {
@@ -178,6 +211,7 @@ impl Registry {
                 code: r.code(),
                 name: r.name(),
                 default_severity: r.default_severity(),
+                fix_kind: r.fix_kind(),
             }
         }
         self.skill_rules
@@ -495,5 +529,28 @@ fn parse_error_diagnostic(path: &std::path::Path, err: &AdeptError) -> Option<Di
         | AdeptError::NotFound(_)
         | AdeptError::TokenizerLoad { .. }
         | AdeptError::Json(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_expected_rules_are_tagged_llm_fixable() {
+        let registry = Registry::new();
+        let llm_codes: HashSet<&'static str> = registry
+            .all_meta()
+            .into_iter()
+            .filter(|m| m.fix_kind == FixKind::Llm)
+            .map(|m| m.code)
+            .collect();
+        let expected: HashSet<&'static str> = ["SL206", "SL301", "SL302"].into_iter().collect();
+        assert_eq!(llm_codes, expected);
+
+        let missing_description = registry
+            .by_code("SL001")
+            .expect("SL001 should be a registered rule");
+        assert_eq!(missing_description.fix_kind, FixKind::None);
     }
 }

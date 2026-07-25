@@ -16,9 +16,7 @@ use std::io::{BufRead, Write};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use adept::{
-    sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet,
-};
+use adept::{sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
 use adept_fmt::{format_str, FmtConfig};
 use adept_score::{LlmConfig, OpenAiCompatClient, ScoreOptions};
 use serde_json::{json, Value};
@@ -510,15 +508,28 @@ mod tests {
         let target_path = write_skill(root.path(), "alpha", "Does alpha things. Use when alpha.");
         write_skill(root.path(), "beta", "Does beta things. Use when beta.");
 
-        let (source, path) = read_source(&json!({ "path": target_path.to_str().unwrap() })).unwrap();
+        let (source, path) =
+            read_source(&json!({ "path": target_path.to_str().unwrap() })).unwrap();
         let skill = AnthropicSkillParser.parse_str(&path, &source).unwrap();
 
-        let skillset =
-            overlap_skillset(&json!({ "path": target_path.to_str().unwrap() }), &path, &skill);
+        let skillset = overlap_skillset(
+            &json!({ "path": target_path.to_str().unwrap() }),
+            &path,
+            &skill,
+        );
 
-        let names: Vec<&str> = skillset.iter().map(|s| s.frontmatter.name.as_str()).collect();
-        assert!(names.contains(&"alpha"), "target must be present: {names:?}");
-        assert!(names.contains(&"beta"), "sibling must be discovered: {names:?}");
+        let names: Vec<&str> = skillset
+            .iter()
+            .map(|s| s.frontmatter.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"alpha"),
+            "target must be present: {names:?}"
+        );
+        assert!(
+            names.contains(&"beta"),
+            "sibling must be discovered: {names:?}"
+        );
     }
 
     #[test]
@@ -545,7 +556,10 @@ mod tests {
             &skill,
         );
 
-        let names: Vec<&str> = skillset.iter().map(|s| s.frontmatter.name.as_str()).collect();
+        let names: Vec<&str> = skillset
+            .iter()
+            .map(|s| s.frontmatter.name.as_str())
+            .collect();
         assert!(names.contains(&"gamma"), "directory sibling: {names:?}");
         assert!(names.contains(&"sample"), "target appended: {names:?}");
     }

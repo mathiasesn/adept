@@ -11,7 +11,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 use crate::token::TokenCounter;
 
-use super::{impl_rule, LintConfig, Rule, SkillRule};
+use super::{impl_rule, FixKind, LintConfig, Rule, SkillRule};
 
 /// `SL301` `description-tokens-over-budget`: the description exceeds
 /// [`LintConfig::description_max_tokens`].
@@ -21,7 +21,8 @@ impl_rule!(
     DescriptionTokenBudget,
     "SL301",
     "description-tokens-over-budget",
-    Error
+    Error,
+    Llm
 );
 
 impl SkillRule for DescriptionTokenBudget {
@@ -50,7 +51,13 @@ impl SkillRule for DescriptionTokenBudget {
 /// [`LintConfig::body_max_tokens`].
 pub struct BodyTokenBudget;
 
-impl_rule!(BodyTokenBudget, "SL302", "body-tokens-over-budget", Error);
+impl_rule!(
+    BodyTokenBudget,
+    "SL302",
+    "body-tokens-over-budget",
+    Error,
+    Llm
+);
 
 impl SkillRule for BodyTokenBudget {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {

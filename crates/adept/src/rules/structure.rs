@@ -4,7 +4,7 @@ use crate::diagnostic::{Diagnostic, Severity};
 use crate::markdown;
 use crate::skill::Skill;
 
-use super::{impl_rule, LintConfig, Rule, SkillRule};
+use super::{impl_rule, FixKind, LintConfig, Rule, SkillRule};
 
 /// `SL101` `empty-body`: the markdown body (everything after the
 /// frontmatter) is empty or whitespace-only.

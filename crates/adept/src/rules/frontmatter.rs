@@ -8,7 +8,7 @@
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
 
-use super::{impl_rule, LintConfig, Rule, SkillRule};
+use super::{impl_rule, FixKind, LintConfig, Rule, SkillRule};
 
 /// `SL001` `missing-description`: the `description` frontmatter field is
 /// present but empty (or whitespace-only).
