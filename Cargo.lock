@@ -40,6 +40,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "adept_fix"
+version = "0.1.0"
+dependencies = [
+ "adept",
+ "adept_fmt",
+ "adept_score",
+ "serde",
+ "serde_json",
+ "similar",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "adept_fmt"
 version = "0.1.0"
 dependencies = [

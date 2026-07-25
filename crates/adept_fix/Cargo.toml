@@ -1,0 +1,20 @@
+[package]
+name = "adept_fix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "LLM-assisted lint autofix for Agent Skills. Owned by the fix agent."
+
+[dependencies]
+adept = { workspace = true }
+adept_score = { workspace = true }
+adept_fmt = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+similar = "2"
+
+[dev-dependencies]
+tokio = { workspace = true }
