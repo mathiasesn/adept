@@ -16,14 +16,22 @@
 //! it.
 
 pub mod candidate;
+pub mod create;
 pub mod diff;
 pub mod fix;
+mod gate;
 pub mod prompts;
 pub mod writer;
 
-pub use candidate::{resolve_companion_path, CompanionEdit, FixCandidate, FixResponse};
+pub use candidate::{
+    resolve_companion_path, CompanionEdit, FixCandidate, FixResponse, UnsafeCompanionPath,
+};
+pub use create::{create_skill, CreateError, CreateOptions, CreateOutcome, CreateReport};
 pub use fix::{fix_skill, FixError, FixOptions, FixOutcome, FixReport, DEFAULT_MAX_ROUNDS};
 pub use prompts::{
-    BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, DESCRIPTION_FIX_SYSTEM, DESCRIPTION_FIX_USER_TEMPLATE,
+    BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, CREATE_AUTHORING_PROMPT_VERSION,
+    CREATE_AUTHORING_SYSTEM, CREATE_AUTHORING_USER_TEMPLATE, CREATE_EVAL_PROMPT_VERSION,
+    CREATE_EVAL_SYSTEM, CREATE_EVAL_USER_TEMPLATE, CREATE_REPAIR_USER_TEMPLATE,
+    DESCRIPTION_FIX_SYSTEM, DESCRIPTION_FIX_USER_TEMPLATE,
 };
 pub use writer::{write_all_transactionally, write_atomically};

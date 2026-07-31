@@ -8,6 +8,27 @@ use serde::Deserialize;
 
 use crate::fix::FixError;
 
+/// A companion-file path failed [`resolve_companion_path`]'s sandboxing
+/// checks: absolute, escaping the skill's own directory, or targeting
+/// SKILL.md itself.
+///
+/// Kept independent of any one caller's error enum (unlike the old
+/// `fix`-only shape) so both [`crate::fix`] and [`crate::create`] can convert
+/// it into their own error type via `From`, without `resolve_companion_path`
+/// depending on either.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("unsafe companion path: {path}")]
+pub struct UnsafeCompanionPath {
+    /// The rejected, model-supplied path, as given.
+    pub path: String,
+}
+
+impl From<UnsafeCompanionPath> for FixError {
+    fn from(err: UnsafeCompanionPath) -> Self {
+        FixError::UnsafeCompanionPath { path: err.path }
+    }
+}
+
 /// One companion-file edit requested by the model: append
 /// `appended_content` to the (possibly new) file at `path`, relative to the
 /// skill's own directory.
@@ -59,7 +80,8 @@ impl FixResponse {
 /// `adept_score` parses model JSON directly with no fence-stripping (its
 /// prompts rely on `json_response: true` alone); there is no existing
 /// helper of this kind to reuse, so this is a small purpose-built one.
-fn strip_code_fence(s: &str) -> &str {
+/// `pub(crate)` so `create`'s own response types can reuse it too.
+pub(crate) fn strip_code_fence(s: &str) -> &str {
     let Some(rest) = s.strip_prefix("```") else {
         return s;
     };
@@ -94,14 +116,13 @@ pub struct FixCandidate {
 /// `skill_md`. New files directly inside `skill_dir` ARE allowed.
 ///
 /// # Errors
-/// Returns [`FixError::UnsafeCompanionPath`] if `raw` fails any of the
-/// above checks.
+/// Returns [`UnsafeCompanionPath`] if `raw` fails any of the above checks.
 pub fn resolve_companion_path(
     skill_dir: &Path,
     raw: &str,
     skill_md: &Path,
-) -> Result<PathBuf, FixError> {
-    let reject = || FixError::UnsafeCompanionPath {
+) -> Result<PathBuf, UnsafeCompanionPath> {
+    let reject = || UnsafeCompanionPath {
         path: raw.to_string(),
     };
 
@@ -166,7 +187,7 @@ mod tests {
         let skill_md = dir.join("SKILL.md");
         assert!(matches!(
             resolve_companion_path(dir, "../evil.md", &skill_md),
-            Err(FixError::UnsafeCompanionPath { .. })
+            Err(UnsafeCompanionPath { .. })
         ));
     }
 
@@ -176,7 +197,7 @@ mod tests {
         let skill_md = dir.join("SKILL.md");
         assert!(matches!(
             resolve_companion_path(dir, "/etc/passwd", &skill_md),
-            Err(FixError::UnsafeCompanionPath { .. })
+            Err(UnsafeCompanionPath { .. })
         ));
     }
 
@@ -186,7 +207,7 @@ mod tests {
         let skill_md = dir.join("SKILL.md");
         assert!(matches!(
             resolve_companion_path(dir, "sub/REFERENCE.md", &skill_md),
-            Err(FixError::UnsafeCompanionPath { .. })
+            Err(UnsafeCompanionPath { .. })
         ));
     }
 
@@ -196,7 +217,7 @@ mod tests {
         let skill_md = dir.join("SKILL.md");
         assert!(matches!(
             resolve_companion_path(dir, "SKILL.md", &skill_md),
-            Err(FixError::UnsafeCompanionPath { .. })
+            Err(UnsafeCompanionPath { .. })
         ));
     }
 }

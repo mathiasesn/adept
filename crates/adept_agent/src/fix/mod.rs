@@ -28,7 +28,7 @@ mod options;
 pub mod relocate;
 
 use crate::candidate::{self, CompanionEdit, FixCandidate, FixResponse};
-use crate::{diff, prompts};
+use crate::{diff, gate, prompts};
 
 pub use options::{FixOptions, DEFAULT_MAX_ROUNDS};
 pub use relocate::{conserves_content, ConservationError, CONTENT_TOLERANCE};
@@ -489,7 +489,7 @@ pub async fn fix_skill(
         let candidate_diagnostics = linter.lint_skill(&candidate_skill);
         let candidate_fixable = fixable(&candidate_diagnostics, &linter, options);
 
-        if candidate_fixable.len() < current.len() {
+        if gate::improves_on(&current, &candidate_fixable) {
             accepted = true;
             working = candidate_skill;
             best_files.insert(skill.path.clone(), formatted);
