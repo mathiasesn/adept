@@ -2,10 +2,60 @@
 //! chat-completions backend — plus the real [`OpenAiCompatClient`]
 //! implementation and the [`crate::mock::MockLlmClient`] test double.
 
-use std::time::Duration;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+use crate::capture::{CaptureSink, CapturedCall};
+
+/// A `String` whose `Debug` and `Display` both render `****`.
+///
+/// The API key used to be a plain `String` inside a `#[derive(Debug)]`
+/// config struct, which meant a single `{:?}` anywhere — a log line, a
+/// panic message, an `assert_eq!` failure — would print it. Redaction is
+/// enforced here *by type* rather than by remembering at every call site:
+/// there is no way to render the inner value except by calling
+/// [`RedactedString::expose_secret`], which is deliberately hard to type by
+/// accident and easy to grep for.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactedString(String);
+
+impl RedactedString {
+    /// Wrap a secret.
+    #[must_use]
+    pub fn new(secret: impl Into<String>) -> Self {
+        Self(secret.into())
+    }
+
+    /// Borrow the underlying secret. Every call site of this method is a
+    /// place a secret can escape — keep them countable.
+    #[must_use]
+    pub fn expose_secret(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for RedactedString {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl fmt::Debug for RedactedString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("****")
+    }
+}
+
+impl fmt::Display for RedactedString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("****")
+    }
+}
 
 /// A single message in a chat-completion request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -200,8 +250,12 @@ pub struct ResolvedLlmConfig {
     /// `{base_url}/chat/completions`.
     pub base_url: String,
     /// The API key to send as a bearer token, if any (some local servers
-    /// require none).
-    pub api_key: Option<String>,
+    /// require none). Redacted in `Debug`/`Display` — see
+    /// [`RedactedString`]. [`LlmConfig::api_key`] stays a plain `String`
+    /// (it is the *input* side, built from CLI flags and config files);
+    /// [`LlmConfig::resolve`] is the single place the wrap happens, so
+    /// everything downstream of resolution is redacted by construction.
+    pub api_key: Option<RedactedString>,
     /// The model identifier to request.
     pub model: String,
 }
@@ -238,7 +292,8 @@ impl LlmConfig {
         let api_key = self
             .api_key
             .clone()
-            .or_else(|| std::env::var(ENV_API_KEY).ok());
+            .or_else(|| std::env::var(ENV_API_KEY).ok())
+            .map(RedactedString::from);
         let model = self
             .model
             .clone()
@@ -260,6 +315,10 @@ pub struct OpenAiCompatClient {
     config: ResolvedLlmConfig,
     max_retries: u32,
     timeout: Duration,
+    /// Opt-in on-disk payload capture. `None` — the default — means the
+    /// client behaves exactly as it did before capture existed: no extra
+    /// syscalls, no extra output.
+    capture: Option<Arc<CaptureSink>>,
 }
 
 /// Body sent to `/chat/completions`.
@@ -322,7 +381,18 @@ impl OpenAiCompatClient {
             config,
             max_retries,
             timeout,
+            capture: None,
         }
+    }
+
+    /// Builder-style: capture every request/response payload into `sink`.
+    ///
+    /// Opt-in by design — with no sink attached, stdout and stderr are
+    /// byte-identical to a build without capture at all.
+    #[must_use]
+    pub fn with_capture(mut self, sink: Arc<CaptureSink>) -> Self {
+        self.capture = Some(sink);
+        self
     }
 
     /// Resolve configuration from explicit overrides, `ADEPT_*` environment
@@ -341,7 +411,18 @@ impl OpenAiCompatClient {
         )
     }
 
-    async fn send_once(&self, request: &ChatRequest) -> Result<ChatResponse, LlmError> {
+    /// Issue exactly one HTTP call. `attempt` is the zero-based retry index
+    /// from [`LlmClient::chat`]; it is threaded in purely so that log events
+    /// and capture artifacts can be attributed to the right try.
+    ///
+    /// This is the single funnel every LLM call in the workspace passes
+    /// through — both `adept score` and `adept fix` — which is why it is the
+    /// only instrumentation site.
+    async fn send_once(
+        &self,
+        request: &ChatRequest,
+        attempt: u32,
+    ) -> Result<ChatResponse, LlmError> {
         let raw = RawRequest {
             model: &request.model,
             messages: &request.messages,
@@ -352,33 +433,190 @@ impl OpenAiCompatClient {
             }),
         };
 
-        let mut builder = self.http.post(self.endpoint()).json(&raw);
+        let endpoint = self.endpoint();
+        // Serialized once and reused for the log event and the capture
+        // artifact, so what is recorded is provably what reqwest sends.
+        let request_body = serde_json::to_string(&raw)
+            .map_err(|e| LlmError::Request(format!("failed to serialize request: {e}")))?;
+
+        tracing::debug!(
+            endpoint = %endpoint,
+            attempt,
+            model = %request.model,
+            body = %request_body,
+            "sending chat-completions request"
+        );
+        tracing::trace!(
+            endpoint = %endpoint,
+            attempt,
+            temperature = request.temperature,
+            seed = ?request.seed,
+            json_response = request.json_response,
+            message_count = request.messages.len(),
+            "chat-completions request detail"
+        );
+
+        // Collected for capture. `Authorization` is deliberately absent —
+        // it is never put into this map, so it cannot leak from it.
+        let request_headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+
+        let mut builder = self
+            .http
+            .post(&endpoint)
+            .header("content-type", "application/json")
+            .body(request_body.clone());
         if let Some(key) = &self.config.api_key {
-            builder = builder.bearer_auth(key);
+            builder = builder.bearer_auth(key.expose_secret());
         }
 
-        let response = builder.send().await.map_err(|e| {
-            if e.is_timeout() {
-                LlmError::Timeout(self.timeout)
-            } else {
-                LlmError::Request(e.to_string())
+        let started_at = jiff::Timestamp::now().to_string();
+        let clock = Instant::now();
+
+        let response = match builder.send().await {
+            Ok(response) => response,
+            Err(e) => {
+                let err = if e.is_timeout() {
+                    LlmError::Timeout(self.timeout)
+                } else {
+                    LlmError::Request(e.to_string())
+                };
+                tracing::debug!(endpoint = %endpoint, attempt, error = %err, "chat-completions request failed");
+                self.capture(CapturedCall {
+                    attempt,
+                    endpoint: endpoint.clone(),
+                    status: None,
+                    request_headers,
+                    response_headers: BTreeMap::new(),
+                    request_body,
+                    response_body: String::new(),
+                    started_at,
+                    finished_at: jiff::Timestamp::now().to_string(),
+                    duration_ms: clock.elapsed().as_millis() as u64,
+                    outcome: self.outcome_of(&err, attempt),
+                    step: None,
+                });
+                return Err(err);
             }
-        })?;
+        };
 
         let status = response.status();
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            return Err(LlmError::Status {
-                status: status.as_u16(),
-                body,
-            });
-        }
+        let response_headers = header_map(response.headers());
+        let success = status.is_success();
+        // Read the body before deciding anything: a non-2xx body and a
+        // malformed 2xx body are both payloads the reader needs on disk.
+        let body_result = response.text().await;
+        let finished_at = jiff::Timestamp::now().to_string();
+        let duration_ms = clock.elapsed().as_millis() as u64;
+        let body_text = match &body_result {
+            Ok(text) => text.clone(),
+            Err(_) if !success => String::new(),
+            Err(e) => {
+                let err = LlmError::MalformedResponse(e.to_string());
+                tracing::debug!(endpoint = %endpoint, attempt, status = status.as_u16(), error = %err, "failed to read response body");
+                self.capture(CapturedCall {
+                    attempt,
+                    endpoint: endpoint.clone(),
+                    status: Some(status.as_u16()),
+                    request_headers,
+                    response_headers,
+                    request_body,
+                    response_body: String::new(),
+                    started_at,
+                    finished_at,
+                    duration_ms,
+                    outcome: self.outcome_of(&err, attempt),
+                    step: None,
+                });
+                return Err(err);
+            }
+        };
 
-        let body_text = response
-            .text()
-            .await
-            .map_err(|e| LlmError::MalformedResponse(e.to_string()))?;
-        parse_chat_response(&body_text)
+        // Emitted before parsing, and verbatim: a body that fails
+        // `parse_chat_response` is exactly the one worth reading.
+        tracing::debug!(
+            endpoint = %endpoint,
+            attempt,
+            status = status.as_u16(),
+            body = %body_text,
+            "received chat-completions response"
+        );
+
+        let outcome = if success {
+            match parse_chat_response(&body_text) {
+                Ok(response) => {
+                    self.capture(CapturedCall {
+                        attempt,
+                        endpoint,
+                        status: Some(status.as_u16()),
+                        request_headers,
+                        response_headers,
+                        request_body,
+                        response_body: body_text,
+                        started_at,
+                        finished_at,
+                        duration_ms,
+                        outcome: "ok".to_string(),
+                        step: None,
+                    });
+                    return Ok(response);
+                }
+                Err(err) => err,
+            }
+        } else {
+            tracing::debug!(
+                endpoint = %endpoint,
+                attempt,
+                status = status.as_u16(),
+                body = %body_text,
+                "chat-completions returned a non-success status"
+            );
+            LlmError::Status {
+                status: status.as_u16(),
+                body: body_text.clone(),
+            }
+        };
+
+        self.capture(CapturedCall {
+            attempt,
+            endpoint,
+            status: Some(status.as_u16()),
+            request_headers,
+            response_headers,
+            request_body,
+            response_body: body_text,
+            started_at,
+            finished_at,
+            duration_ms,
+            outcome: self.outcome_of(&outcome, attempt),
+            step: None,
+        });
+        Err(outcome)
+    }
+
+    /// Hand one call's evidence to the capture sink, if one is attached.
+    fn capture(&self, call: CapturedCall) {
+        if let Some(sink) = &self.capture {
+            sink.record_call(&call);
+        }
+    }
+
+    /// The `outcome` string recorded for a failed call: `"retried"` when
+    /// [`LlmClient::chat`] is going to try again, otherwise the error
+    /// variant's name.
+    fn outcome_of(&self, err: &LlmError, attempt: u32) -> String {
+        if Self::should_retry(err) && attempt < self.max_retries {
+            return "retried".to_string();
+        }
+        match err {
+            LlmError::Request(_) => "Request",
+            LlmError::Timeout(_) => "Timeout",
+            LlmError::Status { .. } => "Status",
+            LlmError::MalformedResponse(_) => "MalformedResponse",
+            LlmError::EmptyChoices => "EmptyChoices",
+            LlmError::RetriesExhausted(_) => "RetriesExhausted",
+        }
+        .to_string()
     }
 
     fn should_retry(err: &LlmError) -> bool {
@@ -387,6 +625,22 @@ impl OpenAiCompatClient {
             LlmError::Status { status, .. } if *status == 429 || (500..600).contains(status)
         )
     }
+}
+
+/// Flatten reqwest's header map into something serializable.
+///
+/// Only ever applied to *response* headers; request headers are built by
+/// hand so that `Authorization` is never collected in the first place.
+fn header_map(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_string(),
+                value.to_str().unwrap_or("<non-utf8>").to_string(),
+            )
+        })
+        .collect()
 }
 
 /// Parse a raw `/chat/completions` JSON body into a [`ChatResponse`].
@@ -411,7 +665,7 @@ impl LlmClient for OpenAiCompatClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, LlmError> {
         let mut last_err = None;
         for attempt in 0..=self.max_retries {
-            match self.send_once(&request).await {
+            match self.send_once(&request, attempt).await {
                 Ok(response) => return Ok(response),
                 Err(err) if Self::should_retry(&err) && attempt < self.max_retries => {
                     let backoff = Duration::from_millis(200 * 2u64.pow(attempt));
@@ -454,6 +708,31 @@ mod tests {
         let body = r#"{"choices":[{"message":{}}]}"#;
         let response = parse_chat_response(body).unwrap();
         assert_eq!(response.content, "");
+    }
+
+    #[test]
+    fn debug_of_resolved_config_never_leaks_the_key() {
+        let resolved = ResolvedLlmConfig {
+            base_url: DEFAULT_BASE_URL.to_string(),
+            api_key: Some(RedactedString::new("sk-super-secret-value")),
+            model: "gpt-test".to_string(),
+        };
+        let rendered = format!("{resolved:?}");
+        assert!(rendered.contains("****"), "got {rendered}");
+        assert!(
+            !rendered.contains("sk-super-secret-value"),
+            "got {rendered}"
+        );
+        assert_eq!(
+            format!("{}", resolved.api_key.as_ref().unwrap()),
+            "****",
+            "Display must redact too"
+        );
+        // The one sanctioned way out.
+        assert_eq!(
+            resolved.api_key.unwrap().expose_secret(),
+            "sk-super-secret-value"
+        );
     }
 
     // Environment variables are process-global, so run all env-touching

@@ -1,0 +1,9 @@
+---
+source: crates/adept/tests/rules.rs
+assertion_line: 333
+expression: "lint_fixture(\"sl002_empty_name\")"
+---
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl002_empty_name/SKILL.md:2:1: SL002 the `name` frontmatter field is empty
+  fix: set `name` to match the skill's directory name
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl002_empty_name/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering

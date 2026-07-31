@@ -1,0 +1,11 @@
+---
+source: crates/adept/tests/rules.rs
+assertion_line: 363
+expression: "lint_fixture(\"sl102_missing_h1\")"
+---
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl102_missing_h1/SKILL.md:2:1: SL004 frontmatter `name` ("sl102-missing-h1") does not match the containing directory name ("sl102_missing_h1")
+  fix: rename the `name` field to "sl102_missing_h1", or rename the directory to "sl102-missing-h1"
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl102_missing_h1/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl102_missing_h1/SKILL.md:5:1: SL102 SKILL.md body has no top-level `#` heading
+  fix: add a single `# Title` heading near the top of the body

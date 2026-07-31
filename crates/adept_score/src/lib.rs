@@ -11,6 +11,7 @@
 //! (`#[tokio::main]` or `Runtime::block_on`) — this crate does not spin up
 //! its own runtime.
 
+pub mod capture;
 mod client;
 mod mock;
 mod overlap;
@@ -19,9 +20,11 @@ mod report;
 mod tokens;
 mod triggering;
 
+pub use capture::{CaptureSink, CapturedCall, RunMetadata};
 pub use client::{
     ChatMessage, ChatRequest, ChatResponse, ChatRole, ConfigError, LlmClient, LlmConfig, LlmError,
-    OpenAiCompatClient, ResolvedLlmConfig, DEFAULT_BASE_URL, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
+    OpenAiCompatClient, RedactedString, ResolvedLlmConfig, DEFAULT_BASE_URL, ENV_API_KEY,
+    ENV_BASE_URL, ENV_MODEL,
 };
 pub use mock::MockLlmClient;
 pub use overlap::{

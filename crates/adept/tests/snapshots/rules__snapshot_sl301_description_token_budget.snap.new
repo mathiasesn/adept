@@ -1,0 +1,11 @@
+---
+source: crates/adept/tests/rules.rs
+assertion_line: 408
+expression: "lint_fixture(\"sl301_desc_budget\")"
+---
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl301_desc_budget/SKILL.md:2:1: SL004 frontmatter `name` ("sl301-desc-budget") does not match the containing directory name ("sl301_desc_budget")
+  fix: rename the `name` field to "sl301_desc_budget", or rename the directory to "sl301-desc-budget"
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl301_desc_budget/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl301_desc_budget/SKILL.md:3:1: SL301 description token budget exceeded: 102 tokens (budget: 75)
+  fix: shorten the description below the configured token budget

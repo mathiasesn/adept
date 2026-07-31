@@ -1,0 +1,11 @@
+---
+source: crates/adept/tests/rules.rs
+assertion_line: 388
+expression: "lint_fixture(\"sl203_no_trigger\")"
+---
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl203_no_trigger/SKILL.md:2:1: SL004 frontmatter `name` ("sl203-no-trigger") does not match the containing directory name ("sl203_no_trigger")
+  fix: rename the `name` field to "sl203_no_trigger", or rename the directory to "sl203-no-trigger"
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl203_no_trigger/SKILL.md:3:1: SL203 description does not state when the skill should be used
+  fix: add trigger phrasing, e.g. "Use when the user asks to..."
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl203_no_trigger/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering

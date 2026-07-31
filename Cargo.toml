@@ -37,3 +37,5 @@ anstyle = "1"
 owo-colors = "4"
 similar = "2"
 tempfile = "3"
+tracing = "0.1"
+jiff = { version = "0.2", features = ["serde"] }

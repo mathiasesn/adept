@@ -1,0 +1,11 @@
+---
+source: crates/adept/tests/rules.rs
+assertion_line: 358
+expression: "lint_fixture(\"sl101_empty_body\")"
+---
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl101_empty_body/SKILL.md:2:1: SL004 frontmatter `name` ("sl101-empty-body") does not match the containing directory name ("sl101_empty_body")
+  fix: rename the `name` field to "sl101_empty_body", or rename the directory to "sl101-empty-body"
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl101_empty_body/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+  fix: consider adding "Do not use for..." guidance to reduce over-triggering
+/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl101_empty_body/SKILL.md:5:1: SL101 SKILL.md has no body content after the frontmatter
+  fix: add instructions describing how to use the skill
