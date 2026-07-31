@@ -202,10 +202,16 @@ block). A second call generates a synthetic eval dataset
 default**, like `fix` — nothing is written unless you pass `--write`:
 
 ```console
-$ adept create --from-file brief.md --out skills/pdf-filler
+$ adept create --from-file brief.md --out skills/pdf-filler --write
 adept create: pdf-filler
-2 rounds used, gate reached (0 errors, 0 warnings, 1 info)
-wrote: SKILL.md, evals/evals.jsonl
+2 rounds used
+0 diagnostics remaining
+3 eval case(s) generated
+  - Fill a W-9 form with the provided name and SSN [file_exists, file_contains]
+  - Reject a PDF that is not a recognized form [contains]
+  - Fill a form missing an optional field [file_exists]
+<diff of the generated SKILL.md and evals/evals.jsonl>
+wrote 2 files to skills/pdf-filler
 ```
 
 | Flag | Purpose |

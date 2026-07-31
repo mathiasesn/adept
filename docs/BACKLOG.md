@@ -422,8 +422,12 @@ sentence below in light of this amendment, not as contradicting it.
 **Item 1's "executing skill scripts" non-goal remains intact.** `create`
 generates and validates eval datasets (including the shell `command`
 assertion kind) but never runs them — no verifier engine, no runner, no
-subprocess, pinned by a dedicated test (`specs/adept-create-command.md`
-acceptance criteria). The "Deferred by design" supersession of that non-goal,
+subprocess, pinned by a dedicated test
+(`crates/adept_cli/tests/no_subprocess.rs`, which scans the workspace's own
+crate sources — comments and string literals stripped — for
+`Command::new`/`process::Command` construction) per
+`specs/adept-create-command.md` acceptance criteria. The "Deferred by design"
+supersession of that non-goal,
 recorded below against upskill item 1 (deterministic verifiers as a `fix`
 accept gate), is about a *different*, still-unimplemented piece of work and
 did not fire as part of shipping `create`.
@@ -575,16 +579,11 @@ changed and `check`/`fmt` remain offline and side-effect-free.
 
 Recorded 2026-07-31, from `specs/cli-tracing.md`.
 
-- **`crates/adept` insta snapshots bake an absolute path.** The rule snapshots
-  embed `/home/mathias/code/adept/...` as the diagnostic path, so all 21
-  rule-snapshot tests fail in any git worktree (and would fail on any other
-  machine or in CI under a different checkout root). The fix is an insta
-  path filter (`insta::with_settings!` + a `filters` entry rewriting the
-  checkout prefix) or emitting fixture-relative paths in the snapshot
-  harness. **Do not "fix" this by running `cargo insta accept` from a
-  worktree** — that bakes the worktree path in and breaks the main checkout
-  instead. Until then, treat those 21 failures as environmental when working
-  outside the primary clone.
+- **Fixed**: the `crates/adept` rule snapshots used to bake the absolute
+  checkout path into the diagnostic path, failing all rule-snapshot tests in
+  any git worktree. `96dc487` added `strip_repo_root` to
+  `crates/adept/tests/rules.rs`, so the snapshots now hold repo-relative
+  paths and the suite passes from a worktree.
 - **Captured calls do not record which logical step issued them.** Knowing
   whether a call was prompt generation, a judge sample, or fix round N is what
   makes a capture directory readable without the shell history. A

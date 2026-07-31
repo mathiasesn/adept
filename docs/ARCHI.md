@@ -73,6 +73,7 @@ Versions are declared once in the root `[workspace.dependencies]` and referenced
 | `tracing-subscriber` | 0.3 (env-filter) | **`adept_cli` only.** The one global subscriber, installed in `main` — see §16 |
 | `jiff` | 0.2 | RFC 3339 timestamps and the timestamped capture folder name (`adept_score` capture) |
 | `insta` / `criterion` / `proptest` / `assert_cmd` / `predicates` / `tempfile` | dev-only | Snapshots, benchmarks, property tests, CLI integration tests |
+| `rustyline` | 14 | Interactive brief prompt for `adept create` when no `--from-file` and stdin is a TTY |
 
 Notably **absent by design**: no `rmcp` MCP SDK (the JSON-RPC transport is hand-rolled — see §12), and no `rayon` (parallelism is a recorded deferral, see §14).
 
@@ -161,7 +162,7 @@ crates/adept_cli/          BINARY `adept` — composes all four libraries
     cli.rs                 clap derive structs; TokenizerArg mirror enum
     config.rs              adept.toml discovery (walk up) + parsing
     logging.rs             The one global tracing subscriber — stderr-only, ADEPT_LOG / -v
-    commands/{check,fmt,score,fix,mcp}.rs
+    commands/{check,fmt,score,fix,create,mcp}.rs
   tests/{cli.rs, fixtures/}
 ```
 
@@ -303,7 +304,7 @@ Each command module re-declares its own `EXIT_*` consts. Conventions per command
 
 ## 9. Core Library Surface (`adept`)
 
-Everything public is re-exported from `lib.rs`; there are no public submodules except `reporting`, `text`, and `markdown`. Adding a type means adding it to that re-export list.
+Everything public is re-exported from `lib.rs`; there are no public submodules except `reporting`, `text`, `markdown`, and `evals`. Adding a type means adding it to that re-export list.
 
 **`Skill`** is the data model: `path`, `frontmatter`, `body`, `body_line_offset`, and the complete unmodified `source`. Both `body` and `source` are retained (roughly 2× file bytes) — deliberate, since `fmt` compares against `source` byte-for-byte; halving it is a recorded deferral.
 
@@ -321,7 +322,7 @@ Everything public is re-exported from `lib.rs`; there are no public submodules e
 
 **`adept::evals`** is the published eval-dataset schema module: `Assertion` (`contains`/`file_exists`/`file_contains`/`command`, `#[serde(tag = "kind")]`), a versioned case object (`schema_version`, independent of any `PROMPT_VERSION`), and `validate` (every line parses, `schema_version` is understood, non-empty). It is documented as a contract in `docs/EVALS.md`, machine-checked against the code by a docs test the same way `docs/RULES.md` is checked against the rule registry. adept only *authors and validates* datasets — `evals::validate` never executes a `command` assertion or anything else; running a dataset is a separate harness's job.
 
-**`adept::companion::is_eval_dataset`** matches a companion path by directory name only (any path with an `evals` component), applied at `SL303` and in `adept_score`'s token-bloat view so a generated dataset is not counted as skill content. It is currently **dormant**: `discover_companion_files` is non-recursive, so a nested `evals/evals.jsonl` is never discovered as a companion file at all, and the predicate can never fire against real output today. It is kept as defence-in-depth for if discovery ever becomes recursive.
+**`adept::companion::is_eval_dataset(skill_dir, path)`** matches by directory name only, and only the first path component beneath `skill_dir` (`<skill>/evals/...`) — not any deeper or unrelated `evals` component — applied at `SL303` and in `adept_score`'s token-bloat view so a generated dataset is not counted as skill content. It is currently **dormant**: `discover_companion_files` is non-recursive, so a nested `evals/evals.jsonl` is never discovered as a companion file at all, and the predicate can never fire against real output today. It is kept as defence-in-depth for if discovery ever becomes recursive.
 
 ## 10. Formatter and Scorer Surfaces
 
@@ -391,13 +392,14 @@ Other contract points:
 - The `Linter` is built once into a `static OnceLock<Result<Linter, String>>`. `Linter::new` loads the tiktoken BPE tables, which costs far more than the lint itself; rebuilding it per tool call is not acceptable.
 - `score_skill` is **conditionally advertised**: it appears in `tools/list` only when an LLM backend can actually be resolved. Called without a resolvable config it returns a structured tool error (`isError: true`) rather than hanging or panicking. Requests are bounded by `SCORE_TIMEOUT` (30s).
 - `format_skill`'s `line_width` argument is validated to `MIN_LINE_WIDTH..=MAX_LINE_WIDTH` (20..=500); out-of-range or zero values return a structured tool error instead of producing degenerate one-word-per-line output.
+- `create_skill`'s `max_rounds` (1..=10) and both tools' `eval_cases` (1..=50) are bounded the same way: out-of-range values are rejected with a structured tool error, never clamped — an MCP client talks to this server over public JSON-RPC with no other gate on LLM spend, so every numeric argument driving LLM calls needs an explicit bound.
 - Notifications (messages with no `id`, e.g. `notifications/initialized`) return `None` and produce no output line.
 
 **Known gap**: `score_skill` passes `[skill]` as the skillset, so overlap detection over MCP is inert — a skill is only ever compared against itself. Fixing it needs a directory argument the tool schema does not yet express. Recorded in `docs/BACKLOG.md` as a pre-publish decision.
 
 ## 13. Testing & Snapshot Conventions
 
-288 tests across 21 suites, ~7-8s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
+295 tests across 22 suites, ~7-8s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
 
 **Rule tests are snapshot tests.** Each rule gets a fixture directory under `crates/adept/tests/fixtures/rules/<sl_code>_<slug>/` containing a `SKILL.md` that triggers exactly that rule, plus an `insta` snapshot under `crates/adept/tests/snapshots/rules__snapshot_<name>.snap`. There is also a `cross_clean` fixture asserting a well-formed pair produces nothing. Review snapshot diffs — an accepted snapshot is an accepted behaviour change.
 
@@ -406,8 +408,6 @@ Other contract points:
 **No test may perform network I/O.** `adept_score` tests use `MockLlmClient` (`with_texts` seeds a FIFO queue of scripted responses); the module doc states this as a rule. `adept_cli`'s scoring test drives `run_with_client`, which exists solely as a `#[cfg(test)]` seam taking `&dyn LlmClient`.
 
 **CLI tests** use `assert_cmd` + `predicates` against `tests/fixtures/{clean-skill,defective-skill}`. `tests/tracing.rs` is the guard for §15: it drives the real binary under `-vvv` and `ADEPT_LOG=trace` and asserts MCP stdout stays pure JSON-RPC and byte-identical, that `check`/`fmt --check` output is unaffected by the logging layer (and writes nothing to stderr by default), and that an uncreatable `--capture-dir` exits 2. It resolves the capture sink before any request is issued, so it needs no network.
-
-**Known environmental failure**: the `crates/adept` rule snapshots embed the absolute checkout path, so all 21 fail when run from a git worktree. Do not `cargo insta accept` from a worktree — see `docs/BACKLOG.md`.
 
 **`docs_test.rs`** asserts every registered rule code appears in `docs/RULES.md`. If you add a rule and skip the docs, CI fails.
 
