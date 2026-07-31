@@ -506,6 +506,12 @@ pub async fn create_skill(
         };
 
         let round_response_for_repair = round.response.clone();
+        // The repair prompt must describe *this* round's candidate, not
+        // whichever candidate is currently winning: `best` may be a
+        // different (better-scoring) candidate from an earlier round, and
+        // its diagnostics were produced by a different response than the
+        // one we are about to show the model for repair.
+        let diagnostics_for_repair = round.combined();
         if is_better {
             best = Some(round);
         }
@@ -514,7 +520,6 @@ pub async fn create_skill(
             break;
         }
 
-        let diagnostics_for_repair = best.as_ref().map(RoundResult::combined).unwrap_or_default();
         response = request_repair(
             client,
             brief,

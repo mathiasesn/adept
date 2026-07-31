@@ -120,7 +120,9 @@ fn read_brief_interactively() -> Result<String, i32> {
     eprintln!("Write as many lines as you like; submit with Ctrl-D, cancel with Ctrl-C.");
 
     let mut editor = DefaultEditor::new().map_err(|err| {
-        eprintln!("adept: error: failed to start interactive prompt: {err}");
+        eprintln!(
+            "adept: error: failed to start interactive prompt: {err}. Pass --from-file <path>, or pipe a brief on stdin."
+        );
         EXIT_USAGE_ERROR
     })?;
 
@@ -252,6 +254,18 @@ fn execute(
     }
 }
 
+/// The `kind` tag name for an assertion, matching the JSON `"kind"` value
+/// (`docs/EVALS.md`'s `### `kind`` headings), used to keep the human preview
+/// compact rather than dumping the full assertion payload per case.
+fn assertion_kind_name(assertion: &adept::evals::Assertion) -> &'static str {
+    match assertion {
+        adept::evals::Assertion::Contains { .. } => "contains",
+        adept::evals::Assertion::FileExists { .. } => "file_exists",
+        adept::evals::Assertion::FileContains { .. } => "file_contains",
+        adept::evals::Assertion::Command { .. } => "command",
+    }
+}
+
 fn render_human(report: &adept_agent::CreateReport, no_siblings_line: bool) -> String {
     let mut out = format!("adept create: {}\n", report.skill_name);
 
@@ -283,6 +297,15 @@ fn render_human(report: &adept_agent::CreateReport, no_siblings_line: bool) -> S
         "{} eval case(s) generated\n",
         report.eval_cases.len()
     ));
+    for case in &report.eval_cases {
+        let kinds: Vec<&str> = case.assertions.iter().map(assertion_kind_name).collect();
+        let kinds = if kinds.is_empty() {
+            "no assertions".to_string()
+        } else {
+            kinds.join(", ")
+        };
+        out.push_str(&format!("  - {} [{}]\n", case.prompt, kinds));
+    }
     out.push('\n');
 
     let empty: BTreeMap<PathBuf, String> = BTreeMap::new();

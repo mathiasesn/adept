@@ -1,8 +1,8 @@
 //! `adept`: an extremely fast linter and formatter for Agent Skills.
 //!
 //! This binary wires together the `adept` (core/rules), `adept_fmt`,
-//! `adept_score`, and `adept_agent` library crates into five subcommands:
-//! `check`, `fmt`, `score`, `fix`, and `mcp`.
+//! `adept_score`, and `adept_agent` library crates into six subcommands:
+//! `check`, `fmt`, `score`, `fix`, `create`, and `mcp`.
 
 mod cli;
 mod commands;

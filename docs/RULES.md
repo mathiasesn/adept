@@ -161,10 +161,15 @@ boilerplate legal text is not skill content and routinely exceeds any
 reasonable budget. The exemption is scoped to this rule; `adept_score`'s
 token-bloat view still counts license files.
 
-Files under a top-level `evals/` directory (e.g. `evals/evals.jsonl`, the
-synthetic eval dataset `adept create` writes alongside a generated skill)
-are also exempt, matched by directory name only — no filename pattern, no
-content sniffing. Unlike the license exemption, this one is applied to both
+Files under a top-level `evals/` directory *within the skill's own
+directory* (e.g. `<skill>/evals/evals.jsonl`, the synthetic eval dataset
+`adept create` writes alongside a generated skill) are also exempt, matched
+by directory name only — no filename pattern, no content sniffing. "Top-level"
+is relative to the skill directory, not to the filesystem root or any other
+ancestor: a file nested more than one level down (`<skill>/sub/evals/x`) is
+not exempt, and a skill that merely happens to live somewhere under a
+directory named `evals` on disk is not exempt either. Unlike the license
+exemption, this one is applied to both
 this rule and `adept_score`'s token-bloat view, since a generated dataset is
 not skill content either. In practice this exemption is currently dormant:
 companion-file discovery is non-recursive, so a file nested under `evals/`

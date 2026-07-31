@@ -2,8 +2,9 @@
 //!
 //! Implementation choice: this implements the JSON-RPC 2.0 stdio transport
 //! directly (newline-delimited JSON messages, per the MCP spec) rather than
-//! depending on the `rmcp` SDK crate. `adept mcp` exposes three tools
-//! (`check_skill`, `format_skill`, `score_skill`) behind `initialize` /
+//! depending on the `rmcp` SDK crate. `adept mcp` exposes five tools
+//! (`check_skill`, `format_skill`, `score_skill`, `create_skill`,
+//! `generate_evals`) behind `initialize` /
 //! `tools/list` / `tools/call`, which is a small enough surface that a
 //! direct implementation keeps the dependency footprint (and the risk of
 //! an unfamiliar SDK writing to stdout on our behalf) minimal.
@@ -30,6 +31,39 @@ const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// `0` (degenerate one-word-per-line output) and unreasonably large values.
 const MIN_LINE_WIDTH: u64 = 20;
 const MAX_LINE_WIDTH: u64 = 500;
+
+/// Minimum/maximum accepted `max_rounds` for `create_skill`. Same rationale
+/// as [`MIN_LINE_WIDTH`]/[`MAX_LINE_WIDTH`] (see ARCHI §12): an MCP client
+/// talks to this server over public JSON-RPC with no other gate on LLM
+/// spend, so every numeric argument that drives LLM calls needs an explicit
+/// bound, not just a type.
+const MIN_MAX_ROUNDS: u64 = 1;
+const MAX_MAX_ROUNDS: u64 = 10;
+
+/// Minimum/maximum accepted `eval_cases` for `create_skill`/`generate_evals`.
+const MIN_EVAL_CASES: u64 = 1;
+const MAX_EVAL_CASES: u64 = 50;
+
+/// Validate a bounded numeric argument the same way `format_skill` validates
+/// `line_width`: present-and-in-range is accepted, present-and-out-of-range
+/// (or the wrong type) is a hard `is_error=true` tool result, and absent is
+/// `Ok(None)` so the caller falls back to its own default.
+fn bounded_u64_argument(
+    arguments: &Value,
+    name: &str,
+    min: u64,
+    max: u64,
+) -> Result<Option<u64>, String> {
+    match arguments.get(name) {
+        None => Ok(None),
+        Some(value) => match value.as_u64() {
+            Some(n) if (min..=max).contains(&n) => Ok(Some(n)),
+            _ => Err(format!(
+                "invalid `{name}`: must be an integer between {min} and {max}"
+            )),
+        },
+    }
+}
 
 /// How long `score_skill` will wait for the LLM backend before giving up.
 const SCORE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -533,11 +567,15 @@ fn create_skill_tool_with_client(
 
     let tokenizer = adept::Tokenizer::default();
     let mut options = CreateOptions::for_model(model, tokenizer);
-    if let Some(max_rounds) = arguments.get("max_rounds").and_then(Value::as_u64) {
-        options.max_rounds = max_rounds as usize;
+    match bounded_u64_argument(arguments, "max_rounds", MIN_MAX_ROUNDS, MAX_MAX_ROUNDS) {
+        Ok(Some(max_rounds)) => options.max_rounds = max_rounds as usize,
+        Ok(None) => {}
+        Err(message) => return (message, true),
     }
-    if let Some(eval_cases) = arguments.get("eval_cases").and_then(Value::as_u64) {
-        options.eval_cases = eval_cases as usize;
+    match bounded_u64_argument(arguments, "eval_cases", MIN_EVAL_CASES, MAX_EVAL_CASES) {
+        Ok(Some(eval_cases)) => options.eval_cases = eval_cases as usize,
+        Ok(None) => {}
+        Err(message) => return (message, true),
     }
     options.name_override = arguments
         .get("name")
@@ -636,10 +674,10 @@ fn generate_evals_tool_with_client(
     };
 
     let mut options = CreateOptions::for_model(model, adept::Tokenizer::default());
-    if let Some(eval_cases) = arguments.get("eval_cases").and_then(Value::as_u64) {
-        options.eval_cases = eval_cases as usize;
-    } else {
-        options.eval_cases = DEFAULT_GENERATE_EVALS_CASES;
+    match bounded_u64_argument(arguments, "eval_cases", MIN_EVAL_CASES, MAX_EVAL_CASES) {
+        Ok(Some(eval_cases)) => options.eval_cases = eval_cases as usize,
+        Ok(None) => options.eval_cases = DEFAULT_GENERATE_EVALS_CASES,
+        Err(message) => return (message, true),
     }
 
     let runtime = match tokio::runtime::Runtime::new() {
@@ -911,6 +949,48 @@ mod tests {
             before, after,
             "generate_evals must never write to disk, found: {after:?}"
         );
+    }
+
+    #[test]
+    fn create_skill_tool_rejects_out_of_range_max_rounds_and_eval_cases() {
+        let mock = MockLlmClient::with_texts(Vec::<String>::new());
+
+        let too_many_rounds = json!({
+            "brief": "Extract PDF form data",
+            "max_rounds": MAX_MAX_ROUNDS + 1,
+        });
+        let (text, is_error) = create_skill_tool_with_client(&too_many_rounds, &mock, "test-model");
+        assert!(is_error, "out-of-range max_rounds must be rejected");
+        assert!(text.contains("max_rounds"), "text: {text}");
+
+        let too_many_cases = json!({
+            "brief": "Extract PDF form data",
+            "eval_cases": MAX_EVAL_CASES + 1,
+        });
+        let (text, is_error) = create_skill_tool_with_client(&too_many_cases, &mock, "test-model");
+        assert!(is_error, "out-of-range eval_cases must be rejected");
+        assert!(text.contains("eval_cases"), "text: {text}");
+
+        let zero_rounds = json!({
+            "brief": "Extract PDF form data",
+            "max_rounds": 0,
+        });
+        let (text, is_error) = create_skill_tool_with_client(&zero_rounds, &mock, "test-model");
+        assert!(is_error, "zero max_rounds must be rejected");
+        assert!(text.contains("max_rounds"), "text: {text}");
+    }
+
+    #[test]
+    fn generate_evals_tool_rejects_out_of_range_eval_cases() {
+        let mock = MockLlmClient::with_texts(Vec::<String>::new());
+        let arguments = json!({
+            "content": SAMPLE_SKILL,
+            "brief": "Do a thing for the user",
+            "eval_cases": MAX_EVAL_CASES + 1,
+        });
+        let (text, is_error) = generate_evals_tool_with_client(&arguments, &mock, "test-model");
+        assert!(is_error, "out-of-range eval_cases must be rejected");
+        assert!(text.contains("eval_cases"), "text: {text}");
     }
 
     #[test]

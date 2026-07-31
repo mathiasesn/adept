@@ -58,8 +58,9 @@ pub(crate) fn is_license_file(name: &str) -> bool {
 }
 
 /// Returns true if `path` (a companion file's path, as discovered by
-/// [`discover_companion_files`]) sits under a top-level `evals/` directory
-/// within the skill directory.
+/// [`discover_companion_files`]) sits under a **top-level** `evals/`
+/// directory within `skill_dir` (the directory containing the skill's
+/// `SKILL.md`).
 ///
 /// Matches **by directory name only** — no filename pattern, and explicitly
 /// no content sniffing. `adept create` writes a synthetic eval dataset to
@@ -67,6 +68,16 @@ pub(crate) fn is_license_file(name: &str) -> bool {
 /// put I/O and JSON parsing on the fast, offline `check` path, which must
 /// stay fast. A dataset a user keeps somewhere else counts as ordinary skill
 /// content, since adept did not put it there.
+///
+/// `path` is first made relative to `skill_dir` (falling back to `path`
+/// itself if it is not actually under `skill_dir`), and only the *first*
+/// component of that relative path is checked against `evals`. This is
+/// deliberate: callers pass absolute paths, and matching on any ancestor
+/// component (as an earlier version of this predicate did) would wrongly
+/// exempt any skill that merely happens to live somewhere under a directory
+/// named `evals` on disk (e.g. `/home/me/evals/my-skill/reference.md`), and
+/// would also wrongly exempt arbitrarily deep nesting
+/// (`sub/evals/x.jsonl`), neither of which is "top-level" per the spec.
 ///
 /// Lives here beside [`is_license_file`] for the same reason: recognizing an
 /// eval dataset is a companion-file naming concern; callers decide what to
@@ -84,8 +95,12 @@ pub(crate) fn is_license_file(name: &str) -> bool {
 /// consumer — including ones (like `adept_agent`'s fix conservation guard)
 /// that must never see it change.
 #[must_use]
-pub fn is_eval_dataset(path: &std::path::Path) -> bool {
-    path.components().any(|c| c.as_os_str() == "evals")
+pub fn is_eval_dataset(skill_dir: &std::path::Path, path: &std::path::Path) -> bool {
+    let relative = path.strip_prefix(skill_dir).unwrap_or(path);
+    relative
+        .components()
+        .next()
+        .is_some_and(|c| c.as_os_str() == "evals")
 }
 
 #[cfg(test)]
@@ -145,6 +160,32 @@ mod tests {
         assert_eq!(names, vec!["a.md", "b.md"]);
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn is_eval_dataset_exempts_top_level_evals_dir() {
+        let skill_dir = std::path::Path::new("/home/me/my-skill");
+        let path = skill_dir.join("evals").join("x.jsonl");
+        assert!(is_eval_dataset(skill_dir, &path));
+    }
+
+    #[test]
+    fn is_eval_dataset_rejects_nested_evals_dir() {
+        let skill_dir = std::path::Path::new("/home/me/my-skill");
+        let path = skill_dir.join("sub").join("evals").join("x.jsonl");
+        assert!(!is_eval_dataset(skill_dir, &path));
+    }
+
+    #[test]
+    fn is_eval_dataset_rejects_evals_as_ancestor_of_skill_dir() {
+        // The skill itself lives under a directory that happens to be named
+        // `evals` (e.g. `/tmp/.../evals/my-skill/`), but the companion file
+        // is not under a top-level `evals/` *within* the skill directory.
+        // This is the actual bug: matching on any path component wrongly
+        // exempted this case.
+        let skill_dir = std::path::Path::new("/tmp/whatever/evals/my-skill");
+        let path = skill_dir.join("reference.md");
+        assert!(!is_eval_dataset(skill_dir, &path));
     }
 
     #[test]

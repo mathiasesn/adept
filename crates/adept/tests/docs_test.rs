@@ -56,13 +56,35 @@ fn every_assertion_kind_is_documented_in_evals_md() {
         );
     }
 
-    // And the reverse: every kind heading in the doc corresponds to a real
-    // assertion kind, so a doc-only kind (one that would deserialize as
-    // "unknown variant") can't hide undetected.
-    for heading_kind in ["contains", "file_exists", "file_contains", "command"] {
+    // And the reverse: every `### `kind`` heading actually present in the
+    // doc corresponds to a real assertion kind, so a doc-only kind (one
+    // that would deserialize as "unknown variant") can't hide undetected.
+    // This parses the doc rather than repeating a hardcoded literal, so a
+    // kind documented but removed from the code (or vice versa) is caught
+    // by an actual disagreement between the two sources, not by two copies
+    // of the same list agreeing with themselves.
+    let documented_kinds: Vec<&str> = docs
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("### `")?;
+            rest.strip_suffix('`')
+        })
+        .collect();
+    assert!(
+        !documented_kinds.is_empty(),
+        "found no `### `kind`` headings in docs/EVALS.md; the parser above may be broken"
+    );
+    for heading_kind in &documented_kinds {
         assert!(
-            ASSERTION_KINDS.contains(&heading_kind),
+            ASSERTION_KINDS.contains(heading_kind),
             "docs/EVALS.md documents `{heading_kind}`, which is not in ASSERTION_KINDS"
+        );
+    }
+    for kind in ASSERTION_KINDS {
+        assert!(
+            documented_kinds.contains(kind),
+            "ASSERTION_KINDS lists `{kind}`, but docs/EVALS.md has no `### `{kind}`` heading for it"
         );
     }
 

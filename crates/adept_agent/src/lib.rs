@@ -1,11 +1,12 @@
-//! LLM-assisted agent capabilities for Agent Skills (`adept fix`, and future
-//! sibling commands such as `create`).
+//! LLM-assisted agent capabilities for Agent Skills (`adept fix` and
+//! `adept create`).
 //!
 //! [`candidate`] (model JSON response parsing and companion-path
 //! sandboxing), [`diff`] (multi-file unified diff rendering), [`prompts`]
-//! (prompt templates), and [`writer`] (atomic/transactional file writes) are
-//! shared machinery, kept at the crate root so a future sibling module (e.g.
-//! `create`) can reuse them without depending on [`fix`]. [`fix`] is the
+//! (prompt templates), [`writer`] (atomic/transactional file writes), and
+//! [`gate`] (accept/reject scoring for a candidate against its baseline) are
+//! shared machinery, kept at the crate root so sibling modules ([`fix`] and
+//! [`create`]) can reuse them without depending on each other. [`fix`] is the
 //! `adept fix` command's own implementation: its options and the SL302
 //! token-conservation guard are specific to that command and live under
 //! `fix::`.

@@ -106,11 +106,12 @@ impl_rule!(CompanionFileBloat, "SL303", "companion-file-bloat", Warning);
 impl SkillRule for CompanionFileBloat {
     fn check(&self, skill: &Skill, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        let skill_dir = skill.path.parent().unwrap_or(std::path::Path::new(""));
         for path in crate::companion::discover_companion_files(skill) {
             if path
                 .file_name()
                 .is_some_and(|n| crate::companion::is_license_file(&n.to_string_lossy()))
-                || crate::companion::is_eval_dataset(&path)
+                || crate::companion::is_eval_dataset(skill_dir, &path)
             {
                 continue;
             }
