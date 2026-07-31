@@ -1,17 +1,13 @@
 //! `adept fix`.
 
-use std::sync::Arc;
-
 use adept::{Skill, SkillSet};
 use adept_fix::{fix_skill, write_all_transactionally, FixOptions, FixReport, DEFAULT_MAX_ROUNDS};
-use adept_score::{
-    CaptureSink, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ENV_BASE_URL, ENV_MODEL,
-};
+use adept_score::{OpenAiCompatClient, ResolvedLlmConfig, RunMetadata};
 
 use crate::cli::{FixArgs, OutputFormat};
 use crate::commands::check::apply_select_ignore;
 use crate::config::{
-    build_runtime, resolve_capture_dir, resolve_llm_client, value_source, AdeptConfig,
+    attach_capture, build_runtime, resolve_llm_client, shared_sources, value_source, AdeptConfig,
 };
 
 /// Exit code contract: 0 = clean/no pending changes, 1 = changes pending
@@ -67,32 +63,15 @@ pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
         return EXIT_USAGE_ERROR;
     }
 
-    // Capture is opt-in and requested explicitly, so a failure to create
-    // the directory is a usage error rather than a silent skip.
-    let mut client = client;
-    let sink = match resolve_capture_dir(
+    let (client, sink) = match attach_capture(
+        client,
         args.capture_dir.as_deref(),
         config.fix.capture_dir.as_deref(),
         config.origin_dir.as_deref(),
+        |source| capture_metadata(args, config, &resolved, tokenizer, &options, source),
     ) {
-        Some((dir, source)) => {
-            let metadata = capture_metadata(args, config, &resolved, tokenizer, &options, source);
-            match CaptureSink::new(&dir, metadata) {
-                Ok(sink) => {
-                    let sink = Arc::new(sink);
-                    client = client.with_capture(Arc::clone(&sink));
-                    Some(sink)
-                }
-                Err(err) => {
-                    eprintln!(
-                        "adept: error: failed to create capture directory {}: {err}",
-                        dir.display()
-                    );
-                    return EXIT_USAGE_ERROR;
-                }
-            }
-        }
-        None => None,
+        Ok(pair) => pair,
+        Err(exit_code) => return exit_code,
     };
 
     let exit_code = execute(args, quiet, &client, &skills, &options);
@@ -233,7 +212,7 @@ fn capture_metadata(
     resolved: &ResolvedLlmConfig,
     tokenizer: adept::Tokenizer,
     options: &FixOptions,
-    capture_dir_source: &str,
+    capture_dir_source: &'static str,
 ) -> RunMetadata {
     let mut metadata = RunMetadata::new("fix");
     metadata.model = Some(resolved.model.clone());
@@ -249,22 +228,25 @@ fn capture_metadata(
             .join(", "),
     );
 
-    let sources = serde_json::json!({
-        "model": value_source(args.model.is_some(), config.fix.model.is_some(), ENV_MODEL),
-        "base_url": value_source(
-            args.base_url.is_some(),
-            config.fix.base_url.is_some(),
-            ENV_BASE_URL,
+    metadata.sources = shared_sources(
+        args.model.is_some(),
+        config.fix.model.is_some(),
+        args.base_url.is_some(),
+        config.fix.base_url.is_some(),
+        args.tokenizer.is_some(),
+        config.fix.tokenizer.is_some(),
+    );
+    metadata.sources.extend([
+        (
+            "max_rounds".to_string(),
+            value_source(
+                args.max_rounds.is_some(),
+                config.fix.max_rounds.is_some(),
+                "",
+            ),
         ),
-        "tokenizer": value_source(args.tokenizer.is_some(), config.fix.tokenizer.is_some(), ""),
-        "max_rounds": value_source(
-            args.max_rounds.is_some(),
-            config.fix.max_rounds.is_some(),
-            "",
-        ),
-        "capture_dir": capture_dir_source,
-    });
-    metadata.extra.insert("sources".to_string(), sources);
+        ("capture_dir".to_string(), capture_dir_source),
+    ]);
     metadata
 }
 

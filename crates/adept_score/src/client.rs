@@ -2,6 +2,7 @@
 //! chat-completions backend — plus the real [`OpenAiCompatClient`]
 //! implementation and the [`crate::mock::MockLlmClient`] test double.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -354,6 +355,79 @@ struct RawResponseMessage {
     content: Option<String>,
 }
 
+/// The half of a [`CapturedCall`] that is known *before* the request goes
+/// out, plus the clock it is timed against.
+///
+/// [`OpenAiCompatClient::send_once`] has five exit points, every one of
+/// which has to produce a `CapturedCall`; without this, eight of the
+/// thirteen fields were re-spelled identically at each site. Built once up
+/// front, consumed by exactly one [`CallRecorder::finish`] call per attempt.
+struct CallRecorder {
+    attempt: u32,
+    endpoint: String,
+    request_body: String,
+    started_at: String,
+    clock: Instant,
+    /// The read-completion time, once known. Set by
+    /// [`CallRecorder::mark_finished`] the moment the response body has been
+    /// read, so every exit point downstream of that records the same instant
+    /// rather than drifting by however long parsing took.
+    finished: Option<(String, u64)>,
+}
+
+impl CallRecorder {
+    fn new(attempt: u32, endpoint: String, request_body: String) -> Self {
+        Self {
+            attempt,
+            endpoint,
+            request_body,
+            started_at: jiff::Timestamp::now().to_string(),
+            clock: Instant::now(),
+            finished: None,
+        }
+    }
+
+    /// Freeze the finish time. Idempotent in effect: only the first call
+    /// counts, so a later [`CallRecorder::finish`] cannot silently re-time.
+    fn mark_finished(&mut self) {
+        if self.finished.is_none() {
+            self.finished = Some((
+                jiff::Timestamp::now().to_string(),
+                self.clock.elapsed().as_millis() as u64,
+            ));
+        }
+    }
+
+    fn finish(
+        self,
+        status: Option<u16>,
+        request_headers: BTreeMap<String, String>,
+        response_headers: BTreeMap<String, String>,
+        response_body: String,
+        outcome: String,
+    ) -> CapturedCall {
+        let (finished_at, duration_ms) = self.finished.unwrap_or_else(|| {
+            (
+                jiff::Timestamp::now().to_string(),
+                self.clock.elapsed().as_millis() as u64,
+            )
+        });
+        CapturedCall {
+            attempt: self.attempt,
+            endpoint: self.endpoint,
+            status,
+            request_headers,
+            response_headers,
+            request_body: self.request_body,
+            response_body,
+            started_at: self.started_at,
+            finished_at,
+            duration_ms,
+            outcome,
+        }
+    }
+}
+
 impl OpenAiCompatClient {
     /// Construct a client from fully resolved configuration.
     #[must_use]
@@ -444,7 +518,16 @@ impl OpenAiCompatClient {
         // goes through `scrub`, so that stays true even if a caller ever
         // embeds one in a prompt. The wire body stays `request_body`,
         // verbatim and unscrubbed.
-        let recorded_request_body = self.scrub(&request_body);
+        //
+        // Computed only when something will actually read it: with capture
+        // off and the filter below `DEBUG` — the default — this saves a
+        // full copy of every prompt on every attempt.
+        let recorded_request_body =
+            if self.capture.is_some() || tracing::enabled!(tracing::Level::DEBUG) {
+                self.scrub(&request_body).into_owned()
+            } else {
+                String::new()
+            };
 
         tracing::debug!(
             endpoint = %endpoint,
@@ -467,7 +550,7 @@ impl OpenAiCompatClient {
             .http
             .post(&endpoint)
             .header("content-type", "application/json")
-            .body(request_body.clone());
+            .body(request_body);
         if let Some(key) = &self.config.api_key {
             builder = builder.bearer_auth(key.expose_secret());
         }
@@ -476,30 +559,22 @@ impl OpenAiCompatClient {
         // are actually on the wire rather than a hand-written stand-in.
         // `execute` then sends exactly this object, so wire behaviour is
         // unchanged by the split.
-        let started_at = jiff::Timestamp::now().to_string();
-        let clock = Instant::now();
+        let mut recorder = CallRecorder::new(attempt, endpoint.clone(), recorded_request_body);
 
         let http_request = match builder.build() {
             Ok(request) => request,
             Err(e) => {
                 let err = LlmError::Request(format!("failed to build request: {e}"));
                 tracing::debug!(endpoint = %endpoint, attempt, error = %err, "chat-completions request could not be built");
-                self.capture(CapturedCall {
-                    attempt,
-                    endpoint: endpoint.clone(),
-                    status: None,
+                self.capture(recorder.finish(
+                    None,
                     // No request exists, so there are no real headers to
                     // record.
-                    request_headers: BTreeMap::new(),
-                    response_headers: BTreeMap::new(),
-                    request_body: recorded_request_body,
-                    response_body: String::new(),
-                    started_at,
-                    finished_at: jiff::Timestamp::now().to_string(),
-                    duration_ms: clock.elapsed().as_millis() as u64,
-                    outcome: self.outcome_of(&err, attempt),
-                    step: None,
-                });
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    String::new(),
+                    self.outcome_of(&err, attempt),
+                ));
                 return Err(err);
             }
         };
@@ -514,20 +589,13 @@ impl OpenAiCompatClient {
                     LlmError::Request(e.to_string())
                 };
                 tracing::debug!(endpoint = %endpoint, attempt, error = %err, "chat-completions request failed");
-                self.capture(CapturedCall {
-                    attempt,
-                    endpoint: endpoint.clone(),
-                    status: None,
+                self.capture(recorder.finish(
+                    None,
                     request_headers,
-                    response_headers: BTreeMap::new(),
-                    request_body: recorded_request_body,
-                    response_body: String::new(),
-                    started_at,
-                    finished_at: jiff::Timestamp::now().to_string(),
-                    duration_ms: clock.elapsed().as_millis() as u64,
-                    outcome: self.outcome_of(&err, attempt),
-                    step: None,
-                });
+                    BTreeMap::new(),
+                    String::new(),
+                    self.outcome_of(&err, attempt),
+                ));
                 return Err(err);
             }
         };
@@ -538,35 +606,24 @@ impl OpenAiCompatClient {
         // Read the body before deciding anything: a non-2xx body and a
         // malformed 2xx body are both payloads the reader needs on disk.
         let body_result = response.text().await;
-        let finished_at = jiff::Timestamp::now().to_string();
-        let duration_ms = clock.elapsed().as_millis() as u64;
+        recorder.mark_finished();
         // A body read that fails on a non-2xx response leaves us with no
-        // payload; remembering *why* keeps that case distinguishable from a
-        // genuinely empty error body in the artifact's `outcome`.
-        let mut body_read_error = None;
-        let body_text = match &body_result {
-            Ok(text) => text.clone(),
-            Err(e) if !success => {
-                body_read_error = Some(e.to_string());
-                String::new()
-            }
+        // payload; naming *why* right here keeps that case distinguishable
+        // from a genuinely empty error body in the artifact's `outcome`,
+        // without carrying the fact eighty lines to its use site.
+        let (body_text, outcome_override) = match body_result {
+            Ok(text) => (text, None),
+            Err(e) if !success => (String::new(), Some(format!("StatusBodyUnreadable({e})"))),
             Err(e) => {
                 let err = LlmError::MalformedResponse(e.to_string());
                 tracing::debug!(endpoint = %endpoint, attempt, status = status.as_u16(), error = %err, "failed to read response body");
-                self.capture(CapturedCall {
-                    attempt,
-                    endpoint: endpoint.clone(),
-                    status: Some(status.as_u16()),
+                self.capture(recorder.finish(
+                    Some(status.as_u16()),
                     request_headers,
                     response_headers,
-                    request_body: recorded_request_body,
-                    response_body: String::new(),
-                    started_at,
-                    finished_at,
-                    duration_ms,
-                    outcome: self.outcome_of(&err, attempt),
-                    step: None,
-                });
+                    String::new(),
+                    self.outcome_of(&err, attempt),
+                ));
                 return Err(err);
             }
         };
@@ -574,7 +631,7 @@ impl OpenAiCompatClient {
         // Verbatim apart from the defensive key scrub, and emitted before
         // parsing: a body that fails `parse_chat_response` is exactly the
         // one worth reading.
-        let recorded_response_body = self.scrub(&body_text);
+        let recorded_response_body = self.scrub(&body_text).into_owned();
         tracing::debug!(
             endpoint = %endpoint,
             attempt,
@@ -586,20 +643,13 @@ impl OpenAiCompatClient {
         let outcome = if success {
             match parse_chat_response(&body_text) {
                 Ok(response) => {
-                    self.capture(CapturedCall {
-                        attempt,
-                        endpoint,
-                        status: Some(status.as_u16()),
+                    self.capture(recorder.finish(
+                        Some(status.as_u16()),
                         request_headers,
                         response_headers,
-                        request_body: recorded_request_body,
-                        response_body: recorded_response_body,
-                        started_at,
-                        finished_at,
-                        duration_ms,
-                        outcome: "ok".to_string(),
-                        step: None,
-                    });
+                        recorded_response_body,
+                        "ok".to_string(),
+                    ));
                     return Ok(response);
                 }
                 Err(err) => err,
@@ -614,30 +664,18 @@ impl OpenAiCompatClient {
             );
             LlmError::Status {
                 status: status.as_u16(),
-                body: body_text.clone(),
+                body: body_text,
             }
         };
 
-        // An unreadable error body would otherwise be indistinguishable
-        // from an empty one, so the read failure is named in `outcome`.
-        let outcome_label = match &body_read_error {
-            Some(e) => format!("StatusBodyUnreadable({e})"),
-            None => self.outcome_of(&outcome, attempt),
-        };
-        self.capture(CapturedCall {
-            attempt,
-            endpoint,
-            status: Some(status.as_u16()),
+        let outcome_label = outcome_override.unwrap_or_else(|| self.outcome_of(&outcome, attempt));
+        self.capture(recorder.finish(
+            Some(status.as_u16()),
             request_headers,
             response_headers,
-            request_body: recorded_request_body,
-            response_body: recorded_response_body,
-            started_at,
-            finished_at,
-            duration_ms,
-            outcome: outcome_label,
-            step: None,
-        });
+            recorded_response_body,
+            outcome_label,
+        ));
         Err(outcome)
     }
 
@@ -650,12 +688,15 @@ impl OpenAiCompatClient {
     /// deliberately a single exact-substring replacement of the resolved
     /// key: generic "secret-shaped string" heuristics would be both slower
     /// and wrong on payloads that legitimately look like keys.
-    fn scrub(&self, text: &str) -> String {
+    /// Borrows rather than copies on the overwhelmingly common path (no key
+    /// configured, or a body that does not contain it), so an unfiltered
+    /// build pays nothing for the guarantee.
+    fn scrub<'a>(&self, text: &'a str) -> Cow<'a, str> {
         match &self.config.api_key {
             Some(key) if !key.expose_secret().is_empty() && text.contains(key.expose_secret()) => {
-                text.replace(key.expose_secret(), "****")
+                Cow::Owned(text.replace(key.expose_secret(), "****"))
             }
-            _ => text.to_string(),
+            _ => Cow::Borrowed(text),
         }
     }
 

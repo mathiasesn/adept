@@ -1,16 +1,11 @@
 //! `adept score`.
 
-use std::sync::Arc;
-
 use adept::{Skill, SkillSet};
-use adept_score::{
-    CaptureSink, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ScoreOptions, ENV_BASE_URL,
-    ENV_MODEL,
-};
+use adept_score::{OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ScoreOptions};
 
 use crate::cli::{OutputFormat, ScoreArgs};
 use crate::config::{
-    build_runtime, resolve_capture_dir, resolve_llm_client, value_source, AdeptConfig,
+    attach_capture, build_runtime, resolve_llm_client, shared_sources, value_source, AdeptConfig,
 };
 
 pub const EXIT_OK: i32 = 0;
@@ -43,32 +38,15 @@ pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
         .unwrap_or_default();
     let options = build_options(args, &resolved.model, tokenizer);
 
-    // Capture is opt-in and requested explicitly, so a failure to create
-    // the directory is a usage error rather than a silent skip.
-    let mut client = client;
-    let sink = match resolve_capture_dir(
+    let (client, sink) = match attach_capture(
+        client,
         args.capture_dir.as_deref(),
         config.score.capture_dir.as_deref(),
         config.origin_dir.as_deref(),
+        |source| capture_metadata(args, config, &resolved, tokenizer, &options, source),
     ) {
-        Some((dir, source)) => {
-            let metadata = capture_metadata(args, config, &resolved, tokenizer, &options, source);
-            match CaptureSink::new(&dir, metadata) {
-                Ok(sink) => {
-                    let sink = Arc::new(sink);
-                    client = client.with_capture(Arc::clone(&sink));
-                    Some(sink)
-                }
-                Err(err) => {
-                    eprintln!(
-                        "adept: error: failed to create capture directory {}: {err}",
-                        dir.display()
-                    );
-                    return EXIT_USAGE_ERROR;
-                }
-            }
-        }
-        None => None,
+        Ok(pair) => pair,
+        Err(exit_code) => return exit_code,
     };
 
     let exit_code = execute(args, &client, &skill, &skillset, &options);
@@ -123,7 +101,7 @@ fn capture_metadata(
     resolved: &ResolvedLlmConfig,
     tokenizer: adept::Tokenizer,
     options: &ScoreOptions,
-    capture_dir_source: &str,
+    capture_dir_source: &'static str,
 ) -> RunMetadata {
     let mut metadata = RunMetadata::new("score");
     metadata.model = Some(resolved.model.clone());
@@ -137,20 +115,29 @@ fn capture_metadata(
         metadata.judge_samples = Some(triggering.judge_samples);
     }
 
-    let sources = serde_json::json!({
-        "model": value_source(args.model.is_some(), config.score.model.is_some(), ENV_MODEL),
-        "base_url": value_source(
-            args.base_url.is_some(),
-            config.score.base_url.is_some(),
-            ENV_BASE_URL,
+    metadata.sources = shared_sources(
+        args.model.is_some(),
+        config.score.model.is_some(),
+        args.base_url.is_some(),
+        config.score.base_url.is_some(),
+        args.tokenizer.is_some(),
+        config.score.tokenizer.is_some(),
+    );
+    metadata.sources.extend([
+        (
+            "num_prompts".to_string(),
+            value_source(args.num_prompts.is_some(), false, ""),
         ),
-        "tokenizer": value_source(args.tokenizer.is_some(), config.score.tokenizer.is_some(), ""),
-        "num_prompts": value_source(args.num_prompts.is_some(), false, ""),
-        "seed": value_source(args.seed.is_some(), false, ""),
-        "judge_samples": value_source(args.judge_samples.is_some(), false, ""),
-        "capture_dir": capture_dir_source,
-    });
-    metadata.extra.insert("sources".to_string(), sources);
+        (
+            "seed".to_string(),
+            value_source(args.seed.is_some(), false, ""),
+        ),
+        (
+            "judge_samples".to_string(),
+            value_source(args.judge_samples.is_some(), false, ""),
+        ),
+        ("capture_dir".to_string(), capture_dir_source),
+    ]);
     metadata
 }
 

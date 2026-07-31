@@ -4,12 +4,15 @@
 //! default. `--config <path>` forces a specific file instead of walking up
 //! from the target path.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use adept::LintConfig;
 use adept_fmt::FmtConfig;
 use adept_score::{
-    LlmConfig, OpenAiCompatClient, ResolvedLlmConfig, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
+    CaptureSink, LlmConfig, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ENV_API_KEY,
+    ENV_BASE_URL, ENV_MODEL,
 };
 use serde::Deserialize;
 
@@ -112,6 +115,71 @@ pub fn resolve_capture_dir(
         None => path.to_path_buf(),
     };
     Some((anchored, SOURCE_CONFIG_FILE))
+}
+
+/// Resolve the capture directory for `score`/`fix` and, if capture is on,
+/// create the sink and attach it to `client`.
+///
+/// Returns the (possibly capture-enabled) client alongside the sink the
+/// caller must [`adept_score::CaptureSink::finalize`] with its exit code, or
+/// `Err(2)` — the usage-error exit code — when the directory cannot be
+/// created. Capture is opt-in and requested explicitly, so failing to create
+/// the directory is a usage error rather than a silent skip.
+///
+/// `metadata` is a closure rather than a value because the run metadata
+/// records *which layer* supplied `capture_dir`, and that is only known once
+/// [`resolve_capture_dir`] has run.
+pub fn attach_capture(
+    client: OpenAiCompatClient,
+    flag: Option<&Path>,
+    file_value: Option<&Path>,
+    origin_dir: Option<&Path>,
+    metadata: impl FnOnce(&'static str) -> RunMetadata,
+) -> Result<(OpenAiCompatClient, Option<Arc<CaptureSink>>), i32> {
+    let Some((dir, source)) = resolve_capture_dir(flag, file_value, origin_dir) else {
+        return Ok((client, None));
+    };
+    match CaptureSink::new(&dir, metadata(source)) {
+        Ok(sink) => {
+            let sink = Arc::new(sink);
+            Ok((client.with_capture(Arc::clone(&sink)), Some(sink)))
+        }
+        Err(err) => {
+            eprintln!(
+                "adept: error: failed to create capture directory {}: {err}",
+                dir.display()
+            );
+            Err(2)
+        }
+    }
+}
+
+/// The provenance entries `score` and `fix` record identically: the model,
+/// base URL, and tokenizer, each labelled with the layer that supplied it.
+/// Each command extends the returned map with its own keys.
+#[must_use]
+pub fn shared_sources(
+    model_from_flag: bool,
+    model_from_file: bool,
+    base_url_from_flag: bool,
+    base_url_from_file: bool,
+    tokenizer_from_flag: bool,
+    tokenizer_from_file: bool,
+) -> BTreeMap<String, &'static str> {
+    BTreeMap::from([
+        (
+            "model".to_string(),
+            value_source(model_from_flag, model_from_file, ENV_MODEL),
+        ),
+        (
+            "base_url".to_string(),
+            value_source(base_url_from_flag, base_url_from_file, ENV_BASE_URL),
+        ),
+        (
+            "tokenizer".to_string(),
+            value_source(tokenizer_from_flag, tokenizer_from_file, ""),
+        ),
+    ])
 }
 
 /// Build the `tokio` runtime `adept score`/`adept fix` drive their single

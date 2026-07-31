@@ -15,111 +15,28 @@
 //!    performs network I/O; the capture *write* path is exercised by
 //!    `adept_score`'s own unit tests against a `CaptureSink` directly.
 
-use std::io::Write;
-use std::path::Path;
-use std::process::{Command as StdCommand, Stdio};
+mod common;
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 
-fn fixture(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
+use common::{
+    adept, assert_pure_jsonrpc, fixture, jsonrpc_messages, mcp_tools_call, run_mcp, MCP_INITIALIZE,
+    MCP_TOOLS_LIST, SAMPLE_SKILL,
+};
 
-fn adept() -> Command {
-    let mut cmd = Command::cargo_bin("adept").unwrap();
-    // The test process may inherit either of these from the developer's
-    // shell; every assertion below is about the flag/env matrix we set
-    // explicitly, so start from a known-empty state.
-    cmd.env_remove("ADEPT_LOG")
-        .env_remove("ADEPT_MODEL")
-        .env_remove("ADEPT_BASE_URL")
-        .env_remove("ADEPT_API_KEY");
-    cmd
-}
-
-/// Drive `adept mcp` over stdio with the given extra env, returning
-/// `(stdout, stderr)`. Sends a real `initialize` plus a real `tools/call`
-/// against `check_skill`, so the server does actual work while logging.
-fn run_mcp(env: &[(&str, &str)], args: &[&str]) -> (String, String) {
-    let mut command = StdCommand::new(assert_cmd::cargo::cargo_bin("adept"));
-    command.arg("mcp");
-    for arg in args {
-        command.arg(arg);
-    }
-    command
-        .env_remove("ADEPT_LOG")
-        .env_remove("ADEPT_MODEL")
-        .env_remove("ADEPT_BASE_URL")
-        .env_remove("ADEPT_API_KEY");
-    for (key, value) in env {
-        command.env(key, value);
-    }
-
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    {
-        let stdin = child.stdin.as_mut().unwrap();
-        writeln!(
-            stdin,
-            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
-        )
-        .unwrap();
-        writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).unwrap();
-        let call = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "check_skill",
-                "arguments": {
-                    "content": "---\nname: sample\ndescription: does a thing. Use when the user asks for a thing.\n---\nBody.\n"
-                }
-            }
-        });
-        writeln!(stdin, "{call}").unwrap();
-    }
-    drop(child.stdin.take());
-
-    let output = child.wait_with_output().unwrap();
-    (
-        String::from_utf8(output.stdout).unwrap(),
-        String::from_utf8(output.stderr).unwrap(),
-    )
-}
-
-/// Assert every non-empty stdout line is a JSON-RPC 2.0 message carrying one
-/// of the ids we sent, and that ids 1/2/3 all came back.
-fn assert_pure_jsonrpc(stdout: &str, context: &str) {
-    let mut seen = Vec::new();
-    for line in stdout.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let parsed: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|err| {
-            panic!("[{context}] stdout line was not valid JSON: {err}\nline={line}")
-        });
-        assert_eq!(
-            parsed["jsonrpc"], "2.0",
-            "[{context}] non-JSON-RPC object on stdout: {parsed}"
-        );
-        let id = parsed["id"]
-            .as_i64()
-            .unwrap_or_else(|| panic!("[{context}] response without an id: {parsed}"));
-        seen.push(id);
-    }
-    assert_eq!(
-        seen,
-        vec![1, 2, 3],
-        "[{context}] expected exactly one response per request, in order"
-    );
+/// The request set every MCP test here drives: a real `initialize`, a real
+/// `tools/list`, and a real `check_skill` call, so the server does actual
+/// work while logging.
+fn mcp_requests() -> Vec<String> {
+    vec![
+        MCP_INITIALIZE.to_string(),
+        MCP_TOOLS_LIST.to_string(),
+        mcp_tools_call(
+            3,
+            "check_skill",
+            serde_json::json!({ "content": SAMPLE_SKILL }),
+        ),
+    ]
 }
 
 #[test]
@@ -127,8 +44,8 @@ fn mcp_stdout_stays_pure_jsonrpc_at_maximum_verbosity_flag() {
     // The headline regression test: `-vvv` selects TRACE, and
     // `tracing_subscriber::fmt()` defaults to stdout. If a future change
     // drops `.with_writer(std::io::stderr)`, this fails.
-    let (stdout, _stderr) = run_mcp(&[], &["-vvv"]);
-    assert_pure_jsonrpc(&stdout, "-vvv");
+    let (stdout, _stderr) = run_mcp(&[], &["-vvv"], &mcp_requests());
+    assert_pure_jsonrpc(&stdout, "-vvv", &[1, 2, 3]);
 }
 
 #[test]
@@ -136,12 +53,12 @@ fn mcp_stdout_stays_pure_jsonrpc_with_adept_log_trace() {
     // `ADEPT_LOG` bypasses the `-v` mapping entirely and installs an
     // `EnvFilter` from directives, so it is a separate route to a live
     // subscriber and needs its own guard.
-    let (stdout, _stderr) = run_mcp(&[("ADEPT_LOG", "trace")], &[]);
-    assert_pure_jsonrpc(&stdout, "ADEPT_LOG=trace");
+    let (stdout, _stderr) = run_mcp(&[("ADEPT_LOG", "trace")], &[], &mcp_requests());
+    assert_pure_jsonrpc(&stdout, "ADEPT_LOG=trace", &[1, 2, 3]);
 
     // Belt and braces: both activation surfaces at once.
-    let (stdout, _stderr) = run_mcp(&[("ADEPT_LOG", "trace")], &["-vvv"]);
-    assert_pure_jsonrpc(&stdout, "ADEPT_LOG=trace -vvv");
+    let (stdout, _stderr) = run_mcp(&[("ADEPT_LOG", "trace")], &["-vvv"], &mcp_requests());
+    assert_pure_jsonrpc(&stdout, "ADEPT_LOG=trace -vvv", &[1, 2, 3]);
 }
 
 #[test]
@@ -149,8 +66,9 @@ fn mcp_stdout_is_identical_with_and_without_logging() {
     // Beyond "it parses": the byte stream a client sees must not change at
     // all when logging is enabled. With no network activity stderr may
     // legitimately be empty, so it is not asserted on.
-    let (quiet_stdout, quiet_stderr) = run_mcp(&[], &[]);
-    let (loud_stdout, _loud_stderr) = run_mcp(&[("ADEPT_LOG", "trace")], &["-vvv"]);
+    let (quiet_stdout, quiet_stderr) = run_mcp(&[], &[], &mcp_requests());
+    let (loud_stdout, _loud_stderr) =
+        run_mcp(&[("ADEPT_LOG", "trace")], &["-vvv"], &mcp_requests());
 
     assert!(
         quiet_stderr.is_empty(),
@@ -171,11 +89,9 @@ fn mcp_score_skill_schema_never_exposes_capture() {
     // `score_skill` is only advertised once an LLM backend resolves, so
     // `ADEPT_MODEL` is set — the tool is listed, never called, so this
     // performs no network I/O.
-    let (stdout, _stderr) = run_mcp(&[("ADEPT_MODEL", "gpt-test")], &[]);
-    let list: serde_json::Value = stdout
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+    let (stdout, _stderr) = run_mcp(&[("ADEPT_MODEL", "gpt-test")], &[], &mcp_requests());
+    let list = jsonrpc_messages(&stdout)
+        .into_iter()
         .find(|message| message["id"] == 2)
         .expect("a tools/list response");
 

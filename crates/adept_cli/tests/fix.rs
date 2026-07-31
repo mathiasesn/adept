@@ -5,20 +5,13 @@
 //! `adept_score::MockLlmClient`, since the real binary would need a live
 //! LLM endpoint.
 
+mod common;
+
 use std::path::Path;
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 
-fn fixture(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn adept() -> Command {
-    Command::cargo_bin("adept").unwrap()
-}
+use common::{adept, fixture};
 
 /// Copy a fixture directory into a fresh temp dir so tests that exercise
 /// writes never mutate the checked-in fixtures.

@@ -1,19 +1,13 @@
 //! CLI integration tests, driving the built `adept` binary via `assert_cmd`.
 
-use std::path::Path;
+mod common;
 
-use assert_cmd::Command;
 use predicates::prelude::*;
 
-fn fixture(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn adept() -> Command {
-    Command::cargo_bin("adept").unwrap()
-}
+use common::{
+    adept, assert_pure_jsonrpc, fixture, jsonrpc_messages, mcp_tools_call, run_mcp, MCP_INITIALIZE,
+    MCP_TOOLS_LIST, SAMPLE_SKILL,
+};
 
 #[test]
 fn check_on_clean_skill_exits_zero() {
@@ -214,47 +208,21 @@ fn score_help_documents_tokenizer_flag() {
 
 #[test]
 fn mcp_score_skill_without_llm_config_returns_structured_error_not_hang_or_panic() {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("adept"))
-        .arg("mcp")
-        .env_remove("ADEPT_MODEL")
-        .env_remove("ADEPT_BASE_URL")
-        .env_remove("ADEPT_API_KEY")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    {
-        let stdin = child.stdin.as_mut().unwrap();
-        writeln!(
-            stdin,
-            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
-        )
-        .unwrap();
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "score_skill",
-                "arguments": { "content": "---\nname: sample\ndescription: does a thing. Use when the user asks for a thing.\n---\nBody.\n" }
-            }
-        });
-        writeln!(stdin, "{request}").unwrap();
-    }
-    drop(child.stdin.take());
-
-    let output = child.wait_with_output().unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let (stdout, _stderr) = run_mcp(
+        &[],
+        &[],
+        &[
+            MCP_INITIALIZE.to_string(),
+            mcp_tools_call(
+                2,
+                "score_skill",
+                serde_json::json!({ "content": SAMPLE_SKILL }),
+            ),
+        ],
+    );
 
     let mut saw_score_error = false;
-    for line in stdout.lines() {
-        let parsed: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|err| panic!("stdout line was not valid JSON: {err}\nline={line}"));
+    for parsed in jsonrpc_messages(&stdout) {
         assert_eq!(parsed["jsonrpc"], "2.0");
         if parsed["id"] == 2 {
             // Either a structured tool-level error (isError: true) or a
@@ -275,35 +243,16 @@ fn mcp_score_skill_without_llm_config_returns_structured_error_not_hang_or_panic
 #[test]
 fn mcp_format_skill_rejects_out_of_range_line_width() {
     for bad_width in [0, 10_000] {
-        let request = serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "format_skill",
-                "arguments": {
-                    "content": "---\nname: sample\ndescription: does a thing. Use when the user asks for a thing.\n---\nBody.\n",
-                    "line_width": bad_width
-                }
-            }
-        });
-
-        let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("adept"))
-            .arg("mcp")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        {
-            use std::io::Write;
-            writeln!(child.stdin.as_mut().unwrap(), "{request}").unwrap();
-        }
-        drop(child.stdin.take());
-        let output = child.wait_with_output().unwrap();
-        let stdout = String::from_utf8(output.stdout).unwrap();
-        let line = stdout.lines().next().expect("expected one response line");
-        let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+        let request = mcp_tools_call(
+            1,
+            "format_skill",
+            serde_json::json!({ "content": SAMPLE_SKILL, "line_width": bad_width }),
+        );
+        let (stdout, _stderr) = run_mcp(&[], &[], &[request]);
+        let parsed = jsonrpc_messages(&stdout)
+            .into_iter()
+            .next()
+            .expect("expected one response line");
         assert_eq!(
             parsed["result"]["isError"], true,
             "line_width={bad_width} should be rejected, got {parsed}"
@@ -322,43 +271,10 @@ fn help_and_version_work() {
 
 #[test]
 fn mcp_stdout_carries_only_well_formed_jsonrpc_lines() {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let mut child = std::process::Command::new(assert_cmd::cargo::cargo_bin("adept"))
-        .arg("mcp")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-
-    {
-        let stdin = child.stdin.as_mut().unwrap();
-        writeln!(
-            stdin,
-            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
-        )
-        .unwrap();
-        writeln!(stdin, r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list"}}"#).unwrap();
-    }
-    drop(child.stdin.take());
-
-    let output = child.wait_with_output().unwrap();
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let mut saw_initialize = false;
-    let mut saw_tools_list = false;
-    for line in stdout.lines() {
-        // Every non-empty stdout line must parse as a JSON-RPC response;
-        // nothing else (logs, panics) is permitted on stdout.
-        let parsed: serde_json::Value = serde_json::from_str(line)
-            .unwrap_or_else(|err| panic!("stdout line was not valid JSON: {err}\nline={line}"));
-        assert_eq!(parsed["jsonrpc"], "2.0");
-        match parsed["id"].as_i64() {
-            Some(1) => saw_initialize = true,
-            Some(2) => saw_tools_list = true,
-            _ => {}
-        }
-    }
-    assert!(saw_initialize && saw_tools_list);
+    let (stdout, _stderr) = run_mcp(
+        &[],
+        &[],
+        &[MCP_INITIALIZE.to_string(), MCP_TOOLS_LIST.to_string()],
+    );
+    assert_pure_jsonrpc(&stdout, "initialize + tools/list", &[1, 2]);
 }

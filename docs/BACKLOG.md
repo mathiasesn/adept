@@ -326,14 +326,25 @@ Recorded 2026-07-31, from `specs/cli-tracing.md`.
   worktree** — that bakes the worktree path in and breaks the main checkout
   instead. Until then, treat those 21 failures as environmental when working
   outside the primary clone.
-- **`CapturedCall::step` is always `None`.** The field exists to record which
-  logical step issued a call (prompt generation vs. judge vs. fix round N),
-  which is what makes a capture directory readable without the shell history.
-  `OpenAiCompatClient` cannot fill it in: it sees only a request body, and the
-  step context lives up in `adept_score::triggering` / `adept_fix`. Threading
-  it down — a span, an explicit argument on the client call, or a
-  `tracing::Span` field the sink reads — is a follow-up. Until it lands, a
-  reader must infer the step from the call ordering and the prompt content.
+- **Captured calls do not record which logical step issued them.** Knowing
+  whether a call was prompt generation, a judge sample, or fix round N is what
+  makes a capture directory readable without the shell history. A
+  `CapturedCall::step` field was shipped and then removed: `OpenAiCompatClient`
+  sees only a request body and could never populate it, so the field was
+  structurally always `None` and made the feature read as more complete than it
+  was. The intended shape when this lands is a **`tracing::Span` field set by
+  `adept_score::triggering` / `adept_fix` and read at capture time** — the step
+  context already lives there, and a span carries it down without widening any
+  signature. Explicitly *not* a `set_step()` mutator on the client (it would
+  make a `Sync` client statefully order-dependent), and not a struct field the
+  client is expected to fill. Until it lands, a reader must infer the step from
+  the call ordering and the prompt content.
+- **The MCP `score_skill` tool never captures.** `commands/mcp.rs` builds its
+  own `OpenAiCompatClient` with no `with_capture` call. This is deliberate, per
+  `specs/cli-tracing.md` §12: capture is a CLI-only surface, so the MCP tool
+  schema stays unchanged and an MCP client cannot make the server write to
+  arbitrary paths on disk. Recorded here as a decision so it does not read as
+  an omission — `crates/adept_cli/tests/tracing.rs` pins the schema half of it.
 
 ### `LlmError::Status` carries an unscrubbed response body
 

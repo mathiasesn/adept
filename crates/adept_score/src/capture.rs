@@ -80,11 +80,16 @@ pub struct RunMetadata {
     /// recorded — this boolean exists so that "the run was unauthenticated"
     /// is distinguishable from "the key leaked out of the artifact."
     pub api_key_present: bool,
-    /// Any further caller-supplied provenance (e.g. where each resolved
-    /// value came from: CLI flag / `adept.toml` / env var / default).
-    /// Flattened into the top level of `run_metadata.json`.
-    #[serde(flatten)]
-    pub extra: BTreeMap<String, serde_json::Value>,
+    /// Where each resolved value above came from — CLI flag / `adept.toml`
+    /// / env var / default — keyed by option name. Emitted as a nested
+    /// `sources` object, and omitted entirely when empty.
+    ///
+    /// The values are `&'static str` rather than free-form JSON because
+    /// every one of them is one of the four labels the CLI's `SOURCE_*`
+    /// constants define; a `serde_json::Value` here would admit shapes no
+    /// reader is prepared for.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub sources: BTreeMap<String, &'static str>,
 }
 
 impl RunMetadata {
@@ -105,7 +110,7 @@ impl RunMetadata {
             max_rounds: None,
             target_path: None,
             api_key_present: false,
-            extra: BTreeMap::new(),
+            sources: BTreeMap::new(),
         }
     }
 }
@@ -154,9 +159,6 @@ pub struct CapturedCall {
     /// What became of the call: `"ok"`, `"retried"`, or an [`crate::LlmError`]
     /// variant name.
     pub outcome: String,
-    /// Which logical step issued it (e.g. `"generate_prompts"`, `"judge"`,
-    /// `"fix_round_2"`), where the caller knows.
-    pub step: Option<String>,
 }
 
 /// The serialized shape of `call_metadata.json`.
@@ -167,8 +169,6 @@ struct CallRecord<'a> {
     endpoint: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    step: Option<&'a str>,
     request_headers: &'a BTreeMap<String, String>,
     response_headers: &'a BTreeMap<String, String>,
     started_at: &'a str,
@@ -260,7 +260,6 @@ impl CaptureSink {
             attempt: call.attempt,
             endpoint: &call.endpoint,
             status: call.status,
-            step: call.step.as_deref(),
             request_headers: &call.request_headers,
             response_headers: &call.response_headers,
             started_at: &call.started_at,
@@ -324,7 +323,6 @@ mod tests {
             finished_at: "2026-07-31T14:22:08Z".to_string(),
             duration_ms: 1000,
             outcome: "ok".to_string(),
-            step: Some("judge".to_string()),
         }
     }
 
