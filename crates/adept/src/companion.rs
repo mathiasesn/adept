@@ -57,6 +57,37 @@ pub(crate) fn is_license_file(name: &str) -> bool {
         || stem.starts_with("licence-")
 }
 
+/// Returns true if `path` (a companion file's path, as discovered by
+/// [`discover_companion_files`]) sits under a top-level `evals/` directory
+/// within the skill directory.
+///
+/// Matches **by directory name only** — no filename pattern, and explicitly
+/// no content sniffing. `adept create` writes a synthetic eval dataset to
+/// `evals/evals.jsonl`, and parsing candidate files during discovery would
+/// put I/O and JSON parsing on the fast, offline `check` path, which must
+/// stay fast. A dataset a user keeps somewhere else counts as ordinary skill
+/// content, since adept did not put it there.
+///
+/// Lives here beside [`is_license_file`] for the same reason: recognizing an
+/// eval dataset is a companion-file naming concern; callers decide what to
+/// do with the classification.
+///
+/// **Note on today's behavior:** [`discover_companion_files`] is
+/// non-recursive, so a file under a nested `evals/` directory is never
+/// discovered in the first place — this predicate can never fire against
+/// current output of that function, and applying it is a no-op today. It is
+/// kept as cheap defence-in-depth: if discovery ever becomes recursive (e.g.
+/// to support `adept create`'s `evals/evals.jsonl`), the exemption is
+/// already wired into its two applicable consumers (`SL303` in
+/// `rules/tokens.rs`, and `adept_score`'s token-bloat view) rather than
+/// needing to be added later, possibly incompletely, across every
+/// consumer — including ones (like `adept_agent`'s fix conservation guard)
+/// that must never see it change.
+#[must_use]
+pub fn is_eval_dataset(path: &std::path::Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "evals")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

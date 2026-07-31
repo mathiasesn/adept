@@ -22,6 +22,7 @@
 mod companion;
 mod diagnostic;
 mod error;
+pub mod evals;
 mod frontmatter;
 pub mod markdown;
 mod parser;
@@ -32,7 +33,7 @@ mod skillset;
 pub mod text;
 mod token;
 
-pub use companion::discover_companion_files;
+pub use companion::{discover_companion_files, is_eval_dataset};
 pub use diagnostic::{Diagnostic, Severity};
 pub use error::AdeptError;
 pub use frontmatter::{ExtraField, Frontmatter};

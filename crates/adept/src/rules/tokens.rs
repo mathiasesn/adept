@@ -91,7 +91,14 @@ impl SkillRule for BodyTokenBudget {
 ///
 /// Bundled license files (e.g. `LICENSE.txt`, `LICENSE-APACHE`) are exempt:
 /// they are boilerplate legal text, not skill content, and commonly exceed
-/// any reasonable token budget without being a documentation smell.
+/// any reasonable token budget without being a documentation smell. Files
+/// under a top-level `evals/` directory (e.g. `evals/evals.jsonl`, written
+/// by `adept create`) are exempt for the same reason: a synthetic eval
+/// dataset is not skill content either. Note that
+/// [`crate::companion::discover_companion_files`] is non-recursive today, so
+/// a nested `evals/` file is never discovered in the first place and this
+/// exemption is not expected to fire in practice; it is defence-in-depth for
+/// if discovery ever becomes recursive.
 pub struct CompanionFileBloat;
 
 impl_rule!(CompanionFileBloat, "SL303", "companion-file-bloat", Warning);
@@ -103,6 +110,7 @@ impl SkillRule for CompanionFileBloat {
             if path
                 .file_name()
                 .is_some_and(|n| crate::companion::is_license_file(&n.to_string_lossy()))
+                || crate::companion::is_eval_dataset(&path)
             {
                 continue;
             }

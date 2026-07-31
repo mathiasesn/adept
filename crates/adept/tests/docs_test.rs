@@ -1,5 +1,6 @@
-//! Asserts `docs/RULES.md` documents every rule in the registry, so the two
-//! can't silently drift apart.
+//! Asserts `docs/RULES.md` documents every rule in the registry, and that
+//! `docs/EVALS.md` documents every eval-dataset assertion kind, so neither
+//! doc can silently drift from the code it describes.
 
 use std::path::Path;
 
@@ -28,5 +29,61 @@ fn every_registered_rule_is_documented() {
             meta.name,
             meta.code
         );
+    }
+}
+
+/// The eval-dataset assertion vocabulary, as adept's code defines it
+/// (`adept::evals::Assertion`'s `kind` values). Kept as a literal list here
+/// (rather than derived via reflection, which serde does not expose) so
+/// this test has to be hand-updated whenever the enum gains or loses a
+/// variant — the same manual-sync tripwire `every_registered_rule_is_documented`
+/// gets for free from the registry.
+const ASSERTION_KINDS: &[&str] = &["contains", "file_exists", "file_contains", "command"];
+
+#[test]
+fn every_assertion_kind_is_documented_in_evals_md() {
+    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/EVALS.md")
+        .canonicalize()
+        .expect("docs/EVALS.md should exist");
+    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/EVALS.md");
+
+    for kind in ASSERTION_KINDS {
+        let heading = format!("### `{kind}`");
+        assert!(
+            docs.contains(&heading),
+            "docs/EVALS.md is missing a `{heading}` section for assertion kind `{kind}`"
+        );
+    }
+
+    // And the reverse: every kind heading in the doc corresponds to a real
+    // assertion kind, so a doc-only kind (one that would deserialize as
+    // "unknown variant") can't hide undetected.
+    for heading_kind in ["contains", "file_exists", "file_contains", "command"] {
+        assert!(
+            ASSERTION_KINDS.contains(&heading_kind),
+            "docs/EVALS.md documents `{heading_kind}`, which is not in ASSERTION_KINDS"
+        );
+    }
+
+    // Prove the round-trip: every documented kind must actually deserialize
+    // as a valid `Assertion` with a minimal plausible payload, so the doc
+    // and the real serde tag values can't drift on spelling either.
+    let samples = [
+        (r#"{"kind":"contains","value":"x"}"#, "contains"),
+        (r#"{"kind":"file_exists","path":"x"}"#, "file_exists"),
+        (
+            r#"{"kind":"file_contains","path":"x","value":"y"}"#,
+            "file_contains",
+        ),
+        (r#"{"kind":"command","command":"true"}"#, "command"),
+    ];
+    for (json, kind) in samples {
+        assert!(
+            ASSERTION_KINDS.contains(&kind),
+            "sample kind `{kind}` missing from ASSERTION_KINDS"
+        );
+        serde_json::from_str::<adept::evals::Assertion>(json)
+            .unwrap_or_else(|e| panic!("sample for `{kind}` should deserialize: {e}"));
     }
 }

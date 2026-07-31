@@ -65,6 +65,14 @@ pub async fn analyze_token_bloat(
     let dir = skill.path.parent().unwrap_or(Path::new(""));
     let mut companion_file_tokens = BTreeMap::new();
     for path in discover_companion_files(skill) {
+        if adept::is_eval_dataset(&path) {
+            // Synthetic eval datasets are not skill content. Note
+            // `discover_companion_files` is non-recursive today, so a nested
+            // `evals/` file is never discovered here in the first place;
+            // this is defence-in-depth for if discovery ever becomes
+            // recursive.
+            continue;
+        }
         if let Ok(contents) = std::fs::read_to_string(&path) {
             let tokens = counter.count(&contents);
             companion_file_tokens.insert(relative_to(dir, &path), tokens);

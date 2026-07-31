@@ -160,6 +160,18 @@ license files are exempt — `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT`
 boilerplate legal text is not skill content and routinely exceeds any
 reasonable budget. The exemption is scoped to this rule; `adept_score`'s
 token-bloat view still counts license files.
+
+Files under a top-level `evals/` directory (e.g. `evals/evals.jsonl`, the
+synthetic eval dataset `adept create` writes alongside a generated skill)
+are also exempt, matched by directory name only — no filename pattern, no
+content sniffing. Unlike the license exemption, this one is applied to both
+this rule and `adept_score`'s token-bloat view, since a generated dataset is
+not skill content either. In practice this exemption is currently dormant:
+companion-file discovery is non-recursive, so a file nested under `evals/`
+is never discovered as a companion file in the first place and could never
+have produced a finding here regardless. It is kept as defence-in-depth for
+if discovery ever becomes recursive. See `docs/EVALS.md` for the dataset
+schema itself.
 **Fix:** split the companion file or trim it down.
 
 ## SL4xx — cross-skill

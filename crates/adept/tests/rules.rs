@@ -204,6 +204,28 @@ fn sl303_exempts_bundled_license_files() {
     assert_no_codes("sl303_license_exempt", &["SL303"]);
 }
 
+/// A skill with a large `evals/evals.jsonl` produces no `SL303` finding for
+/// it. Today this holds for a simple reason, not the `is_eval_dataset`
+/// exemption itself: `discover_companion_files` is non-recursive, so a file
+/// nested under `evals/` is never discovered as a companion file at all —
+/// `is_eval_dataset` would also exempt it if it ever became visible, which
+/// is exactly why the predicate is kept as defence-in-depth (see
+/// `crate::companion::is_eval_dataset`'s doc comment).
+#[test]
+fn sl303_exempts_large_eval_dataset_under_evals_dir() {
+    assert_no_codes("sl303_evals_exempt", &["SL303"]);
+}
+
+/// A large `.jsonl` file sitting directly beside `SKILL.md` (not nested
+/// under `evals/`) is discovered as an ordinary companion file and still
+/// fires `SL303` — this is the directory-only-matching distinction that
+/// matters: `is_eval_dataset` matches by directory component, never by
+/// filename, so a same-named-but-differently-placed file is not exempt.
+#[test]
+fn sl303_still_fires_on_identically_sized_jsonl_outside_evals_dir() {
+    assert_fires("sl303_evals_lookalike", "SL303");
+}
+
 #[test]
 fn sl401_duplicate_skill_name_fires() {
     assert_set_fires("cross_sl401", "SL401");
