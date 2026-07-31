@@ -10,7 +10,7 @@
 //! [`fix_skill`] only *computes* a candidate rewrite (a [`FixReport`] whose
 //! [`FixReport::files`] are the pending writes, if accepted) — it never
 //! writes to disk. Callers that want to apply the result pass those files to
-//! [`writer::write_all_transactionally`]. This keeps the whole fix loop
+//! [`crate::writer::write_all_transactionally`]. This keeps the whole fix loop
 //! testable without touching the filesystem for anything but reading the
 //! original skill's companion files, once, up front.
 //!
@@ -24,20 +24,14 @@
 //! rule itself (`Rule::fix_kind`); this crate hard-codes no rule-code list.
 //! Cross-skill (`SetRule`) findings are never rewritten.
 
-mod candidate;
-pub mod diff;
 mod options;
-mod prompts;
 pub mod relocate;
-pub mod writer;
 
-pub use candidate::{resolve_companion_path, CompanionEdit, FixCandidate, FixResponse};
+use crate::candidate::{self, CompanionEdit, FixCandidate, FixResponse};
+use crate::{diff, prompts};
+
 pub use options::{FixOptions, DEFAULT_MAX_ROUNDS};
-pub use prompts::{
-    BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, DESCRIPTION_FIX_SYSTEM, DESCRIPTION_FIX_USER_TEMPLATE,
-};
 pub use relocate::{conserves_content, ConservationError, CONTENT_TOLERANCE};
-pub use writer::{write_all_transactionally, write_atomically};
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -71,7 +65,7 @@ pub enum FixError {
     MalformedResponse(String),
 
     /// A `companion_edits[].path` in a model response was rejected by
-    /// [`resolve_companion_path`] as unsafe (absolute, escaping the
+    /// [`candidate::resolve_companion_path`] as unsafe (absolute, escaping the
     /// skill's directory, or targeting SKILL.md itself).
     #[error("unsafe companion path: {path}")]
     UnsafeCompanionPath {
@@ -98,7 +92,7 @@ pub enum FixOutcome {
     /// strictly smaller than what it started from. `files` are the pending
     /// writes: full new contents for SKILL.md and every touched companion
     /// file, keyed by absolute path. Never written by this crate — pass to
-    /// [`writer::write_all_transactionally`] to apply.
+    /// [`crate::writer::write_all_transactionally`] to apply.
     Accepted { files: BTreeMap<PathBuf, String> },
     /// Every round attempted was rejected, either because no candidate
     /// improved on the original or because a candidate tripped the
@@ -368,7 +362,7 @@ fn assemble_companions(
 /// See the module docs for the overall loop. This function never writes to
 /// disk (beyond reading pre-existing companion files, once, up front, to
 /// assemble full new contents and to run the conservation guard); pass
-/// [`FixReport::files`] to [`writer::write_all_transactionally`] to apply an
+/// [`FixReport::files`] to [`crate::writer::write_all_transactionally`] to apply an
 /// accepted result.
 ///
 /// # Errors

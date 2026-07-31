@@ -4,7 +4,7 @@ members = [
     "crates/adept",
     "crates/adept_fmt",
     "crates/adept_score",
-    "crates/adept_fix",
+    "crates/adept_agent",
     "crates/adept_cli",
 ]
 
@@ -19,7 +19,7 @@ rust-version = "1.85"
 adept = { path = "crates/adept" }
 adept_fmt = { path = "crates/adept_fmt" }
 adept_score = { path = "crates/adept_score" }
-adept_fix = { path = "crates/adept_fix" }
+adept_agent = { path = "crates/adept_agent" }
 
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"

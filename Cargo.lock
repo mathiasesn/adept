@@ -20,11 +20,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "adept_agent"
+version = "0.1.0"
+dependencies = [
+ "adept",
+ "adept_fmt",
+ "adept_score",
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "adept_cli"
 version = "0.1.0"
 dependencies = [
  "adept",
- "adept_fix",
+ "adept_agent",
  "adept_fmt",
  "adept_score",
  "anyhow",
@@ -40,21 +55,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "adept_fix"
-version = "0.1.0"
-dependencies = [
- "adept",
- "adept_fmt",
- "adept_score",
- "serde",
- "serde_json",
- "similar",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]

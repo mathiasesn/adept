@@ -1,7 +1,9 @@
 //! `adept fix`.
 
 use adept::{Skill, SkillSet};
-use adept_fix::{fix_skill, write_all_transactionally, FixOptions, FixReport, DEFAULT_MAX_ROUNDS};
+use adept_agent::{
+    fix_skill, write_all_transactionally, FixOptions, FixReport, DEFAULT_MAX_ROUNDS,
+};
 use adept_score::{OpenAiCompatClient, ResolvedLlmConfig, RunMetadata};
 
 use crate::cli::{FixArgs, OutputFormat};
@@ -283,7 +285,7 @@ pub async fn run_with_client(
     client: &dyn adept_score::LlmClient,
     skill: &Skill,
     options: &FixOptions,
-) -> Result<String, adept_fix::FixError> {
+) -> Result<String, adept_agent::FixError> {
     let report = fix_skill(client, skill, options).await?;
     Ok(report.render())
 }

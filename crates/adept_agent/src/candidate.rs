@@ -6,7 +6,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::FixError;
+use crate::fix::FixError;
 
 /// One companion-file edit requested by the model: append
 /// `appended_content` to the (possibly new) file at `path`, relative to the

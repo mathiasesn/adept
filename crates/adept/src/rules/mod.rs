@@ -34,7 +34,7 @@ pub trait Rule: Send + Sync {
     /// The severity this rule reports at unless overridden by [`LintConfig`].
     fn default_severity(&self) -> Severity;
     /// Whether (and how) diagnostics from this rule can be automatically
-    /// fixed. Defaults to [`FixKind::None`]; the `adept_fix` crate uses this
+    /// fixed. Defaults to [`FixKind::None`]; the `adept_agent` crate uses this
     /// to select which diagnostics it may attempt to fix.
     fn fix_kind(&self) -> FixKind {
         FixKind::None
@@ -44,7 +44,7 @@ pub trait Rule: Send + Sync {
 /// How (if at all) a rule's diagnostics can be automatically fixed.
 ///
 /// This is metadata only: `adept` itself never fixes anything. It exists so
-/// the `adept_fix` crate can select which diagnostics it may attempt to
+/// the `adept_agent` crate can select which diagnostics it may attempt to
 /// resolve, without hard-coding a rule-code list of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,14 +56,14 @@ pub enum FixKind {
     Deterministic,
     /// Fixable, but only by an LLM able to understand and rewrite content
     /// (e.g. rephrasing a description or trimming prose). Carries which
-    /// part of the skill the fix touches, so callers like `adept_fix` can
+    /// part of the skill the fix touches, so callers like `adept_agent` can
     /// batch same-region diagnostics into one request without maintaining
     /// their own rule-code lists.
     Llm(FixRegion),
 }
 
 /// Which part of a [`Skill`] an [`FixKind::Llm`] rule's diagnostics are
-/// about, i.e. which field an `adept_fix` request needs to rewrite.
+/// about, i.e. which field an `adept_agent` request needs to rewrite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum FixRegion {

@@ -1,4 +1,4 @@
-//! All prompt templates used by `adept_fix`, gathered in one module so they
+//! All prompt templates used by `adept_agent`, gathered in one module so they
 //! can be audited, mirroring `adept_score::prompts`. Template rendering
 //! (`render`) is shared with `adept_score` rather than duplicated here.
 
@@ -26,7 +26,7 @@ pub const DESCRIPTION_FIX_USER_TEMPLATE: &str = "Skill name: {skill_name}\n\nCur
 /// `body-tokens-over-budget`).
 ///
 /// Instructs the model to relocate detailed material into a companion file
-/// rather than deleting it outright, since [`crate::relocate`] rejects any
+/// rather than deleting it outright, since [`crate::fix::relocate`] rejects any
 /// candidate that loses content instead of moving it. Expects a JSON
 /// response shaped like:
 /// `{"body": "...", "companion_edits": [{"path": "...", "appended_content": "..."}]}`.

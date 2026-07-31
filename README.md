@@ -186,7 +186,7 @@ kind of actionable message `adept score` gives.
 
 A fix candidate for `SL302` is rejected (even if it clears the diagnostic)
 unless it *relocates* content into companion files rather than deleting
-it — the token-conservation guard in `adept_fix::relocate`.
+it — the token-conservation guard in `adept_agent::relocate`.
 
 ## `adept mcp`
 
@@ -252,7 +252,7 @@ capture_dir = ".adept-capture"   # off by default; gitignore it
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
-max_rounds = 2             # falls back to adept_fix::DEFAULT_MAX_ROUNDS
+max_rounds = 2             # falls back to adept_agent::DEFAULT_MAX_ROUNDS
 capture_dir = ".adept-capture"   # independent of [score] capture_dir
 ```
 

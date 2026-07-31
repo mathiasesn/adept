@@ -33,18 +33,18 @@ The shape is modelled on ruff: stable rule codes, `path:line:col: CODE message` 
 - **`adept fix`** — LLM-assisted lint autofix for `FixKind::Llm` diagnostics (`SL206`, `SL301`, `SL302`). Preview-by-default; `--write` applies.
 - **`adept mcp`** — a JSON-RPC 2.0 stdio MCP server exposing `check_skill`, `format_skill`, and (conditionally) `score_skill`.
 
-Architecturally it is a **cargo virtual workspace of four libraries and one binary**, with a strict dependency direction: everything depends on the core crate, nothing depends on the CLI, and `adept_fix` sits at the top of the stack, composing its siblings (see the amended rule in §16).
+Architecturally it is a **cargo virtual workspace of four libraries and one binary**, with a strict dependency direction: everything depends on the core crate, nothing depends on the CLI, and `adept_agent` sits at the top of the stack, composing its siblings (see the amended rule in §16).
 
 ```
 adept_cli  (bin: `adept`)
-  ├── adept_fix ──┬── adept_fmt ──┐
+  ├── adept_agent ──┬── adept_fmt ──┐
   │               └── adept_score ┤
   ├── adept_fmt ───────────────── ┤
   ├── adept_score ───────────────── ┤
   └── adept ◄──────────────────────┘   (core: data model, parser, diagnostics, rule engine, tokenizer)
 ```
 
-`adept_fmt` and `adept_score` do not know about each other. `adept_fix` deliberately depends on both (reusing `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather than duplicating them — see §16). Only `adept_cli` composes all of them into the binary.
+`adept_fmt` and `adept_score` do not know about each other. `adept_agent` deliberately depends on both (reusing `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather than duplicating them — see §16). Only `adept_cli` composes all of them into the binary.
 
 ## 3. Technology Stack
 
@@ -128,16 +128,19 @@ crates/adept_score/        LLM SCORING — depends on adept; async throughout
     overlap.rs             Offline Jaccard shortlist → LLM adjudication of shortlisted pairs
     report.rs              ScoreReport + human renderer
 
-crates/adept_fix/          LLM-ASSISTED LINT AUTOFIX — depends on adept, adept_score (LlmClient),
-                            and adept_fmt (canonicalization); the one crate allowed to depend on
-                            both siblings — see the amended dependency rule in §16
+crates/adept_agent/        LLM-ASSISTED AGENT CAPABILITIES — depends on adept, adept_score
+                            (LlmClient), and adept_fmt (canonicalization); the one crate allowed
+                            to depend on both siblings — see the amended dependency rule in §16
   src/
-    lib.rs                 FixOptions, FixError, FixReport, `fix_skill` (the single entry point)
+    lib.rs                 Crate-root re-exports; shared machinery lives here for future siblings
     candidate.rs            FixCandidate, FixResponse (model JSON), companion-path sandboxing
-    relocate.rs             The SL302 token-conservation guard (`conserves_content`)
     prompts.rs              Description- and body-scope prompt templates + PROMPT_VERSION
     diff.rs                 Multi-file unified diff rendering
     writer.rs               write_all_transactionally — atomic multi-file apply
+    fix/                   `adept fix`'s own implementation (not shared with future siblings)
+      mod.rs                 FixError, FixReport, `fix_skill` (the single entry point)
+      options.rs             FixOptions
+      relocate.rs             The SL302 token-conservation guard (`conserves_content`)
 
 crates/adept_cli/          BINARY `adept` — composes all four libraries
   src/
@@ -225,7 +228,7 @@ capture_dir = ".adept-capture"  # off by default; gitignore it
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"
-max_rounds = 2                 # falls back to adept_fix::DEFAULT_MAX_ROUNDS
+max_rounds = 2                 # falls back to adept_agent::DEFAULT_MAX_ROUNDS
 capture_dir = ".adept-capture"  # independent of [score] capture_dir
 ```
 
@@ -270,7 +273,7 @@ Each command module re-declares its own `EXIT_*` consts. Conventions per command
 - **`check`**: `--format human|json`, `--select`/`--ignore` (comma-separated or repeated; accept either a code `SL201` or a kebab name `description-too-short`), `--statistics`, `--exit-zero`, `--tokenizer`. `--select` is implemented as "disable everything not named" on top of `LintConfig::disabled` — see `apply_select_ignore`.
 - **`fmt`**: `--check` (diff + exit 1), `--diff` (diff, exit 0), `--line-width`. Writes are **atomic**: temp file `.{name}.adept-tmp` in the same directory, `sync_all`, then `rename`. A failed format never clobbers the original.
 - **`score`**: builds its own `tokio::runtime::Runtime` and calls `block_on`. `adept_score` never creates a runtime.
-- **`fix`**: LLM-assisted autofix for `FixKind::Llm` diagnostics. **Preview by default** — computes and prints a `FixReport` (rendered summary or unified diff via `--diff`) without touching disk; `--write` applies pending files via `adept_fix::write_all_transactionally`, `--check` exits `1` if any skill has pending changes, printing the same diff `--diff` would (matching `fmt --check`). `--select`/`--ignore` restrict which diagnostics are attempted; `--max-rounds` bounds the fix/re-lint loop (default `adept_fix::DEFAULT_MAX_ROUNDS = 2`). Also builds its own `tokio::runtime::Runtime`, same as `score`.
+- **`fix`**: LLM-assisted autofix for `FixKind::Llm` diagnostics. **Preview by default** — computes and prints a `FixReport` (rendered summary or unified diff via `--diff`) without touching disk; `--write` applies pending files via `adept_agent::write_all_transactionally`, `--check` exits `1` if any skill has pending changes, printing the same diff `--diff` would (matching `fmt --check`). `--select`/`--ignore` restrict which diagnostics are attempted; `--max-rounds` bounds the fix/re-lint loop (default `adept_agent::DEFAULT_MAX_ROUNDS = 2`). Also builds its own `tokio::runtime::Runtime`, same as `score`.
 - **`score` and `fix` additionally take `--capture-dir`** (§15), resolved before any request is issued so a bad directory is exit 2, not a silent skip.
 - **`mcp`**: no flags; reads stdin until EOF.
 
@@ -339,7 +342,7 @@ All prompt templates live in `prompts.rs` and are stamped into every report as `
 
 Then add a fixture under `crates/adept/tests/fixtures/rules/` and an insta snapshot test (§13).
 
-**Opting a rule into LLM fixing.** `Rule::fix_kind()` defaults to `FixKind::None`; a rule signals it is safe for `adept fix` to attempt — and which part of the skill its diagnostics are about — by passing `Llm` plus a region to `impl_rule!`: `impl_rule!(MyRule, "SL107", "my-rule", Warning, Llm, Description);` (region is `Description` or `Body`; see `tokens::BodyTokenBudget`/`SL302` → `Body`, `tokens::DescriptionTokenBudget`/`SL301` → `Description`, `description::NoNegativeGuidance`/`SL206` → `Description`). This expands to `FixKind::Llm(FixRegion::Description)` etc. This is metadata only — `adept` itself never fixes anything; setting `FixKind::Llm(_)` just makes the rule visible to `adept_fix::fixable()`, and its `FixRegion` tells `adept_fix` which batched request (description-scope or body-scope) to route the diagnostic into — `adept_fix` hard-codes no rule-code list of its own. Tagging a new rule `FixKind::Llm` is therefore immediately sufficient to make `adept fix` attempt it; a `crates/adept/src/rules/mod.rs` unit test (`only_expected_rules_are_tagged_llm_fixable`) pins the current `Llm`-tagged set and each one's region so the two don't silently drift apart. `FixKind::Deterministic` exists for a future non-LLM autofixer, carries no region, and nothing currently returns it. Only `SkillRule` diagnostics are ever attempted by `adept_fix`; `SetRule` (cross-skill) findings are reported by `adept check` but never auto-rewritten (see `crates/adept_fix/src/lib.rs` module docs and `docs/BACKLOG.md`).
+**Opting a rule into LLM fixing.** `Rule::fix_kind()` defaults to `FixKind::None`; a rule signals it is safe for `adept fix` to attempt — and which part of the skill its diagnostics are about — by passing `Llm` plus a region to `impl_rule!`: `impl_rule!(MyRule, "SL107", "my-rule", Warning, Llm, Description);` (region is `Description` or `Body`; see `tokens::BodyTokenBudget`/`SL302` → `Body`, `tokens::DescriptionTokenBudget`/`SL301` → `Description`, `description::NoNegativeGuidance`/`SL206` → `Description`). This expands to `FixKind::Llm(FixRegion::Description)` etc. This is metadata only — `adept` itself never fixes anything; setting `FixKind::Llm(_)` just makes the rule visible to `adept_agent::fixable()`, and its `FixRegion` tells `adept_agent` which batched request (description-scope or body-scope) to route the diagnostic into — `adept_agent` hard-codes no rule-code list of its own. Tagging a new rule `FixKind::Llm` is therefore immediately sufficient to make `adept fix` attempt it; a `crates/adept/src/rules/mod.rs` unit test (`only_expected_rules_are_tagged_llm_fixable`) pins the current `Llm`-tagged set and each one's region so the two don't silently drift apart. `FixKind::Deterministic` exists for a future non-LLM autofixer, carries no region, and nothing currently returns it. Only `SkillRule` diagnostics are ever attempted by `adept_agent`; `SetRule` (cross-skill) findings are reported by `adept check` but never auto-rewritten (see `crates/adept_agent/src/lib.rs` module docs and `docs/BACKLOG.md`).
 
 **Severity and enablement** are applied by the `Linter`, never by the rule. Rules build diagnostics with their `default_severity()`; `LintConfig::apply_overrides` rewrites it afterwards. Both `disabled` and `severity_overrides` accept either the code or the kebab-case name.
 
@@ -428,7 +431,7 @@ Three rules follow and are not negotiable: the `Authorization` header is **omitt
 
 The things not to violate:
 
-- **Dependency direction is one-way, with one documented exception.** `adept_fmt` and `adept_score` depend on `adept` and never on each other; shared behaviour between *those two* moves *down* into `adept`, never sideways. `adept_fix` is a top-of-stack composing crate: it deliberately depends on both `adept_score` (reuses its `LlmClient`/`OpenAiCompatClient` stack rather than re-implementing an LLM transport) and `adept_fmt` (reuses `format_skill` to canonicalize every candidate before re-linting/diffing it), per `specs/adept-fix-command.md`. The invariant this preserves is narrower than "one-way": **nothing may depend on `adept_fix`**, and `adept_fmt`/`adept_score` still never depend on each other or on `adept_fix`. Do not use `adept_fix` as precedent for adding a sideways dependency between `adept_fmt` and `adept_score` themselves.
+- **Dependency direction is one-way, with one documented exception.** `adept_fmt` and `adept_score` depend on `adept` and never on each other; shared behaviour between *those two* moves *down* into `adept`, never sideways. `adept_agent` is a top-of-stack composing crate: it deliberately depends on both `adept_score` (reuses its `LlmClient`/`OpenAiCompatClient` stack rather than re-implementing an LLM transport) and `adept_fmt` (reuses `format_skill` to canonicalize every candidate before re-linting/diffing it), per `specs/adept-fix-command.md`. The invariant this preserves is narrower than "one-way": **nothing may depend on `adept_agent`**, and `adept_fmt`/`adept_score` still never depend on each other or on `adept_agent`. Do not use `adept_agent` as precedent for adding a sideways dependency between `adept_fmt` and `adept_score` themselves.
 - **`check` and `fmt` never touch the network.** Only `score` (and the MCP `score_skill` tool) does.
 - **MCP stdout carries only JSON-RPC.** All logging goes to stderr; `handle_message` stays I/O-pure.
 - **The tracing writer is stderr, never stdout.** `tracing_subscriber::fmt()` defaults to stdout; `logging.rs` overrides that with an explicit `.with_writer(std::io::stderr)`. A subscriber that lands on stdout breaks every MCP client silently. Only `main` installs one — libraries emit events and never subscribe. See §15.

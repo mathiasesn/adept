@@ -231,7 +231,7 @@ pub struct FixFileConfig {
     /// falls back to [`adept::Tokenizer::default`] (`o200k_base`).
     pub tokenizer: Option<adept::Tokenizer>,
     /// The maximum number of fix rounds to attempt before giving up.
-    /// `None` falls back to [`adept_fix::DEFAULT_MAX_ROUNDS`].
+    /// `None` falls back to [`adept_agent::DEFAULT_MAX_ROUNDS`].
     pub max_rounds: Option<usize>,
     /// Directory to write verbatim LLM call artifacts into. `None` (the
     /// default) disables capture. Overridden by `--capture-dir`; a relative

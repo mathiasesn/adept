@@ -59,7 +59,7 @@ fn default_filter(verbosity: u8) -> EnvFilter {
         _ => "trace",
     };
     EnvFilter::new(format!(
-        "adept={level},adept_cli={level},adept_fmt={level},adept_score={level},adept_fix={level}"
+        "adept={level},adept_cli={level},adept_fmt={level},adept_score={level},adept_agent={level}"
     ))
 }
 

@@ -79,7 +79,7 @@ Documented in `crates/adept_fmt`, each visible as an unexpected diff to users:
   ambiguity.
 
 ### `adept fix` writes are not cross-file atomic
-`adept_fix::write_all_transactionally` writes every file in a batch to a
+`adept_agent::write_all_transactionally` writes every file in a batch to a
 sibling temp file first and only renames into place once all temp writes
 have succeeded, so a normal I/O error never partially applies a batch. But
 each `rename` is atomic only *per file*, not across the whole batch — a
@@ -87,7 +87,7 @@ crash or power loss between the first and last rename in a multi-file fix
 (SKILL.md plus one or more relocated companion files) can leave the batch
 partially applied. Accepted known limitation: there is no cross-file
 transaction log, and the exposure window is short (all fallible work
-happens before any rename). Documented in `crates/adept_fix/src/writer.rs`.
+happens before any rename). Documented in `crates/adept_agent/src/writer.rs`.
 
 ### `adept fix` never rewrites cross-skill (`SetRule`) findings
 Only single-skill (`SkillRule`) diagnostics tagged `FixKind::Llm` (`SL206`,
@@ -99,7 +99,7 @@ This is deliberate, not an oversight: a cross-skill rewrite would need to
 reconcile changes across multiple skills' files in one candidate, which is
 a materially different (and riskier) problem than the single-skill
 description/body rewrites `fix_skill` does today. Accepted known
-limitation; see `crates/adept_fix/src/lib.rs` module docs.
+limitation; see `crates/adept_agent/src/lib.rs` module docs.
 
 ### Parse errors bypass the rule pipeline
 `SL001`/`SL002`/`SL003` are synthesized by a `match` on `AdeptError` in
@@ -245,7 +245,7 @@ network latency, not CPU:
   implementors.** It exists so the tag's shape does not have to change when
   mechanical autofixes land (spec non-goal: "those belong on a future
   `check --fix`"). Retained deliberately; do not delete it as dead code.
-- **`adept_fix` is the one crate that depends on its siblings.** ARCHI's
+- **`adept_agent` is the one crate that depends on its siblings.** ARCHI's
   layering rule is otherwise one-way (everything depends on `adept`, siblings
   never on each other), but the spec explicitly mandates reusing
   `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather
@@ -467,18 +467,18 @@ deterministic linter cannot check, so the honest split is:
 that can lint its own output before emitting it. `create` should therefore
 not be a prompt that returns markdown; it should be a generate → `check` →
 repair loop that refuses to emit a skill its own linter rejects, reusing
-the accept/reject machinery `adept_fix` already has. Note the honest bound
+the accept/reject machinery `adept_agent` already has. Note the honest bound
 from the split above: a clean `adept check` proves the mechanical tier
 only, and the guide's own emphasis lies mostly outside it. `create` is
 worth building because the generation prompt can carry the judgment the
 linter cannot — not because the linter validates it.
 
-**Placement.** `adept_fix` is already the designated top-of-stack crate that
+**Placement.** `adept_agent` is already the designated top-of-stack crate that
 may compose `adept_score` and `adept_fmt`; `create` needs the same three
 things (LLM transport, linting, canonicalization) plus a writer. Two
 options, and this is the open design question: a new `adept_create` crate
-alongside `adept_fix` at the top of the stack, or a module within
-`adept_fix` on the grounds that "LLM proposes, linter screens, writer
+alongside `adept_agent` at the top of the stack, or a module within
+`adept_agent` on the grounds that "LLM proposes, linter screens, writer
 commits" is one pipeline instantiated twice. The second is less code and
 keeps one accept-gate implementation; the first keeps a crate named after
 repair from also owning creation. Either way nothing in the library stack
@@ -560,7 +560,7 @@ Recorded 2026-07-31, from `specs/cli-tracing.md`.
   sees only a request body and could never populate it, so the field was
   structurally always `None` and made the feature read as more complete than it
   was. The intended shape when this lands is a **`tracing::Span` field set by
-  `adept_score::triggering` / `adept_fix` and read at capture time** — the step
+  `adept_score::triggering` / `adept_agent` and read at capture time** — the step
   context already lives there, and a span carries it down without widening any
   signature. Explicitly *not* a `set_step()` mutator on the client (it would
   make a `Sync` client statefully order-dependent), and not a struct field the

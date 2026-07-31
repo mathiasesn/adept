@@ -31,10 +31,10 @@ Virtual cargo workspace, five crates, one binary (`adept`):
 - `adept` — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, and `markdown` (the shared pulldown-cmark lexer).
 - `adept_fmt` — formatter: canonical frontmatter + Markdown reflow. Idempotent, atomic writes.
 - `adept_score` — LLM-assisted scoring (triggering accuracy, token bloat, overlap) behind `&dyn LlmClient`. Fully async; **never** creates a tokio runtime.
-- `adept_fix` — LLM autofix for `FixKind::Llm` diagnostics; top-of-stack, deliberately composes `adept_score` (LLM transport) and `adept_fmt` (canonicalization).
+- `adept_agent` — LLM autofix for `FixKind::Llm` diagnostics; top-of-stack, deliberately composes `adept_score` (LLM transport) and `adept_fmt` (canonicalization).
 - `adept_cli` — clap CLI + `adept.toml` config + hand-rolled MCP stdio server.
 
-Dependency direction: `adept_fmt` and `adept_score` depend on `adept` and never on each other — shared behaviour moves *down* into `adept`, never sideways. `adept_fix` is the one deliberate exception: it sits above both and may compose them. Nothing in the library stack may depend on `adept_fix`; only `adept_cli` does.
+Dependency direction: `adept_fmt` and `adept_score` depend on `adept` and never on each other — shared behaviour moves *down* into `adept`, never sideways. `adept_agent` is the one deliberate exception: it sits above both and may compose them. Nothing in the library stack may depend on `adept_agent`; only `adept_cli` does.
 
 Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml` is discovered by walking up from the target path. `[fix]` and `[score]` are independent sections (no fallback between them); the `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY` env vars are the only thing they share.
 
@@ -56,9 +56,9 @@ Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml
 1. Add the unit struct + `check` impl to the taxonomy file matching its code: `SL00x` → `rules/frontmatter.rs`, `SL1xx` → `structure.rs`, `SL2xx` → `description.rs`, `SL3xx` → `tokens.rs`, `SL4xx` → `cross.rs`.
 2. `impl_rule!(MyRule, "SL107", "my-rule", Warning);` on one line next to the struct — never hand-write the `impl Rule` block. The optional trailing argument sets `fix_kind`, which defaults to `FixKind::None`:
    - `, Deterministic` — fixable without an LLM.
-   - `, Llm, Description` or `, Llm, Body` — opts the rule into `adept fix`; the second ident is the `FixRegion` (those two variants are the only ones) telling `adept_fix` which part of the skill to rewrite.
+   - `, Llm, Description` or `, Llm, Body` — opts the rule into `adept fix`; the second ident is the `FixRegion` (those two variants are the only ones) telling `adept_agent` which part of the skill to rewrite.
 
-   This is metadata only: `adept_fix` hard-codes no rule list, and a unit test pins the tagged set.
+   This is metadata only: `adept_agent` hard-codes no rule list, and a unit test pins the tagged set.
 3. Register it in `Registry::new`, in the matching `vec![]`, in code order.
 4. Document it in `docs/RULES.md` — `crates/adept/tests/docs_test.rs` fails the build otherwise.
 

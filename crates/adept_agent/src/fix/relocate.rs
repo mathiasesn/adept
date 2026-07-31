@@ -111,7 +111,7 @@ mod tests {
     fn skill(body: &str) -> Skill {
         let source = format!("---\nname: demo\ndescription: A demo skill for tests\n---\n{body}");
         Skill {
-            path: PathBuf::from("/nonexistent/adept_fix_relocate_test/SKILL.md"),
+            path: PathBuf::from("/nonexistent/adept_agent_relocate_test/SKILL.md"),
             frontmatter: adept::Frontmatter {
                 name: "demo".into(),
                 name_line: 2,
@@ -137,7 +137,7 @@ mod tests {
                 "word ".repeat(200)
             ),
             companions: BTreeMap::from([(
-                PathBuf::from("/nonexistent/adept_fix_relocate_test/REFERENCE.md"),
+                PathBuf::from("/nonexistent/adept_agent_relocate_test/REFERENCE.md"),
                 "word ".repeat(800),
             )]),
         };
@@ -155,12 +155,12 @@ mod tests {
 
         let body = "word ".repeat(50);
         let source = format!("---\nname: demo\ndescription: A demo skill for tests\n---\n{body}");
-        let untouched_path = PathBuf::from("/nonexistent/adept_fix_relocate_test/UNTOUCHED.md");
+        let untouched_path = PathBuf::from("/nonexistent/adept_agent_relocate_test/UNTOUCHED.md");
         // A large pre-existing companion the model never edits.
         let untouched_content = "word ".repeat(5000);
 
         let original = Skill {
-            path: PathBuf::from("/nonexistent/adept_fix_relocate_test/SKILL.md"),
+            path: PathBuf::from("/nonexistent/adept_agent_relocate_test/SKILL.md"),
             frontmatter: adept::Frontmatter {
                 name: "demo".into(),
                 name_line: 2,

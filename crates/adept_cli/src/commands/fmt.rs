@@ -104,6 +104,6 @@ fn handle_skill(
     }
 
     let formatted = format_skill(skill, config)?;
-    adept_fix::write_atomically(&skill.path, &formatted)?;
+    adept_agent::write_atomically(&skill.path, &formatted)?;
     Ok(true)
 }
