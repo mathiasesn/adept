@@ -288,16 +288,243 @@ network latency, not CPU:
   the single-construction-site invariant is worth more than the duplicated
   option list.
 
+## External prior art: `huggingface/upskill`
+
+Recorded so this survey is not repeated. `huggingface/upskill` (Python,
+`uv`/`uvx`, built on fast-agent) generates and *empirically evaluates* agent
+skills: a teacher model writes a `SKILL.md`, a test generator produces
+synthetic cases, and a student model is run with and without the skill to
+measure whether the skill actually helped. Its pipeline is `generate` →
+`generate_tests` → `eval` → `runs`, its prompts live as three standalone
+"agent cards" (`skill_gen.md`, `test_gen.md`, `evaluator.md`), and its
+graders live in `verifiers.py` / `validators/`.
+
+The two projects are **complementary, not competing**: adept checks
+*conformance* (does this skill file follow the rules that correlate with
+working well) and never runs a skill; upskill measures *outcomes* and never
+checks frontmatter validity or token budgets. The single overlap is
+`adept score`, and it is the overlap where adept is weakest — `score`'s
+triggering accuracy is an LLM judge over synthetic prompts, a proxy for
+behaviour, where upskill measures behaviour directly.
+
+Ranked. Items 1 and 2 are **accepted at full scope**, which supersedes two of
+the spec's original non-goals; read the "Deferred by design" section below
+alongside them, and `docs/MVP.md` where those non-goals originate.
+
+1. **Deterministic verifiers as an `adept fix` accept gate.** upskill's
+   `verifiers.py` is ~150 lines of dumb, reliable grading — `contains`,
+   `file_exists`, `file_contains`, shell `command` (exit code, 60s timeout)
+   — plus a pluggable validator registry (a `register_validator("name")`
+   decorator), each returning `{passed, assertions_passed, assertions_total}`.
+   Today every adept LLM surface is judged by another LLM call; `fix`'s
+   accept/reject gate relies on re-linting alone. Deterministic assertions
+   would give it a gate that cannot itself hallucinate.
+   **Adopted at full scope, including the shell `command` verifier**, which
+   supersedes the "executing or sandbox-testing skill scripts" non-goal (see
+   below, and `docs/MVP.md`). Executing skill-supplied commands is a real new
+   threat surface for a tool that until now only reads files, so the design
+   owes three things before any code lands: execution must be opt-in via
+   flag/config rather than on by default; it must be unreachable from `check`
+   and `fmt`, which stay offline and side-effect-free; and upskill's limits
+   (60s timeout, ~1200-char output truncation) are the floor, not the design.
+   Sandboxing is the genuinely open question — upskill leans on its executor
+   (including a container image for the HF Jobs path) for isolation, and
+   adept, as a single binary with no orchestration layer, has no equivalent
+   to lean on.
+2. **Baseline / lift, reported as lift-per-token.** upskill's headline metric
+   is *skill lift*: pass rate with the skill minus pass rate without it,
+   computed automatically in single-model mode. `adept score` reports an
+   absolute F1 with no counterfactual, so a 0.95 does not tell you whether
+   the skill earns the context budget it spends. Pairing lift with the
+   existing token-bloat analysis gives lift-per-token, which is the number
+   that actually decides whether a skill should exist — and which neither
+   tool computes today. **Adopted at full scope**, superseding the "full
+   agent-harness end-to-end evals" non-goal: a real baseline comparison means
+   running a task with and without the skill and grading the outcome, which
+   is an end-to-end eval by definition. Two consequences to design around.
+   First, this is a *new surface*, not an extension of `score` — `score`
+   answers "would this skill trigger", lift answers "did this skill help",
+   and collapsing them into one command would make the existing F1 output
+   mean two different things depending on flags. Second, it depends on
+   item 1: lift is only as trustworthy as the grader that decides whether a
+   run passed, so the verifiers land first.
+3. **Run persistence and history.** upskill writes
+   `runs/<timestamp>/run_N/{run_metadata,run_result}.json` plus a
+   `batch_summary.json` and an aggregate `results.csv`, queryable via
+   `upskill runs`. `adept score` is fire-and-forget, so there is no way to
+   tell whether a `fix` improved anything. `PROMPT_VERSION` already exists in
+   `adept_score::prompts` precisely because scores drift between prompt
+   revisions — persisted runs keyed by that version would make the versioning
+   useful rather than just a warning label. Lowest-risk item here: new I/O in
+   `adept_cli`, nothing in the library stack, no non-goal touched.
+4. **Split the generator and judge models.** upskill separates skill
+   generation, test generation and evaluation into distinct roles with
+   distinct model flags and a documented fallback chain (CLI
+   `--test-gen-model` → config `test_gen_model` → `skill_generation_model`).
+   `adept fix` uses one model to both rewrite and screen. A
+   `[fix] model` / `[fix] judge_model` split would let a strong model propose
+   while a cheap one screens. Cheap: config surface plus plumbing through the
+   existing `resolve_llm_client` helper.
+   Note upskill keeps its prompts as external markdown files where adept
+   compiles them in — that part is *not* worth copying, since a single static
+   binary benefits from compiled-in prompts. Only the role split transfers.
+5. **Multi-model comparison (`--runs N`, repeated `-m`).** upskill defaults to
+   these because single-sample LLM eval is noise. adept's `--judge-samples` is
+   the same instinct, but there is no way to compare two models on one skill.
+   `&dyn LlmClient` is already the right seam, so this is mostly CLI surface.
+   Nice-to-have; only after 1–3.
+
+~~**Explicitly not worth taking:** skill *generation* (`upskill generate`).~~
+**Superseded** by the `adept create` item below, which adopts generation as
+a first-class surface. The reasoning recorded here is retained because the
+*constraints* it names still bind the design: adept's leverage is that
+`check` and `fmt` are offline, deterministic and fast (~19.6ms/100 skills),
+and generation is none of those — so it must land as a separate, opt-in,
+network-using surface that leaves those two untouched, exactly as `score`
+and `fix` already do. The integration framing also still holds in reverse:
+`adept check --format json` remains the fast, free gate that belongs inside
+any generator's refine loop, including adept's own. The HF Jobs remote
+executor stays out of scope: adept has no orchestration story and should
+not grow one.
+
+## Planned surface: `adept create`
+
+A sixth surface, a sibling of `score` and `fix` rather than of `check` and
+`fmt`: generate a new skill from a description of the task it should cover.
+Where `fix` repairs an existing `SKILL.md` and `score` judges one, `create`
+produces one that did not exist. This reverses the "skill generation is not
+worth taking" conclusion recorded above; that paragraph is annotated
+accordingly.
+
+**Source of the authoring rules.** `mattpocock/skills`,
+`skills/productivity/writing-great-skills/SKILL.md` (read 2026-07-31; it is
+itself user-invoked, `disable-model-invocation: true`, and discloses its
+definitions to a sibling `GLOSSARY.md`). Its thesis: a skill exists to
+wrangle determinism out of a stochastic system, and **predictability** —
+the agent taking the same *process* every run, not producing the same
+output — is the root virtue every other lever serves. The levers:
+
+- **Invocation is a two-way choice with a cost on each side.** A
+  model-invoked skill keeps a trigger-bearing `description` and pays
+  *context load* (the description sits in the window every turn); a
+  user-invoked skill sets `disable-model-invocation: true`, pays zero
+  context load, and spends *cognitive load* instead — the human becomes the
+  index. Model-invocation is warranted only when the agent or another skill
+  must reach the skill unaided.
+- **The description carries triggers, not identity.** Front-load the
+  leading word; one trigger per **branch**; synonyms renaming a single
+  branch are duplication; cut anything the body already says.
+- **Information hierarchy**, a three-rung ladder: in-skill *step* (ordered
+  action, ending on a **completion criterion** that must be checkable and
+  often exhaustive), in-skill *reference* (consulted on demand; a flat
+  peer-set is legitimate, not a smell), and *external reference* pushed
+  behind a **context pointer** whose wording — not its target — decides how
+  reliably the agent reaches it. Branching is the disclosure test: inline
+  what every branch needs, disclose what only some reach.
+- **Split only when the cut earns it**, by invocation (a distinct leading
+  word deserving its own trigger) or by sequence (hiding post-completion
+  steps that tempt the agent to rush the current one).
+- **Pruning**: single source of truth, relevance, and a sentence-by-sentence
+  **no-op** test — delete the whole sentence rather than trim it.
+- **Leading words**: compact concepts already in pretraining (*tight*,
+  *red*, *fog of war*) that collapse a restated triad into one token and
+  anchor behaviour by recruiting priors the model already holds.
+- **Failure modes** to diagnose against: premature completion, duplication,
+  sediment, sprawl, no-op, and **negation** (steering by prohibition
+  backfires — prompt the positive).
+
+**Correcting the earlier draft.** This item previously stood in for the
+above with the local `write-a-skill` skill, and claimed every requirement
+was already an adept rule or could be. Against the real source that claim
+is **wrong**, and the difference matters enough to state plainly. The
+substituted guide was a mechanical checklist (≤100 lines, ≤1024-char
+description, "Use when…" phrasing, when to bundle scripts) — none of which
+appears in the real skill, which is instead almost entirely *editorial
+judgment*: is this sentence a no-op, is this the right rung of the ladder,
+is this word doing pretraining work. Judgment is precisely what a
+deterministic linter cannot check, so the honest split is:
+
+- **Already covered by existing rules.** Sprawl is `SL3xx` (token budget);
+  broken context pointers are `SL104`; cross-skill duplication is
+  `SL402`/`SL403`.
+- **New, and genuinely lintable.** An *invocation-mode coherence* rule is
+  the strongest candidate: `disable-model-invocation: true` alongside a
+  description written with model-facing trigger phrasing ("Use when…") is a
+  flat contradiction the skill names explicitly, and it is mechanically
+  detectable. `disable-model-invocation` already parses — unknown
+  frontmatter keys land in `Skill::extra` (`parser.rs:156`), so the field is
+  readable today without a parser change. Negation is a plausible Info-level
+  heuristic ("don't"/"never" in imperative position). Intra-skill
+  duplication is a weaker but real candidate; adept only compares *across*
+  skills today.
+- **Not lintable, and should not be faked.** No-ops, leading-word strength,
+  ladder placement, completion-criterion sharpness. These belong to the LLM
+  surfaces — and this is the actual argument for `create`: the most valuable
+  half of skill-authoring guidance is judgment adept can only apply while
+  *writing*, not while checking.
+
+**Why this fits adept specifically.** adept is the only tool in this space
+that can lint its own output before emitting it. `create` should therefore
+not be a prompt that returns markdown; it should be a generate → `check` →
+repair loop that refuses to emit a skill its own linter rejects, reusing
+the accept/reject machinery `adept_fix` already has. Note the honest bound
+from the split above: a clean `adept check` proves the mechanical tier
+only, and the guide's own emphasis lies mostly outside it. `create` is
+worth building because the generation prompt can carry the judgment the
+linter cannot — not because the linter validates it.
+
+**Placement.** `adept_fix` is already the designated top-of-stack crate that
+may compose `adept_score` and `adept_fmt`; `create` needs the same three
+things (LLM transport, linting, canonicalization) plus a writer. Two
+options, and this is the open design question: a new `adept_create` crate
+alongside `adept_fix` at the top of the stack, or a module within
+`adept_fix` on the grounds that "LLM proposes, linter screens, writer
+commits" is one pipeline instantiated twice. The second is less code and
+keeps one accept-gate implementation; the first keeps a crate named after
+repair from also owning creation. Either way nothing in the library stack
+may depend on it, and `adept_cli` is the only consumer.
+
+**Constraints inherited, not renegotiated.** `create` calls the network, so
+it lives under the same rules as `score` and `fix`: `check` and `fmt` stay
+offline and side-effect-free; no test performs network I/O
+(`MockLlmClient`); exit codes keep their `0`/`1`/`2` meanings; writes are
+atomic. It also *writes new files into a directory the user names*, which
+is a wider blast radius than `fix`'s in-place rewrite of files it was
+pointed at — so it needs a preview-by-default mode with an explicit
+`--write`, mirroring `fix`, and it must refuse to overwrite an existing
+skill directory without an explicit opt-in.
+
+**Ordering.** Independent of the five upskill items above, but sequenced
+behind them in value: `create` produces skills, and items 1–2 are what
+would tell you whether the skills it produces are any good. Building
+generation before the lift measurement means shipping a generator with no
+way to evaluate it beyond its own linter.
+
 ## Deferred by design
 
 From the spec's non-goals and constraints — recorded so they aren't
 rediscovered as bugs:
 
 - Hosted registry / marketplace / index.
-- Executing or sandbox-testing skill scripts.
-- Full agent-harness end-to-end evals (only prompt→trigger judgments).
+- ~~Executing or sandbox-testing skill scripts.~~ **Superseded** by item 1 of
+  the upskill survey above: adept will grow deterministic verifiers including
+  a shell `command` verifier, to give `adept fix` an accept gate that is not
+  itself an LLM. The non-goal is retired as a *product* boundary, not as a
+  safety one — the constraints in item 1 (opt-in, never reachable from
+  `check`/`fmt`, hard timeout and output caps, sandboxing story required)
+  replace it and are binding.
+- ~~Full agent-harness end-to-end evals (only prompt→trigger judgments).~~
+  **Superseded** by item 2: measuring skill lift requires running a task with
+  and without the skill and grading the result. `score` keeps its narrower
+  prompt→trigger meaning; lift belongs to a new surface, and depends on the
+  verifiers from item 1 landing first.
 - Non-Anthropic skill formats. The parser trait exists; see the filename
   limitation above before building on it.
+
+Both supersessions originate in `docs/MVP.md`'s non-goals list, annotated
+there to match. They are decisions of record, not open questions — but note
+neither has an implementation yet, so nothing in the shipped binary has
+changed and `check`/`fmt` remain offline and side-effect-free.
 
 ## Pre-publish checklist
 
