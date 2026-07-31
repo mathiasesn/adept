@@ -17,9 +17,17 @@
 //! a file self-describing even after being truncated, concatenated with
 //! another dataset, or appended to by hand.
 //!
-//! This module is deliberately inert: no network access, no subprocess
-//! spawning, and no filesystem access beyond what a caller hands it as a
-//! `&str`. It exists to define and check a shape, nothing more.
+//! **adept never executes a dataset**: it never spawns a subprocess and
+//! never runs a case itself. But adept is the reference *grader* for one,
+//! invoked by a separate harness that executes each case and hands the
+//! results back. The dataset half of this module (parsing, validating) has
+//! no filesystem access beyond what a caller hands it as a `&str`; the
+//! grading half ([`grade`]) does read files — but only ones the harness
+//! names via a supplied working directory, never anything it spawns or
+//! discovers on its own.
+
+use std::collections::HashMap;
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -258,6 +266,400 @@ fn validate_parsed_refs(cases: &[(usize, &EvalCase)]) -> Result<(), EvalError> {
     Ok(())
 }
 
+/// Which arm of a comparison a [`CaseResult`] was produced under.
+///
+/// `Skill` (the default, so a results file that never mentions arms just
+/// works) is the run under test; `Baseline` is what makes skill lift
+/// computable in [`grade`] — omitted, not zeroed, when no baseline results
+/// are present at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Arm {
+    /// The skill under test.
+    #[default]
+    Skill,
+    /// A baseline run (e.g. the same prompt without the skill available),
+    /// used only to compute lift.
+    Baseline,
+}
+
+/// Token counts reported by a harness for one case run, as `{"in": N, "out": N}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    /// Input (prompt) tokens.
+    #[serde(rename = "in")]
+    pub input: u64,
+    /// Output (completion) tokens.
+    #[serde(rename = "out")]
+    pub output: u64,
+}
+
+/// One line of a harness-produced `results.jsonl` sidecar: what actually
+/// happened when a harness ran one [`EvalCase`].
+///
+/// This is a separate, separately-versioned format from the eval dataset
+/// itself (see the module docs) — it is not an [`EvalCase`] and carries no
+/// `schema_version`, since it is produced fresh by a harness for each run
+/// rather than authored and maintained like a dataset.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CaseResult {
+    /// Which dataset case this result is for: the 1-indexed line number in
+    /// `evals/evals.jsonl`.
+    pub case: usize,
+    /// `"skill"` (default) or `"baseline"`.
+    #[serde(default)]
+    pub arm: Arm,
+    /// The agent's response text, graded by [`Assertion::Contains`].
+    pub response: String,
+    /// Working directory the case ran in. `file_exists`/`file_contains`
+    /// paths resolve against it; absent means those assertions are
+    /// [`AssertionOutcome::Skipped`].
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// Map of command string to observed exit code, as reported by the
+    /// harness (adept never runs a `command` assertion itself). A
+    /// `command` assertion with no entry here is
+    /// [`AssertionOutcome::Skipped`].
+    #[serde(default)]
+    pub command_exit_codes: HashMap<String, i32>,
+    /// Token usage for this run, when the harness reports it.
+    #[serde(default)]
+    pub tokens: Option<TokenUsage>,
+}
+
+/// Parse a JSONL `results.jsonl` sidecar from `text`, one [`CaseResult`] per
+/// line. Blank lines are skipped, matching [`parse_jsonl`]'s behaviour for
+/// datasets.
+///
+/// # Errors
+/// Returns [`EvalError::Parse`] naming the 1-indexed line number of the
+/// first non-blank line that fails to parse as a [`CaseResult`].
+pub fn parse_results_jsonl(text: &str) -> Result<Vec<CaseResult>, EvalError> {
+    let mut results = Vec::new();
+    for (idx, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let result: CaseResult = serde_json::from_str(line).map_err(|source| EvalError::Parse {
+            line: idx + 1,
+            source,
+        })?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+/// The outcome of grading a single assertion against a [`CaseResult`].
+///
+/// A [`Skipped`](AssertionOutcome::Skipped) outcome is never a pass — it
+/// means adept could not check the assertion at all (no `cwd`, no reported
+/// exit code), which is different from checking it and finding it false.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssertionOutcome {
+    /// The assertion was checked and held.
+    Pass,
+    /// The assertion was checked and did not hold.
+    Fail,
+    /// The assertion could not be checked; see the paired reason.
+    Skipped,
+}
+
+/// The graded outcome of one [`Assertion`] within a case.
+#[derive(Debug, Clone, Serialize)]
+pub struct AssertionResult {
+    /// The assertion's `kind` discriminant (see [`Assertion::kind`]).
+    pub kind: &'static str,
+    /// Pass, fail, or skipped.
+    pub outcome: AssertionOutcome,
+    /// Present when `outcome` is [`Skipped`](AssertionOutcome::Skipped)
+    /// (why it could not be checked, e.g. "no cwd supplied") or when a
+    /// [`Fail`](AssertionOutcome::Fail) needs more explanation than a bare
+    /// boolean gives (e.g. a `path` that escaped `cwd`).
+    pub detail: Option<String>,
+}
+
+/// The graded outcome of one [`CaseResult`].
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseReport {
+    /// The 1-indexed dataset case this result graded.
+    pub case: usize,
+    /// Which arm this result was for.
+    pub arm: Arm,
+    /// `true` only if every non-skipped assertion passed **and** at least
+    /// one assertion was actually checked (see the module-level grading
+    /// rules) — an all-skipped case is never reported as passing.
+    pub pass: bool,
+    /// Per-assertion outcomes, in dataset order.
+    pub assertions: Vec<AssertionResult>,
+}
+
+/// The full report produced by [`grade`]: per-case outcomes plus aggregate
+/// metrics, in the spirit of huggingface/upskill's `upskill eval`.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct EvalBenchmarkReport {
+    /// One entry per graded [`CaseResult`] (not per dataset case — a case
+    /// with both a skill and a baseline result produces two entries).
+    pub cases: Vec<CaseReport>,
+    /// Fraction of `skill`-arm cases that passed (0.0 if there were none).
+    pub pass_rate: f64,
+    /// Assertions met divided by assertions checked, across all graded
+    /// results. Skipped assertions are excluded from both numerator and
+    /// denominator.
+    pub assertion_success_rate: f64,
+    /// Total assertions actually checked (i.e. not skipped).
+    pub assertions_checked: usize,
+    /// Of `assertions_checked`, how many passed.
+    pub assertions_met: usize,
+    /// Total assertions skipped, across all graded results.
+    pub assertions_skipped: usize,
+    /// Skip reason to count, so a run that silently graded nothing is
+    /// visible rather than looking like a perfect score.
+    pub skipped_reasons: HashMap<String, usize>,
+    /// Baseline arm's pass rate, present only when at least one `baseline`
+    /// result was graded.
+    pub baseline_pass_rate: Option<f64>,
+    /// `pass_rate - baseline_pass_rate`, in percentage points. Omitted
+    /// (not zeroed) when there is no baseline arm.
+    pub lift_percentage_points: Option<f64>,
+    /// Sum of input tokens across results that reported [`TokenUsage`].
+    pub tokens_in: Option<u64>,
+    /// Sum of output tokens across results that reported [`TokenUsage`].
+    pub tokens_out: Option<u64>,
+    /// `case` values from results that named a dataset case out of range
+    /// (including `0`, since cases are 1-indexed).
+    pub out_of_range_results: Vec<usize>,
+    /// 1-indexed dataset cases that had no `skill`-arm result at all.
+    pub unmatched_cases: Vec<usize>,
+}
+
+/// Grade `results` (typically parsed via [`parse_results_jsonl`]) against
+/// `cases` (typically parsed via [`parse_jsonl`]/[`validate`]).
+///
+/// Purely offline and deterministic: a substring match, filesystem reads
+/// resolved against each result's `cwd`, and a lookup into
+/// `command_exit_codes` — adept never spawns the `command` itself. See the
+/// module docs and `docs/EVALS.md` for the full division of labour.
+#[must_use]
+pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport {
+    let mut report = EvalBenchmarkReport::default();
+    let mut skill_seen = vec![false; cases.len()];
+    let (mut skill_pass, mut skill_total) = (0usize, 0usize);
+    let (mut baseline_pass, mut baseline_total) = (0usize, 0usize);
+    let (mut tokens_in, mut tokens_out) = (0u64, 0u64);
+    let mut any_tokens = false;
+
+    for result in results {
+        if result.case == 0 || result.case > cases.len() {
+            report.out_of_range_results.push(result.case);
+            continue;
+        }
+        let case = &cases[result.case - 1];
+        let case_report = grade_case(case, result, &mut report);
+
+        match result.arm {
+            Arm::Skill => {
+                skill_seen[result.case - 1] = true;
+                skill_total += 1;
+                if case_report.pass {
+                    skill_pass += 1;
+                }
+            }
+            Arm::Baseline => {
+                baseline_total += 1;
+                if case_report.pass {
+                    baseline_pass += 1;
+                }
+            }
+        }
+
+        if let Some(tokens) = &result.tokens {
+            any_tokens = true;
+            tokens_in += tokens.input;
+            tokens_out += tokens.output;
+        }
+
+        report.cases.push(case_report);
+    }
+
+    for (idx, seen) in skill_seen.iter().enumerate() {
+        if !seen {
+            report.unmatched_cases.push(idx + 1);
+        }
+    }
+
+    report.pass_rate = if skill_total > 0 {
+        skill_pass as f64 / skill_total as f64
+    } else {
+        0.0
+    };
+    report.assertion_success_rate = if report.assertions_checked > 0 {
+        report.assertions_met as f64 / report.assertions_checked as f64
+    } else {
+        0.0
+    };
+    if baseline_total > 0 {
+        let baseline_rate = baseline_pass as f64 / baseline_total as f64;
+        report.baseline_pass_rate = Some(baseline_rate);
+        report.lift_percentage_points = Some((report.pass_rate - baseline_rate) * 100.0);
+    }
+    if any_tokens {
+        report.tokens_in = Some(tokens_in);
+        report.tokens_out = Some(tokens_out);
+    }
+
+    report
+}
+
+/// Grade every assertion of `case` against `result`, folding checked/met/
+/// skipped counts into `report`'s aggregate fields, and return the
+/// per-case outcome.
+fn grade_case(
+    case: &EvalCase,
+    result: &CaseResult,
+    report: &mut EvalBenchmarkReport,
+) -> CaseReport {
+    let mut assertions = Vec::with_capacity(case.assertions.len());
+    let mut checked = 0usize;
+    let mut met = 0usize;
+
+    for assertion in &case.assertions {
+        let (outcome, detail) = grade_assertion(assertion, result);
+        match outcome {
+            AssertionOutcome::Pass => {
+                checked += 1;
+                met += 1;
+            }
+            AssertionOutcome::Fail => {
+                checked += 1;
+            }
+            AssertionOutcome::Skipped => {
+                report.assertions_skipped += 1;
+                let reason = detail.clone().unwrap_or_else(|| "skipped".to_string());
+                *report.skipped_reasons.entry(reason).or_insert(0) += 1;
+            }
+        }
+        assertions.push(AssertionResult {
+            kind: assertion.kind(),
+            outcome,
+            detail,
+        });
+    }
+
+    report.assertions_checked += checked;
+    report.assertions_met += met;
+
+    // Pass only if every non-skipped assertion passed AND at least one
+    // assertion was actually checked — this is what keeps an all-skipped
+    // case from silently looking like a perfect pass.
+    let pass = checked > 0 && met == checked;
+
+    CaseReport {
+        case: result.case,
+        arm: result.arm,
+        pass,
+        assertions,
+    }
+}
+
+/// Grade a single assertion against a result, returning its outcome and an
+/// optional detail (skip reason, or extra context on a failure).
+fn grade_assertion(
+    assertion: &Assertion,
+    result: &CaseResult,
+) -> (AssertionOutcome, Option<String>) {
+    match assertion {
+        Assertion::Contains { value } => {
+            if result.response.contains(value.as_str()) {
+                (AssertionOutcome::Pass, None)
+            } else {
+                (AssertionOutcome::Fail, None)
+            }
+        }
+        Assertion::FileExists { path } => match resolve_case_path(result, path) {
+            Ok(None) => (
+                AssertionOutcome::Skipped,
+                Some("no cwd supplied".to_string()),
+            ),
+            Ok(Some(full)) => {
+                if full.is_file() {
+                    (AssertionOutcome::Pass, None)
+                } else {
+                    (
+                        AssertionOutcome::Fail,
+                        Some(format!("{} does not exist", path)),
+                    )
+                }
+            }
+            Err(reason) => (AssertionOutcome::Fail, Some(reason)),
+        },
+        Assertion::FileContains { path, value } => match resolve_case_path(result, path) {
+            Ok(None) => (
+                AssertionOutcome::Skipped,
+                Some("no cwd supplied".to_string()),
+            ),
+            Ok(Some(full)) => match std::fs::read_to_string(&full) {
+                Ok(contents) if contents.contains(value.as_str()) => (AssertionOutcome::Pass, None),
+                Ok(_) => (
+                    AssertionOutcome::Fail,
+                    Some(format!("{} does not contain expected value", path)),
+                ),
+                Err(err) => (
+                    AssertionOutcome::Fail,
+                    Some(format!("could not read {}: {}", path, err)),
+                ),
+            },
+            Err(reason) => (AssertionOutcome::Fail, Some(reason)),
+        },
+        Assertion::Command { command } => match result.command_exit_codes.get(command) {
+            None => (
+                AssertionOutcome::Skipped,
+                Some("no exit code reported for command".to_string()),
+            ),
+            Some(0) => (AssertionOutcome::Pass, None),
+            Some(code) => (AssertionOutcome::Fail, Some(format!("exit code {code}"))),
+        },
+    }
+}
+
+/// Resolve `path` against `result.cwd`, if present.
+///
+/// Returns `Ok(None)` when `result` has no `cwd` (the assertion should be
+/// skipped, not failed), `Ok(Some(full_path))` when `path` resolves
+/// strictly inside `cwd`, and `Err(reason)` when `path` escapes it (an
+/// absolute path, or any `..`/`.` component).
+fn resolve_case_path(result: &CaseResult, path: &str) -> Result<Option<PathBuf>, String> {
+    match &result.cwd {
+        None => Ok(None),
+        Some(cwd) => safe_join_within(Path::new(cwd), path).map(Some),
+    }
+}
+
+/// Join `rel` onto `base`, rejecting anything that could escape `base`.
+///
+/// This is deliberately **not** `adept_agent::candidate::resolve_companion_path`:
+/// that helper requires the target be a *direct child* of its directory,
+/// which is the right rule for a skill's companion files but wrong here —
+/// eval assertion paths are commonly nested (e.g. `src/out.txt` written by
+/// a multi-file skill run). This helper instead allows any number of plain
+/// (`Normal`) path components and rejects only absolute paths and `..`/`.`
+/// components, so nested paths are fine but nothing can walk outside `cwd`.
+fn safe_join_within(base: &Path, rel: &str) -> Result<PathBuf, String> {
+    let rel_path = Path::new(rel);
+    for component in rel_path.components() {
+        match component {
+            Component::Normal(_) => {}
+            other => {
+                return Err(format!(
+                    "path {rel:?} is not allowed: contains disallowed component {other:?}"
+                ))
+            }
+        }
+    }
+    Ok(base.join(rel_path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +775,307 @@ mod tests {
         let text = r#"{"schema_version":1,"assertions":[]}"#; // missing `prompt`
         let err = parse_jsonl(text).unwrap_err();
         assert!(matches!(err, EvalError::Parse { line: 1, .. }));
+    }
+
+    // --- grading tests ---
+
+    fn contains_case(value: &str) -> EvalCase {
+        EvalCase {
+            schema_version: SCHEMA_VERSION,
+            prompt: "do the thing".to_string(),
+            assertions: vec![Assertion::Contains {
+                value: value.to_string(),
+            }],
+        }
+    }
+
+    fn skill_result(case: usize, response: &str) -> CaseResult {
+        CaseResult {
+            case,
+            arm: Arm::Skill,
+            response: response.to_string(),
+            cwd: None,
+            command_exit_codes: HashMap::new(),
+            tokens: None,
+        }
+    }
+
+    #[test]
+    fn parses_results_jsonl_skipping_blanks() {
+        let text = "{\"case\":1,\"response\":\"ok\"}\n\n{\"case\":2,\"response\":\"ok2\",\"arm\":\"baseline\"}\n";
+        let results = parse_results_jsonl(text).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].case, 1);
+        assert_eq!(results[0].arm, Arm::Skill);
+        assert_eq!(results[1].arm, Arm::Baseline);
+    }
+
+    #[test]
+    fn parse_results_jsonl_reports_offending_line() {
+        let text = "{\"case\":1,\"response\":\"ok\"}\nnot json\n";
+        let err = parse_results_jsonl(text).unwrap_err();
+        match err {
+            EvalError::Parse { line, .. } => assert_eq!(line, 2),
+            other => panic!("expected Parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn grade_all_pass() {
+        let cases = vec![contains_case("hello"), contains_case("world")];
+        let results = vec![skill_result(1, "hello there"), skill_result(2, "big world")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.pass_rate, 1.0);
+        assert_eq!(report.assertion_success_rate, 1.0);
+        assert!(report.unmatched_cases.is_empty());
+        assert!(report.out_of_range_results.is_empty());
+    }
+
+    #[test]
+    fn grade_all_fail() {
+        let cases = vec![contains_case("hello"), contains_case("world")];
+        let results = vec![skill_result(1, "nope"), skill_result(2, "nada")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.pass_rate, 0.0);
+        assert_eq!(report.assertion_success_rate, 0.0);
+        assert!(report.cases.iter().all(|c| !c.pass));
+    }
+
+    #[test]
+    fn grade_mixed() {
+        let cases = vec![contains_case("hello"), contains_case("world")];
+        let results = vec![skill_result(1, "hello there"), skill_result(2, "nada")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.pass_rate, 0.5);
+    }
+
+    #[test]
+    fn grade_baseline_and_skill_arms_computes_lift() {
+        let cases = vec![contains_case("hello"), contains_case("world")];
+        let mut baseline1 = skill_result(1, "nope");
+        baseline1.arm = Arm::Baseline;
+        let mut baseline2 = skill_result(2, "nada");
+        baseline2.arm = Arm::Baseline;
+        let results = vec![
+            skill_result(1, "hello there"),
+            skill_result(2, "big world"),
+            baseline1,
+            baseline2,
+        ];
+        let report = grade(&cases, &results);
+        assert_eq!(report.pass_rate, 1.0);
+        assert_eq!(report.baseline_pass_rate, Some(0.0));
+        assert_eq!(report.lift_percentage_points, Some(100.0));
+    }
+
+    #[test]
+    fn grade_skill_arm_only_omits_lift() {
+        let cases = vec![contains_case("hello")];
+        let results = vec![skill_result(1, "hello there")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.baseline_pass_rate, None);
+        assert_eq!(report.lift_percentage_points, None);
+    }
+
+    #[test]
+    fn grade_every_assertion_kind_via_filesystem() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("out")).unwrap();
+        std::fs::write(dir.path().join("out/summary.md"), "the conclusion is X").unwrap();
+
+        let case = EvalCase {
+            schema_version: SCHEMA_VERSION,
+            prompt: "p".to_string(),
+            assertions: vec![
+                Assertion::Contains {
+                    value: "summary".to_string(),
+                },
+                Assertion::FileExists {
+                    path: "out/summary.md".to_string(),
+                },
+                Assertion::FileContains {
+                    path: "out/summary.md".to_string(),
+                    value: "conclusion".to_string(),
+                },
+                Assertion::Command {
+                    command: "test -s out/summary.md".to_string(),
+                },
+            ],
+        };
+        let mut command_exit_codes = HashMap::new();
+        command_exit_codes.insert("test -s out/summary.md".to_string(), 0);
+        let result = CaseResult {
+            case: 1,
+            arm: Arm::Skill,
+            response: "here is your summary".to_string(),
+            cwd: Some(dir.path().to_string_lossy().to_string()),
+            command_exit_codes,
+            tokens: Some(TokenUsage {
+                input: 10,
+                output: 20,
+            }),
+        };
+
+        let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
+        assert_eq!(report.pass_rate, 1.0);
+        assert_eq!(report.assertions_checked, 4);
+        assert_eq!(report.assertions_met, 4);
+        assert_eq!(report.assertions_skipped, 0);
+        assert_eq!(report.tokens_in, Some(10));
+        assert_eq!(report.tokens_out, Some(20));
+    }
+
+    #[test]
+    fn grade_skip_reasons_command_without_exit_code_and_file_without_cwd() {
+        let case = EvalCase {
+            schema_version: SCHEMA_VERSION,
+            prompt: "p".to_string(),
+            assertions: vec![
+                Assertion::FileExists {
+                    path: "out.txt".to_string(),
+                },
+                Assertion::FileContains {
+                    path: "out.txt".to_string(),
+                    value: "x".to_string(),
+                },
+                Assertion::Command {
+                    command: "true".to_string(),
+                },
+            ],
+        };
+        let result = skill_result(1, "response");
+        let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
+        assert_eq!(report.assertions_checked, 0);
+        assert_eq!(report.assertions_skipped, 3);
+        assert_eq!(
+            report.skipped_reasons.get("no cwd supplied").copied(),
+            Some(2)
+        );
+        assert_eq!(
+            report
+                .skipped_reasons
+                .get("no exit code reported for command")
+                .copied(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn all_skipped_case_is_not_reported_as_passing() {
+        // The load-bearing rule: a case whose only assertions were
+        // skipped must never come out as `pass == true`, or grading would
+        // silently look like a perfect score while checking nothing.
+        let case = EvalCase {
+            schema_version: SCHEMA_VERSION,
+            prompt: "p".to_string(),
+            assertions: vec![Assertion::Command {
+                command: "true".to_string(),
+            }],
+        };
+        let result = skill_result(1, "response");
+        let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
+        assert_eq!(report.cases.len(), 1);
+        assert!(!report.cases[0].pass);
+        assert_eq!(report.pass_rate, 0.0);
+    }
+
+    #[test]
+    fn grade_reports_out_of_range_case_index() {
+        let cases = vec![contains_case("hello")];
+        let results = vec![skill_result(5, "hello")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.out_of_range_results, vec![5]);
+        assert!(report.cases.is_empty());
+    }
+
+    #[test]
+    fn grade_reports_case_zero_as_out_of_range() {
+        let cases = vec![contains_case("hello")];
+        let results = vec![skill_result(0, "hello")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.out_of_range_results, vec![0]);
+    }
+
+    #[test]
+    fn grade_reports_dataset_case_with_no_result() {
+        let cases = vec![contains_case("hello"), contains_case("world")];
+        let results = vec![skill_result(1, "hello there")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.unmatched_cases, vec![2]);
+    }
+
+    #[test]
+    fn grade_rejects_path_escaping_cwd_with_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let case = EvalCase {
+            schema_version: SCHEMA_VERSION,
+            prompt: "p".to_string(),
+            assertions: vec![Assertion::FileExists {
+                path: "/etc/passwd".to_string(),
+            }],
+        };
+        let result = CaseResult {
+            case: 1,
+            arm: Arm::Skill,
+            response: "r".to_string(),
+            cwd: Some(dir.path().to_string_lossy().to_string()),
+            command_exit_codes: HashMap::new(),
+            tokens: None,
+        };
+        let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
+        assert!(!report.cases[0].pass);
+        let assertion = &report.cases[0].assertions[0];
+        assert_eq!(assertion.outcome, AssertionOutcome::Fail);
+        assert!(assertion.detail.is_some());
+    }
+
+    #[test]
+    fn grade_rejects_path_escaping_cwd_with_dotdot() {
+        let dir = tempfile::tempdir().unwrap();
+        let case = EvalCase {
+            schema_version: SCHEMA_VERSION,
+            prompt: "p".to_string(),
+            assertions: vec![Assertion::FileExists {
+                path: "../escape.txt".to_string(),
+            }],
+        };
+        let result = CaseResult {
+            case: 1,
+            arm: Arm::Skill,
+            response: "r".to_string(),
+            cwd: Some(dir.path().to_string_lossy().to_string()),
+            command_exit_codes: HashMap::new(),
+            tokens: None,
+        };
+        let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
+        assert!(!report.cases[0].pass);
+        assert_eq!(
+            report.cases[0].assertions[0].outcome,
+            AssertionOutcome::Fail
+        );
+    }
+
+    #[test]
+    fn grade_allows_nested_paths_within_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/out.txt"), "content").unwrap();
+        let case = EvalCase {
+            schema_version: SCHEMA_VERSION,
+            prompt: "p".to_string(),
+            assertions: vec![Assertion::FileExists {
+                path: "src/out.txt".to_string(),
+            }],
+        };
+        let result = CaseResult {
+            case: 1,
+            arm: Arm::Skill,
+            response: "r".to_string(),
+            cwd: Some(dir.path().to_string_lossy().to_string()),
+            command_exit_codes: HashMap::new(),
+            tokens: None,
+        };
+        let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
+        assert!(report.cases[0].pass);
     }
 }
