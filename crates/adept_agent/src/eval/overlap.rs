@@ -2,10 +2,12 @@
 //! pairwise description-similarity shortlist, followed by LLM adjudication
 //! only on the shortlisted pairs.
 //!
-//! The offline similarity heuristic here is implemented locally and is
-//! deliberately separate from any similarity rule a sibling agent may add
-//! to the `adept` core crate (e.g. an `SL4xx` rule) — this module does
-//! not depend on that.
+//! The offline similarity heuristic here calls `adept::text::word_bag` /
+//! `adept::text::jaccard` — the same primitives the `SL4xx` cross-skill
+//! rules use. The *thresholds and inputs* are deliberately divergent (this
+//! module shortlists on name+description at a lower, recall-tuned
+//! threshold; `SL402` emits a diagnostic on description-only at a higher,
+//! precision-tuned one) — see `docs/ARCHI.md` §10.
 
 use adept::Skill;
 use serde::{Deserialize, Serialize};

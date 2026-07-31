@@ -490,7 +490,7 @@ impl OpenAiCompatClient {
     /// and capture artifacts can be attributed to the right try.
     ///
     /// This is the single funnel every LLM call in the workspace passes
-    /// through — both `adept score` and `adept fix` — which is why it is the
+    /// through — both `adept eval` and `adept fix` — which is why it is the
     /// only instrumentation site.
     async fn send_once(
         &self,

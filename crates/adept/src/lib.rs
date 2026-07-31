@@ -1,9 +1,9 @@
 //! Core data model, parser, and diagnostics for `adept`, a linter,
-//! formatter, and scorer for Agent Skills.
+//! formatter, and evaluator for Agent Skills.
 //!
 //! This crate provides the shared foundation that `adept_fmt` (formatting),
-//! `adept_score` (LLM-assisted scoring), and `adept_cli` (the `adept`
-//! binary) build on:
+//! `adept_agent` (LLM-assisted evaluation, fixing, and creation), and
+//! `adept_cli` (the `adept` binary) build on:
 //!
 //! - [`Skill`] / [`Frontmatter`]: the parsed data model for a SKILL.md file.
 //! - [`SkillParser`] / [`AnthropicSkillParser`]: pluggable parsing, so other

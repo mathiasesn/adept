@@ -26,31 +26,30 @@ CI runs the four workspace commands above, then a perf smoke test that parses th
 
 ## Architecture
 
-Virtual cargo workspace, five crates, one binary (`adept`):
+Virtual cargo workspace, four crates, one binary (`adept`):
 
-- `adept` — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, and `markdown` (the shared pulldown-cmark lexer).
+- `adept` — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, `markdown` (the shared pulldown-cmark lexer), and `evals` (the eval-dataset schema plus the offline `grade` function).
 - `adept_fmt` — formatter: canonical frontmatter + Markdown reflow. Idempotent, atomic writes.
-- `adept_score` — LLM-assisted scoring (triggering accuracy, token bloat, overlap) behind `&dyn LlmClient`. Fully async; **never** creates a tokio runtime.
-- `adept_agent` — LLM-assisted agent capabilities; top-of-stack, deliberately composes `adept_score` (LLM transport) and `adept_fmt` (canonicalization). `fix` (autofix for `FixKind::Llm` diagnostics) is its own submodule; `candidate`/`diff`/`prompts`/`writer`/`gate` are crate-level machinery shared with `create` (generate → screen → repair → generate-evals skill authoring).
+- `adept_agent` — LLM-assisted agent capabilities; top-of-stack, composes `adept` and `adept_fmt` (canonicalization). Houses its own LLM transport at `adept_agent::llm` (`LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`) and the four `adept eval` analyses at `adept_agent::eval` (`triggering`, `tokens`, `overlap`, `report`), both re-exported at the crate root. `fix` (autofix for `FixKind::Llm` diagnostics) is its own submodule; `candidate`/`diff`/`prompts`/`writer`/`gate` are crate-level machinery shared with `create` (generate → screen → repair → generate-evals skill authoring).
 - `adept_cli` — clap CLI + `adept.toml` config + hand-rolled MCP stdio server.
 
-Dependency direction: `adept_fmt` and `adept_score` depend on `adept` and never on each other — shared behaviour moves *down* into `adept`, never sideways. `adept_agent` is the one deliberate exception: it sits above both and may compose them. Nothing in the library stack may depend on `adept_agent`; only `adept_cli` does.
+Dependency direction: `adept_fmt` depends only on `adept`. `adept_agent` is top-of-stack and may compose `adept` and `adept_fmt`. Nothing in the library stack may depend on `adept_agent`; only `adept_cli` does.
 
-Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml` is discovered by walking up from the target path. `[fix]`, `[score]` and `[create]` are three independent sections (no fallback between any of them); the `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY` env vars are the only thing they share.
+Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml` is discovered by walking up from the target path. `[fix]`, `[eval]` and `[create]` are three independent sections (no fallback between any of them); the `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY` env vars are the only thing they share. A config file containing a stale `[score]` section (the pre-rename name) is a hard error naming `[eval]`, not a silently-ignored table.
 
 ## Invariants (violating one is a design change, not a style choice)
 
-- **`check` and `fmt` never touch the network.** Only `score`/`fix` (and the MCP `score_skill` tool) do. No test may perform network I/O — use `adept_score::MockLlmClient`.
+- **`check`, `fmt`, and eval-dataset grading never touch the network.** The `triggering`, `token-bloat`, and `overlap` analyses do, and they run only when a model is configured; `adept eval --select evals` makes no network call and requires no API key. No test may perform network I/O — use `adept_agent::MockLlmClient`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O error.
-- **MCP stdout carries only JSON-RPC.** All logging goes to stderr; a stray `println!` in `commands/mcp.rs` breaks every client silently. `handle_message` stays I/O-pure. The MCP `create_skill`/`generate_evals` tools are preview-only and never write to disk.
-- **adept spawns no subprocess, ever.** Not `check`/`fmt`/`score`/`fix`, not `create` (the `command` eval assertion is defined and validated, never executed).
+- **MCP stdout carries only JSON-RPC.** All logging goes to stderr; a stray `println!` in `commands/mcp.rs` breaks every client silently. `handle_message` stays I/O-pure. The MCP `create_skill`/`generate_evals` tools are preview-only and never write to disk; `eval_skill` is read-only (also never writes) and, unlike those two, is always advertised regardless of whether a model is configured.
+- **adept spawns no subprocess, ever.** Not `check`/`fmt`/`eval`/`fix`, not `create` (the `command` eval assertion is defined and validated, never executed). Eval-dataset grading judges a `command` assertion only from a harness-supplied exit code.
 - **Rule codes are permanent and never reused.** `SL202` is retired and stays retired so old configs fail closed.
 - **One parser-construction site.** All markdown goes through `adept::markdown::parser()`, the sole caller of `Parser::new_ext` (`crates/adept/src/markdown/mod.rs`); `grep -rn "Parser::new" crates/` must keep yielding exactly one hit, or the linter and formatter drift on what a heading is.
 - **Never load BPE tables outside `token.rs::load_bpe`** (caches the `Result` too). Expensive objects are built once in `static OnceLock`, which is why `Rule: Send + Sync`.
 - **`fmt` writes atomically** (temp file + rename) and is idempotent; both are tested.
 - `Diagnostic` = something wrong with a parseable skill; `AdeptError` = I/O/parse failure. Discovery never aborts — errors become `SL001`/`SL002`/`SL003` diagnostics.
 - Sort output via `adept::sort_diagnostics` — never re-implement the `(path, line, column, code)` comparator.
-- Construct `ScoreOptions` via `ScoreOptions::for_model`, and bump `PROMPT_VERSION` in `adept_score::prompts` when template wording could shift scores.
+- Construct `EvalOptions` via `EvalOptions::for_model`, and bump `PROMPT_VERSION` in `adept_agent::eval::prompts` when template wording could shift scores.
 
 ## Adding a rule (all four steps required)
 

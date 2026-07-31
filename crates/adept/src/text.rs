@@ -2,7 +2,7 @@
 //!
 //! These are the tokenizer and Jaccard-similarity building blocks shared by
 //! `adept`'s own `SL4xx` cross-skill rules (`rules::cross`) and by
-//! `adept_score`'s offline overlap shortlist (`adept_score::overlap`).
+//! `adept_agent`'s offline overlap shortlist (`adept_agent::eval::overlap`).
 //! Extracted here so the two crates can't silently drift apart on what
 //! counts as a "word" or how similarity is computed; each caller still
 //! chooses its own *input text* and *similarity threshold* independently

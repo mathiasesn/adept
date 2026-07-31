@@ -158,7 +158,7 @@ directory) over `companion_file_max_tokens` (default **2000**). Bundled
 license files are exempt — `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT`
 (any extension) and `LICENSE-*`/`LICENCE-*` variants — since their
 boilerplate legal text is not skill content and routinely exceeds any
-reasonable budget. The exemption is scoped to this rule; `adept_score`'s
+reasonable budget. The exemption is scoped to this rule; `adept_agent::eval`'s
 token-bloat view still counts license files.
 
 Files under a top-level `evals/` directory *within the skill's own
@@ -170,7 +170,7 @@ ancestor: a file nested more than one level down (`<skill>/sub/evals/x`) is
 not exempt, and a skill that merely happens to live somewhere under a
 directory named `evals` on disk is not exempt either. Unlike the license
 exemption, this one is applied to both
-this rule and `adept_score`'s token-bloat view, since a generated dataset is
+this rule and `adept_agent::eval`'s token-bloat view, since a generated dataset is
 not skill content either. In practice this exemption is currently dormant:
 companion-file discovery is non-recursive, so a file nested under `evals/`
 is never discovered as a companion file in the first place and could never

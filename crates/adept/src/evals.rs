@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 /// The eval-dataset schema version this build of adept understands.
 ///
-/// Deliberately **independent of `adept_score::prompts::PROMPT_VERSION`**
+/// Deliberately **independent of `adept_agent::eval::prompts::PROMPT_VERSION`**
 /// (and of `adept_agent`'s prompt versions): prompt wording drifts routinely
 /// as generation is tuned, and none of that drift should look like a
 /// breaking change to a harness consuming this schema. `SCHEMA_VERSION`

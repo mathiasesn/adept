@@ -4,12 +4,13 @@ Open items as of `1e89f60` (MVP baseline `9bf467a` → `2e29dff`, plus the
 markdown-parsing unification, the vendored-corpus fixture, the reflow
 leaning-toothpick fix, the shared sibling-root rule, the SL303
 bundled-license exemption, the SL104 creation-intent exemption, and the
-`adept fix` command on top). Nothing here blocks the five shipped surfaces
-(`check`, `fmt`, `score`, `fix`, `mcp`); these are known gaps, deliberate
-deferrals, and follow-ups surfaced by the two-axis review. `score` and `mcp`
-now discover sibling skills through one shared `adept::sibling_root` (the
-parent of the skill's own directory), resolving the divergence previously
-tracked here.
+`adept fix` command on top, and the `adept_score` → `adept_agent` crate
+merge plus eval-dataset grading unified into `adept eval`). Nothing here
+blocks the five shipped surfaces (`check`, `fmt`, `eval`, `fix`, `mcp`);
+these are known gaps, deliberate deferrals, and follow-ups surfaced by the
+two-axis review. `eval` and `mcp` discover sibling skills through one
+shared `adept::sibling_root` (the parent of the skill's own directory),
+resolving the divergence previously tracked here.
 
 Items struck through below are closed; they are retained with their commit
 trail so a resolved concern is not rediscovered and re-litigated. The only
@@ -200,8 +201,8 @@ network latency, not CPU:
   `LICENSE-*` variants) via `adept::companion::is_license_file`, which lives
   beside `discover_companion_files` because recognizing a license file is a
   companion-file naming concern; the *application* (the skip) is scoped to the
-  SL303 rule, so the shared discovery walk and `adept_score`'s token-bloat
-  view are untouched. The corpus snapshot dropped from 36 to 27 diagnostics
+  SL303 rule, so the shared discovery walk and `adept_agent::eval`'s
+  token-bloat view are untouched. The corpus snapshot dropped from 36 to 27 diagnostics
   (the 9 per-skill `LICENSE.txt` findings are gone), and `docs/RULES.md`
   records the exemption.
 - **Diagnostic rendering has no display-root option.** `reporting.rs` renders
@@ -226,13 +227,13 @@ network latency, not CPU:
   parser for a format using `skill.yaml` or `AGENT.md` can never be handed a
   file. Adding `fn file_names(&self) -> &[&str]` (defaulted) would complete the
   pluggability seam the spec asked for.
-- **Deliberate similarity divergence.** `adept_score`'s overlap shortlist uses
-  name+description at 0.25; SL402 uses description-only at 0.6. Both now call
+- **Deliberate similarity divergence.** `adept_agent::eval`'s overlap shortlist
+  uses name+description at 0.25; SL402 uses description-only at 0.6. Both now call
   `adept::text::jaccard`, and the divergence is documented — but `check` and
-  `score` can still reach different conclusions about the same pair.
+  `eval` can still reach different conclusions about the same pair.
 - **`--statistics` prints counts in addition to diagnostics**, not instead of.
   One line in `check.rs` if instead-of is wanted.
-- **`FixFileConfig`, `ScoreFileConfig` and `CreateFileConfig` are structurally
+- **`FixFileConfig`, `EvalFileConfig` and `CreateFileConfig` are structurally
   near-identical, and the trigger this item named has now fired.** All three
   carry `model`, `base_url`, `tokenizer` and `capture_dir` (`fix` and `create`
   add `max_rounds`; `create` alone adds `eval_cases`), and all three resolve
@@ -240,24 +241,34 @@ network latency, not CPU:
   read "revisit if a third LLM-backed command appears" — `adept create` is
   that third command (`crates/adept_cli/src/config.rs::CreateFileConfig`), so
   the condition is met. The refactor itself (a `#[serde(flatten)]`ed common
-  `LlmFileConfig`) was deliberately kept **out of scope** of the `create` task,
-  since it would also touch `score` and `fix`; it remains open, now with its
-  trigger fired rather than merely hypothetical. The independence of the
-  `[fix]`/`[score]`/`[create]` *sections* is a spec requirement and must
+  `LlmFileConfig`) was deliberately kept **out of scope** of the `create` task
+  (and again out of scope of the `score`→`eval` unification), since it would
+  touch `eval` and `fix` too; it remains open, now with its trigger fired
+  rather than merely hypothetical. The independence of the
+  `[fix]`/`[eval]`/`[create]` *sections* is a spec requirement and must
   survive any such refactor — this is about the Rust structs, not the TOML
   surface.
+- **A blanket `deny_unknown_fields` on the config structs was deliberately left
+  out of scope of the `score`→`eval` unification.** The stale-`[score]` case is
+  handled precisely (`config.rs::contains_legacy_score_section`, a hard error
+  naming `[eval]` — see `docs/ARCHI.md` §7), but making every unrelated typo in
+  `adept.toml` a hard error is a separate, broader decision with its own
+  trade-offs (a mistyped key in `[lint]` would go from "silently ignored" to
+  "usage error"); it was not made here.
 - **`FixKind::Deterministic` is a documented placeholder with no
   implementors.** It exists so the tag's shape does not have to change when
   mechanical autofixes land (spec non-goal: "those belong on a future
   `check --fix`"). Retained deliberately; do not delete it as dead code.
-- **`adept_agent` is the one crate that depends on its siblings.** ARCHI's
+- **`adept_agent` is the one crate that depends on a sibling.** ARCHI's
   layering rule is otherwise one-way (everything depends on `adept`, siblings
   never on each other), but the spec explicitly mandates reusing
-  `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather
-  than duplicating HTTP/auth or printer code. Recorded in `docs/ARCHI.md` as a
-  top-of-stack composing crate that nothing else may depend on. The alternative
-  — moving the `LlmClient` stack down into `adept` — would restore the
-  original invariant at the cost of putting `reqwest` in the core crate.
+  `adept_fmt`'s canonicalization rather than duplicating printer code.
+  Recorded in `docs/ARCHI.md` as a top-of-stack composing crate that nothing
+  else may depend on. This item previously also named `adept_score`'s
+  `LlmClient` stack as a second dependency justifying the exception; that
+  crate no longer exists — its transport moved *into* `adept_agent` itself
+  (`adept_agent::llm`) rather than staying a sibling dependency, so the
+  exception is narrower than it used to be (one sibling, not two).
 - **`SL105`'s fix suggestion reads oddly for hash-prefixed headings.** For
   `#hashtag\n========` it suggests ``write it as `# #hashtag` ``, which is
   correct CommonMark but looks like a typo. Cosmetic; the message would need to
@@ -307,61 +318,61 @@ graders live in `verifiers.py` / `validators/`.
 The two projects are **complementary, not competing**: adept checks
 *conformance* (does this skill file follow the rules that correlate with
 working well) and never runs a skill; upskill measures *outcomes* and never
-checks frontmatter validity or token budgets. The single overlap is
-`adept score`, and it is the overlap where adept is weakest — `score`'s
-triggering accuracy is an LLM judge over synthetic prompts, a proxy for
-behaviour, where upskill measures behaviour directly.
+checks frontmatter validity or token budgets. The single overlap was
+`adept score` (now `adept eval`'s `triggering` analysis), and it is the
+overlap where adept is weakest — an LLM judge over synthetic prompts, a
+proxy for behaviour, where upskill measures behaviour directly. Items 1
+and 2 below close most of that gap.
 
-Ranked. Items 1 and 2 are **accepted at full scope**, which supersedes two of
-the spec's original non-goals; read the "Deferred by design" section below
-alongside them, and `docs/MVP.md` where those non-goals originate.
+Ranked. Items 1 and 2 are **accepted at full scope and shipped** — see
+`specs/unify-adept-eval.md` — which supersedes two of the spec's original
+non-goals; read the "Deferred by design" section below alongside them, and
+`docs/MVP.md` where those non-goals originate.
 
-1. **Deterministic verifiers as an `adept fix` accept gate.** upskill's
-   `verifiers.py` is ~150 lines of dumb, reliable grading — `contains`,
-   `file_exists`, `file_contains`, shell `command` (exit code, 60s timeout)
-   — plus a pluggable validator registry (a `register_validator("name")`
-   decorator), each returning `{passed, assertions_passed, assertions_total}`.
-   Today every adept LLM surface is judged by another LLM call; `fix`'s
-   accept/reject gate relies on re-linting alone. Deterministic assertions
-   would give it a gate that cannot itself hallucinate.
-   **Adopted at full scope, including the shell `command` verifier**, which
-   supersedes the "executing or sandbox-testing skill scripts" non-goal (see
-   below, and `docs/MVP.md`). Executing skill-supplied commands is a real new
-   threat surface for a tool that until now only reads files, so the design
-   owes three things before any code lands: execution must be opt-in via
-   flag/config rather than on by default; it must be unreachable from `check`
-   and `fmt`, which stay offline and side-effect-free; and upskill's limits
-   (60s timeout, ~1200-char output truncation) are the floor, not the design.
-   Sandboxing is the genuinely open question — upskill leans on its executor
-   (including a container image for the HF Jobs path) for isolation, and
-   adept, as a single binary with no orchestration layer, has no equivalent
-   to lean on.
-2. **Baseline / lift, reported as lift-per-token.** upskill's headline metric
-   is *skill lift*: pass rate with the skill minus pass rate without it,
-   computed automatically in single-model mode. `adept score` reports an
-   absolute F1 with no counterfactual, so a 0.95 does not tell you whether
-   the skill earns the context budget it spends. Pairing lift with the
-   existing token-bloat analysis gives lift-per-token, which is the number
-   that actually decides whether a skill should exist — and which neither
-   tool computes today. **Adopted at full scope**, superseding the "full
-   agent-harness end-to-end evals" non-goal: a real baseline comparison means
-   running a task with and without the skill and grading the outcome, which
-   is an end-to-end eval by definition. Two consequences to design around.
-   First, this is a *new surface*, not an extension of `score` — `score`
-   answers "would this skill trigger", lift answers "did this skill help",
-   and collapsing them into one command would make the existing F1 output
-   mean two different things depending on flags. Second, it depends on
-   item 1: lift is only as trustworthy as the grader that decides whether a
-   run passed, so the verifiers land first.
+1. ~~**Deterministic verifiers as an `adept fix` accept gate.**~~ **Shipped**,
+   though not quite where this item originally aimed it: rather than
+   becoming `fix`'s accept gate, the four verifiers (`contains`,
+   `file_exists`, `file_contains`, `command`) landed as `adept::evals`'s
+   assertion vocabulary and offline grader (`grade`), reached via `adept
+   eval --results results.jsonl`/`--select evals` and the MCP `eval_skill`
+   tool. This supersedes the "executing or sandbox-testing skill scripts"
+   non-goal in a narrower way than first scoped: adept still executes
+   nothing itself (see below and `docs/MVP.md`) — `contains`/`file_exists`/
+   `file_contains` are graded by adept from harness-supplied data (substring
+   match, filesystem reads), and `command` is graded only from a
+   harness-supplied exit code. The threat-surface concerns this item raised
+   (opt-in, unreachable from `check`/`fmt`, timeouts, sandboxing) turned out
+   not to apply, because adept never spawns the subprocess — the harness
+   does, and owns those concerns itself. See `docs/EVALS.md` for the full
+   division of labour.
+2. ~~**Baseline / lift, reported as lift-per-token.**~~ **Shipped** as skill
+   lift (percentage points, `pass_rate - baseline_pass_rate`), computed by
+   `adept::evals::grade` from `arm: "skill"`/`"baseline"` results and
+   surfaced in `adept eval`'s `evals` analysis. **Not** shipped as
+   lift-*per-token* — the report exposes lift and token usage as separate
+   fields; combining them into one ratio is still open. This superseded the
+   "full agent-harness end-to-end evals" non-goal in the way anticipated:
+   a real baseline comparison needs a task run with and without the skill,
+   graded — adept grades what a harness ran, it does not run the task
+   itself. As anticipated, this landed as a *new* analysis alongside
+   `triggering`, not a replacement — `triggering` still answers "would this
+   skill trigger" (a prompting proxy), `evals` answers "did this skill help"
+   (measured, given a harness that ran both arms). Both now live under one
+   `adept eval` command rather than two separate ones, which this item did
+   not anticipate (that unification is `specs/unify-adept-eval.md`, not
+   this survey).
 3. **Run persistence and history.** upskill writes
    `runs/<timestamp>/run_N/{run_metadata,run_result}.json` plus a
    `batch_summary.json` and an aggregate `results.csv`, queryable via
-   `upskill runs`. `adept score` is fire-and-forget, so there is no way to
-   tell whether a `fix` improved anything. `PROMPT_VERSION` already exists in
-   `adept_score::prompts` precisely because scores drift between prompt
-   revisions — persisted runs keyed by that version would make the versioning
-   useful rather than just a warning label. Lowest-risk item here: new I/O in
-   `adept_cli`, nothing in the library stack, no non-goal touched.
+   `upskill runs`. `adept eval` is fire-and-forget (aside from `--capture-dir`,
+   which records individual LLM calls, not eval runs), so there is no way to
+   tell whether a `fix` improved anything across runs over time. `PROMPT_VERSION`
+   already exists in `adept_agent::eval::prompts` precisely because scores
+   drift between prompt revisions — persisted runs keyed by that version
+   would make the versioning useful rather than just a warning label.
+   Lowest-risk item here: new I/O in `adept_cli`, nothing in the library
+   stack, no non-goal touched. **Still open** — not part of the `score`→`eval`
+   unification, whose non-goals explicitly excluded "run-history storage."
 4. **Split the generator and judge models.** upskill separates skill
    generation, test generation and evaluation into distinct roles with
    distinct model flags and a documented fallback chain (CLI
@@ -542,34 +553,57 @@ From the spec's non-goals and constraints — recorded so they aren't
 rediscovered as bugs:
 
 - Hosted registry / marketplace / index.
-- ~~Executing or sandbox-testing skill scripts.~~ **Superseded** by item 1 of
-  the upskill survey above: adept will grow deterministic verifiers including
-  a shell `command` verifier, to give `adept fix` an accept gate that is not
-  itself an LLM. The non-goal is retired as a *product* boundary, not as a
-  safety one — the constraints in item 1 (opt-in, never reachable from
-  `check`/`fmt`, hard timeout and output caps, sandboxing story required)
-  replace it and are binding.
+- ~~Executing or sandbox-testing skill scripts.~~ **Superseded and shipped**
+  per item 1 of the upskill survey above: `adept::evals` grades `contains`/
+  `file_exists`/`file_contains`/`command` assertions, with `command` graded
+  only from a harness-supplied exit code — adept itself still never spawns
+  a subprocess to grade one, which is why the "sandboxing story" concern
+  this non-goal originally raised turned out not to apply: there is no
+  execution inside adept to sandbox. The non-goal is retired as a *product*
+  boundary, not as a safety one; "adept spawns no subprocess, ever" (see
+  `docs/ARCHI.md` §16) is what replaced it and remains binding.
 - ~~Full agent-harness end-to-end evals (only prompt→trigger judgments).~~
-  **Superseded** by item 2: measuring skill lift requires running a task with
-  and without the skill and grading the result. `score` keeps its narrower
-  prompt→trigger meaning; lift belongs to a new surface, and depends on the
-  verifiers from item 1 landing first.
+  **Superseded and shipped** per item 2: `adept eval`'s `evals` analysis
+  reports skill lift from harness-supplied with/without-skill results.
+  `triggering` (formerly `score`) keeps its narrower prompt→trigger
+  meaning; lift is a separate analysis within the same `adept eval` command
+  (not the standalone new surface this item originally anticipated — see
+  item 2 above for how the design changed once `specs/unify-adept-eval.md`
+  merged it with `score` rather than shipping it alongside).
 - Non-Anthropic skill formats. The parser trait exists; see the filename
   limitation above before building on it.
 
 Both supersessions originate in `docs/MVP.md`'s non-goals list, annotated
-there to match. They are decisions of record, not open questions — but note
-neither has an implementation yet, so nothing in the shipped binary has
-changed and `check`/`fmt` remain offline and side-effect-free.
+there to match, and are now implemented (not merely decided) — `docs/EVALS.md`
+and `docs/ARCHI.md` §10/§16 describe the shipped shape. `check`/`fmt` remain
+offline and side-effect-free throughout.
+
+## New deferrals from the `score`→`eval` unification
+
+Recorded per `specs/unify-adept-eval.md` so they are not rediscovered:
+
+- **Dataset cases are referenced by 1-indexed line number, which is brittle.**
+  `CaseResult::case` and `results.jsonl` name a dataset case by its line
+  position in `evals/evals.jsonl`. If a harness reorders, filters, or
+  regenerates a subset of cases, a `case` number can silently point at the
+  wrong case rather than erroring — adept has no way to detect that from the
+  line number alone. Stable, content-addressed case ids would fix this but
+  require a dataset `schema_version` bump (a case-level `id` field is a shape
+  change), which is out of scope here. Revisit if a harness author reports
+  this biting in practice.
+- **A blanket `deny_unknown_fields` on the config structs remains out of
+  scope.** See the API-and-consistency entry above — the stale-`[score]`
+  case is handled precisely and narrowly; making every config typo a hard
+  error is a separate decision.
 
 ## Pre-publish checklist
 
 - Decide the reference-link behaviour above — it changes observable output,
   so it is cheaper to settle before there are users.
-- `score` and `fix` have never run against a live endpoint. Testing is
-  mock-only by design; one manual run of each against a real
+- `eval` (its LLM analyses) and `fix` have never run against a live endpoint.
+  Testing is mock-only by design; one manual run of each against a real
   OpenAI-compatible endpoint would confirm the request shape before release.
-  `fix` is the more important of the two to exercise: unlike `score` it
+  `fix` is the more important of the two to exercise: unlike `eval` it
   *writes*, and its accept/reject gate has only ever seen `MockLlmClient`
   responses shaped by hand — a real model's JSON (fenced, truncated, or
   ignoring the companion-edit contract) is the untested input class. Run it
@@ -591,13 +625,13 @@ Recorded 2026-07-31, from `specs/cli-tracing.md`.
   sees only a request body and could never populate it, so the field was
   structurally always `None` and made the feature read as more complete than it
   was. The intended shape when this lands is a **`tracing::Span` field set by
-  `adept_score::triggering` / `adept_agent` and read at capture time** — the step
+  `adept_agent::eval::triggering` / `adept_agent` and read at capture time** — the step
   context already lives there, and a span carries it down without widening any
   signature. Explicitly *not* a `set_step()` mutator on the client (it would
   make a `Sync` client statefully order-dependent), and not a struct field the
   client is expected to fill. Until it lands, a reader must infer the step from
   the call ordering and the prompt content.
-- **The MCP `score_skill` tool never captures.** `commands/mcp.rs` builds its
+- **The MCP `eval_skill` tool never captures.** `commands/mcp.rs` builds its
   own `OpenAiCompatClient` with no `with_capture` call. This is deliberate, per
   `specs/cli-tracing.md` §12: capture is a CLI-only surface, so the MCP tool
   schema stays unchanged and an MCP client cannot make the server write to

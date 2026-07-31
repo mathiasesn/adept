@@ -12,12 +12,14 @@ binary with four surfaces:
 - `adept check` — static, offline lint with ruff-style diagnostics.
 - `adept fmt` — prettier-style formatting of `SKILL.md` (frontmatter +
   full Markdown reflow).
-- `adept score` — LLM-assisted scoring: triggering accuracy, token bloat,
-  and cross-skill overlap detection.
+- `adept eval` — one evaluation command, four analyses: LLM-assisted
+  triggering accuracy, token bloat, and cross-skill overlap detection,
+  plus offline eval-dataset grading (pass rate, assertion success, skill
+  lift) against a harness-supplied `results.jsonl`.
 - `adept create` — LLM-assisted skill generation from a written brief:
   generate → lint → repair, plus a synthetic eval dataset.
-- `adept mcp` — an MCP server (stdio) so agents can lint/format skills
-  themselves.
+- `adept mcp` — an MCP server (stdio) so agents can lint/format/evaluate
+  skills themselves.
 
 ## Install
 
@@ -100,16 +102,20 @@ Formatting is idempotent (`fmt(fmt(x)) == fmt(x)`) and writes are atomic
 (temp file + rename), so a formatting error never clobbers the original
 file.
 
-## `adept score`
+## `adept eval`
 
-LLM-assisted scoring of one skill: how reliably its description triggers
-the right prompts, whether it's token-bloated, and whether it conflicts
-or overlaps with sibling skills.
+One evaluation command, four analyses: how reliably a skill's description
+triggers the right prompts, whether it's token-bloated, whether it
+conflicts or overlaps with sibling skills (all three LLM-assisted,
+network-backed), and — offline, no model required — how it performed
+against its `evals/evals.jsonl` dataset, graded from a harness-supplied
+`results.jsonl`. `path` accepts either a `SKILL.md` file or a skill
+directory.
 
 ```console
-$ adept score path/to/skill/SKILL.md
-Score report for skill: pdf-extractor
-(prompt set version: 1)
+$ adept eval path/to/skill/SKILL.md
+Eval report for skill: pdf-extractor
+(prompt set version: adept_score-prompts-v1)
 
 == Triggering accuracy ==
 precision: 1.00  recall: 0.90  f1: 0.95  (9/10 correct)
@@ -124,30 +130,54 @@ description: 24 tokens, body: 340 tokens, companions: 0 tokens, total: 364 token
   no shortlisted overlaps
 ```
 
-`adept score` talks to any OpenAI-compatible `/chat/completions` endpoint
-(OpenAI itself, local servers like Ollama/vLLM, or Anthropic via its
-OpenAI-compatibility layer), configured via environment variables or
-flags:
+The `triggering`, `token-bloat`, and `overlap` analyses talk to any
+OpenAI-compatible `/chat/completions` endpoint (OpenAI itself, local
+servers like Ollama/vLLM, or Anthropic via its OpenAI-compatibility
+layer), configured via environment variables or flags:
 
 | Env var           | Flag          | Purpose                                  |
 | ------------------ | ------------- | ----------------------------------------- |
-| `ADEPT_MODEL`       | `--model`     | Model identifier to request (required).   |
+| `ADEPT_MODEL`       | `--model`     | Model identifier to request.              |
 | `ADEPT_BASE_URL`    | `--base-url`  | Base URL, default `https://api.openai.com/v1`. |
 | `ADEPT_API_KEY`     | *(none)*      | Bearer token, if the endpoint needs one.  |
 
-Also: `--num-prompts`, `--seed`, `--judge-samples`, `--format human|json`,
-`--tokenizer o200k-base|cl100k-base` (default `o200k-base`; overrides
-the config file's `[score] tokenizer`) for the token-bloat analysis, and
-`--capture-dir <DIR>` (see [Logging and capture](#logging-and-capture)).
+Also: `--num-prompts`, `--seed`, `--judge-samples` (triggering),
+`--format human|json`, `--tokenizer o200k-base|cl100k-base` (default
+`o200k-base`; overrides the config file's `[eval] tokenizer`) for the
+token-bloat analysis, and `--capture-dir <DIR>` (see [Logging and
+capture](#logging-and-capture)).
 
-If no model can be resolved, `adept score` exits `2` with an actionable
-message instead of making a network call:
+The fourth analysis, **`evals`**, is offline and needs no model: pass
+`--results <results.jsonl>` (a harness-produced sidecar — see
+[`docs/EVALS.md`](docs/EVALS.md) for its exact fields) and it grades the
+skill's dataset (`evals/evals.jsonl` by default, or `--evals <path>` to
+override), reporting pass rate, assertion success, and skill lift.
 
 ```console
-$ adept score path/to/skill/SKILL.md
-adept: error: could not resolve an LLM model to score with.
-  set one of: --model <MODEL>, config file `[score] model = "..."`, or the ADEPT_MODEL environment variable
-  optionally also set ADEPT_BASE_URL (defaults to the OpenAI API) and ADEPT_API_KEY
+$ adept eval path/to/skill --evals evals.jsonl --results results.jsonl --select evals
+Eval report for skill: pdf-extractor
+
+== Eval-dataset grading ==
+pass rate: 100% (2 cases)
+assertions: 3/3 met (0 skipped)
+```
+
+`--select`/`--ignore` (comma-separated or repeated) restrict which of the
+four analyses run, by name (`triggering`, `token-bloat`, `overlap`,
+`evals`). Without them, `adept eval` runs whatever it can: `evals` when
+`--results` is supplied, the three LLM analyses when a model is
+configured. `--select evals` with no `--results`, or `--select triggering`
+with no model, is a usage error naming what's missing rather than a silent
+skip — and `--select evals` never constructs an LLM client or touches the
+network, even with no `ADEPT_MODEL` set.
+
+If an LLM analysis is selected (explicitly, or by the default "whatever's
+available" rule) but no model can be resolved, `adept eval` exits `2` with
+an actionable message instead of making a network call:
+
+```console
+$ adept eval path/to/skill/SKILL.md
+adept: error: nothing to evaluate: no model configured (--model/ADEPT_MODEL/[eval] model) and no --results supplied
 ```
 
 ## `adept fix`
@@ -176,15 +206,15 @@ accepted
 | `--diff`      | Print only the unified diff, not the full report.            |
 | `--select` / `--ignore` | Restrict which rule codes/names are attempted, same as `check`. |
 | `--max-rounds <n>` | Bound the fix/re-lint retry loop (default `2`).          |
-| `--model <M>` / `--base-url <U>` | LLM overrides, resolved against `[fix]`, not `[score]`. |
+| `--model <M>` / `--base-url <U>` | LLM overrides, resolved against `[fix]`, not `[eval]`. |
 | `--capture-dir <DIR>` | Save the raw request/response of every LLM call (see below). |
 
 Uses the same `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY`
-environment variables and `--model`/`--base-url` flags as `adept score`,
+environment variables and `--model`/`--base-url` flags as `adept eval`,
 but resolved against the independent `[fix]` config section (see
 Configuration below) — `adept fix` can point at a different model than
-`adept score`. If no model can be resolved, it exits `2` with the same
-kind of actionable message `adept score` gives.
+`adept eval`. If no model can be resolved, it exits `2` with the same
+kind of actionable message `adept eval` gives.
 
 A fix candidate for `SL302` is rejected (even if it clears the diagnostic)
 unless it *relocates* content into companion files rather than deleting
@@ -222,7 +252,7 @@ wrote 2 files to skills/pdf-filler
 | `--write` / `-w` | Write the generated skill and eval dataset to disk. |
 | `--overwrite` | Allow writing into a directory that already has a `SKILL.md`. |
 | `--max-rounds <n>` | Bound the generate/repair loop (default `2`). |
-| `--model <M>` / `--base-url <U>` | LLM overrides, resolved against `[create]`, independent of `[score]`/`[fix]`. |
+| `--model <M>` / `--base-url <U>` | LLM overrides, resolved against `[create]`, independent of `[eval]`/`[fix]`. |
 | `--capture-dir <DIR>` | Save the raw request/response of every LLM call (see below). |
 | `--format json` | Machine-readable output: generated files, remaining diagnostics, dataset. |
 
@@ -233,31 +263,43 @@ you empty-handed, but the exit code says the file is not guaranteed clean.
 ## `adept mcp`
 
 Runs `adept` as an MCP server over stdio, exposing the static/offline
-capabilities (`check_skill`, `format_skill`) as tools for other agents to
-call. Nothing but JSON-RPC responses is ever written to stdout; logging
-goes to stderr.
+capabilities (`check_skill`, `format_skill`) plus `eval_skill` as tools
+for other agents to call. Nothing but JSON-RPC responses is ever written
+to stdout; logging goes to stderr.
 
 ```console
 $ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | adept mcp
 {"jsonrpc":"2.0","id":1,"result":{"tools":[
   {"name":"check_skill", "description":"Lint a SKILL.md file...", "inputSchema":{...}},
-  {"name":"format_skill", "description":"Format a SKILL.md file's content...", "inputSchema":{...}}
+  {"name":"format_skill", "description":"Format a SKILL.md file's content...", "inputSchema":{...}},
+  {"name":"eval_skill", "description":"Evaluate a skill: triggering accuracy, token bloat, and overlap...", "inputSchema":{...}}
 ]}}
 ```
 
-A third tool, `score_skill`, runs LLM-assisted scoring. Since it's
-network-backed, it's only advertised in `tools/list` when an LLM backend
-can actually be resolved (`ADEPT_MODEL` etc. set, or `model`/`base_url`
-arguments passed); calling it directly without a resolvable config
-returns a structured tool error (`isError: true`) rather than hanging or
-panicking, and requests are bounded by an internal timeout.
+`eval_skill` runs the same four analyses as `adept eval` and is **always
+advertised**, even with no `ADEPT_MODEL` set — grading a skill's eval
+dataset (via an inline `results` argument, not a file path) needs no model
+and no network call. Its `triggering`/`token-bloat`/`overlap` analyses do
+need a resolvable model; calling those without one returns a structured
+tool error (`isError: true`) rather than hanging or panicking, and
+requests are bounded by an internal timeout. Passing `results` alongside
+raw `content` (no `path`) grades `contains` only and reports
+`file_exists`/`file_contains` as skipped, naming the missing directory —
+not as passes and not as an error.
+
+Two more tools, `create_skill` and `generate_evals`, are network-backed
+and **conditionally advertised** — only when an LLM backend can actually
+be resolved (`ADEPT_MODEL` etc. set, or `model`/`base_url` arguments
+passed):
 
 ```console
 $ ADEPT_MODEL=gpt-4o-mini echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | adept mcp
 {"jsonrpc":"2.0","id":1,"result":{"tools":[
   {"name":"check_skill", ...},
   {"name":"format_skill", ...},
-  {"name":"score_skill", "description":"Score a skill's triggering accuracy, token bloat, and overlap with sibling skills using an LLM...", "inputSchema":{...}}
+  {"name":"eval_skill", ...},
+  {"name":"create_skill", ...},
+  {"name":"generate_evals", ...}
 ]}}
 ```
 
@@ -289,7 +331,7 @@ tokenizer = "o200k_base"  # or "cl100k_base"
 [fmt]
 line-width = 100
 
-[score]
+[eval]
 model = "gpt-4o-mini"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
@@ -300,7 +342,7 @@ model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
 max_rounds = 2             # falls back to adept_agent::DEFAULT_MAX_ROUNDS
-capture_dir = ".adept-capture"   # independent of [score] capture_dir
+capture_dir = ".adept-capture"   # independent of [eval] capture_dir
 
 [create]
 model = "gpt-4o"
@@ -308,14 +350,22 @@ base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
 max_rounds = 2             # falls back to adept_agent::DEFAULT_MAX_ROUNDS
 eval_cases = 10             # falls back to adept_agent::create::DEFAULT_EVAL_CASES; no CLI flag
-capture_dir = ".adept-capture"   # independent of [score]/[fix] capture_dir
+capture_dir = ".adept-capture"   # independent of [eval]/[fix] capture_dir
 ```
 
-`[fix]` and `[create]` are each fully independent of `[score]` (and of each
-other) — set any of them if you want `fix`, `create`, and `score` to use
+`[fix]` and `[create]` are each fully independent of `[eval]` (and of each
+other) — set any of them if you want `fix`, `create`, and `eval` to use
 different models.
 
 Precedence: CLI flag > config file value > built-in default.
+
+A config file with a leftover `[score]` section (the pre-rename name) is a
+hard error naming the fix, rather than being silently parsed and ignored:
+
+```console
+$ adept eval path/to/skill --config old-adept.toml
+adept: error: old-adept.toml: `[score]` is no longer read; rename it to `[eval]`
+```
 
 A relative `capture_dir` in `adept.toml` resolves against the directory
 containing that `adept.toml`; a relative `--capture-dir` resolves against
@@ -334,10 +384,10 @@ $ adept fix path/to/skill/SKILL.md --diff -vv 2> run.log
 call), `-vvv` trace. It is a global flag, accepted by every subcommand.
 `ADEPT_LOG` overrides it with
 [`EnvFilter`](https://docs.rs/tracing-subscriber) directive syntax, e.g.
-`ADEPT_LOG=adept_score::client=trace`. With no `-v` and no `ADEPT_LOG`,
+`ADEPT_LOG=adept_agent::llm::client=trace`. With no `-v` and no `ADEPT_LOG`,
 nothing is logged at all.
 
-For anything you need to keep, use `--capture-dir` on `score`, `fix`, or `create`
+For anything you need to keep, use `--capture-dir` on `eval`, `fix`, or `create`
 instead of scraping the log. Each invocation writes a timestamped folder
 holding the verbatim request and response of every LLM call, plus enough
 metadata (model, base URL, prompt version, adept version, resolved

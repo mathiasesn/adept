@@ -2,7 +2,7 @@
 //! live alongside a skill.
 //!
 //! Used by [`crate::rules::tokens::CompanionFileBloat`] (`SL303`) and by
-//! `adept_score`'s token-bloat analysis, which previously each implemented
+//! `adept_agent::eval`'s token-bloat analysis, which previously each implemented
 //! their own (subtly different) version of this walk. Both callers want
 //! the same set of files, so this is the single shared implementation;
 //! callers still apply their own thresholds/analysis on top.
@@ -90,7 +90,7 @@ pub(crate) fn is_license_file(name: &str) -> bool {
 /// kept as cheap defence-in-depth: if discovery ever becomes recursive (e.g.
 /// to support `adept create`'s `evals/evals.jsonl`), the exemption is
 /// already wired into its two applicable consumers (`SL303` in
-/// `rules/tokens.rs`, and `adept_score`'s token-bloat view) rather than
+/// `rules/tokens.rs`, and `adept_agent::eval`'s token-bloat view) rather than
 /// needing to be added later, possibly incompletely, across every
 /// consumer — including ones (like `adept_agent`'s fix conservation guard)
 /// that must never see it change.

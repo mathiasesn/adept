@@ -84,7 +84,7 @@ impl SetRule for SimilarDescription {
             .collect();
         // Note: this rule's input is the description alone, at
         // `similar_description_threshold` (default 0.6) — distinct from
-        // `adept_score::description_similarity`, which uses name+description
+        // `adept_agent::eval::overlap`'s description_similarity, which uses name+description
         // at its own (lower, shortlisting) threshold. See that function's
         // docs.
 
