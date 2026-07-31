@@ -30,20 +30,36 @@ fn repo_root() -> PathBuf {
 /// via `Path::display`, and fixture paths are built from
 /// `CARGO_MANIFEST_DIR`, so without this the snapshot would be
 /// machine-dependent.
-fn strip_repo_root(rendered: String) -> String {
+fn strip_repo_root(rendered: &str) -> String {
     let prefix = format!("{}/", repo_root().display());
     rendered.replace(&prefix, "")
 }
 
 fn lint_fixture(name: &str) -> String {
-    strip_repo_root(render_human_colored(&diagnostics_for(name), false))
+    render_human_colored(&diagnostics_for(name), false)
 }
 
 fn lint_set_fixture(name: &str) -> String {
     let set = SkillSet::discover(fixture_dir(name)).expect("fixture set should discover");
     let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
     let diagnostics = linter.lint_set(&set);
-    strip_repo_root(render_human_colored(&diagnostics, false))
+    render_human_colored(&diagnostics, false)
+}
+
+/// Applies [`strip_repo_root`] and asserts a snapshot of the result, in one
+/// step. Every snapshot assertion in this file goes through this single
+/// macro rather than calling `insta::assert_snapshot!` directly, so the
+/// repo-root strip can never be forgotten at a call site the way the old
+/// per-call-site wrapping was (a snapshot test that builds its rendered
+/// string in a novel way, as `snapshot_sl003_malformed_frontmatter` does,
+/// bypassing `lint_fixture`/`lint_set_fixture` — the exact case that was
+/// missed once before — still gets location-independence automatically).
+/// The macro expands inline in the caller, so insta's snapshot-name
+/// detection (which is based on the enclosing function) is unaffected.
+macro_rules! assert_lint_snapshot {
+    ($rendered:expr) => {
+        insta::assert_snapshot!(strip_repo_root(&$rendered))
+    };
 }
 
 /// The raw diagnostics for a fixture, so tests can assert on line numbers
@@ -365,17 +381,17 @@ fn every_registered_rule_has_a_positive_fixture_test() {
 
 #[test]
 fn snapshot_clean_skill() {
-    insta::assert_snapshot!(lint_fixture("pdf-extractor"));
+    assert_lint_snapshot!(lint_fixture("pdf-extractor"));
 }
 
 #[test]
 fn snapshot_sl001_missing_description() {
-    insta::assert_snapshot!(lint_fixture("sl001_empty_description"));
+    assert_lint_snapshot!(lint_fixture("sl001_empty_description"));
 }
 
 #[test]
 fn snapshot_sl002_missing_name() {
-    insta::assert_snapshot!(lint_fixture("sl002_empty_name"));
+    assert_lint_snapshot!(lint_fixture("sl002_empty_name"));
 }
 
 #[test]
@@ -385,98 +401,95 @@ fn snapshot_sl003_malformed_frontmatter() {
     )
     .expect("should discover");
     let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
-    insta::assert_snapshot!(strip_repo_root(render_human_colored(
-        &linter.lint_set(&set),
-        false
-    )));
+    assert_lint_snapshot!(render_human_colored(&linter.lint_set(&set), false));
 }
 
 #[test]
 fn snapshot_sl004_name_mismatch() {
-    insta::assert_snapshot!(lint_fixture("sl004_name_mismatch"));
+    assert_lint_snapshot!(lint_fixture("sl004_name_mismatch"));
 }
 
 #[test]
 fn snapshot_sl005_invalid_name_format() {
-    insta::assert_snapshot!(lint_fixture("sl005_invalid_name_format"));
+    assert_lint_snapshot!(lint_fixture("sl005_invalid_name_format"));
 }
 
 #[test]
 fn snapshot_sl101_empty_body() {
-    insta::assert_snapshot!(lint_fixture("sl101_empty_body"));
+    assert_lint_snapshot!(lint_fixture("sl101_empty_body"));
 }
 
 #[test]
 fn snapshot_sl102_missing_h1() {
-    insta::assert_snapshot!(lint_fixture("sl102_missing_h1"));
+    assert_lint_snapshot!(lint_fixture("sl102_missing_h1"));
 }
 
 #[test]
 fn snapshot_sl103_heading_skip() {
-    insta::assert_snapshot!(lint_fixture("sl103_heading_skip"));
+    assert_lint_snapshot!(lint_fixture("sl103_heading_skip"));
 }
 
 #[test]
 fn snapshot_sl104_broken_file_reference() {
-    insta::assert_snapshot!(lint_fixture("sl104_broken_ref"));
+    assert_lint_snapshot!(lint_fixture("sl104_broken_ref"));
 }
 
 #[test]
 fn snapshot_sl105_setext_heading() {
-    insta::assert_snapshot!(lint_fixture("sl105_setext_heading"));
+    assert_lint_snapshot!(lint_fixture("sl105_setext_heading"));
 }
 
 #[test]
 fn snapshot_sl201_description_too_short() {
-    insta::assert_snapshot!(lint_fixture("sl201_too_short"));
+    assert_lint_snapshot!(lint_fixture("sl201_too_short"));
 }
 
 #[test]
 fn snapshot_sl203_missing_trigger_phrase() {
-    insta::assert_snapshot!(lint_fixture("sl203_no_trigger"));
+    assert_lint_snapshot!(lint_fixture("sl203_no_trigger"));
 }
 
 #[test]
 fn snapshot_sl204_first_person() {
-    insta::assert_snapshot!(lint_fixture("sl204_first_person"));
+    assert_lint_snapshot!(lint_fixture("sl204_first_person"));
 }
 
 #[test]
 fn snapshot_sl205_restates_name() {
-    insta::assert_snapshot!(lint_fixture("sl205_restates_name"));
+    assert_lint_snapshot!(lint_fixture("sl205_restates_name"));
 }
 
 #[test]
 fn snapshot_sl206_no_negative_guidance() {
-    insta::assert_snapshot!(lint_fixture("sl206_no_negative"));
+    assert_lint_snapshot!(lint_fixture("sl206_no_negative"));
 }
 
 #[test]
 fn snapshot_sl301_description_token_budget() {
-    insta::assert_snapshot!(lint_fixture("sl301_desc_budget"));
+    assert_lint_snapshot!(lint_fixture("sl301_desc_budget"));
 }
 
 #[test]
 fn snapshot_sl302_body_token_budget() {
-    insta::assert_snapshot!(lint_fixture("sl302_body_budget"));
+    assert_lint_snapshot!(lint_fixture("sl302_body_budget"));
 }
 
 #[test]
 fn snapshot_sl303_companion_file_bloat() {
-    insta::assert_snapshot!(lint_fixture("sl303_companion_bloat"));
+    assert_lint_snapshot!(lint_fixture("sl303_companion_bloat"));
 }
 
 #[test]
 fn snapshot_cross_sl401() {
-    insta::assert_snapshot!(lint_set_fixture("cross_sl401"));
+    assert_lint_snapshot!(lint_set_fixture("cross_sl401"));
 }
 
 #[test]
 fn snapshot_cross_sl402() {
-    insta::assert_snapshot!(lint_set_fixture("cross_sl402"));
+    assert_lint_snapshot!(lint_set_fixture("cross_sl402"));
 }
 
 #[test]
 fn snapshot_cross_sl403() {
-    insta::assert_snapshot!(lint_set_fixture("cross_sl403"));
+    assert_lint_snapshot!(lint_set_fixture("cross_sl403"));
 }

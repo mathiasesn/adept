@@ -18,7 +18,15 @@ use adept::{Diagnostic, Severity};
 /// pre-existing "before").
 #[must_use]
 pub fn improves_on(current: &[Diagnostic], candidate: &[Diagnostic]) -> bool {
-    candidate.len() < current.len()
+    improves_on_len(current.len(), candidate.len())
+}
+
+/// Length-only form of [`improves_on`], for a caller that only needs the
+/// counts (e.g. `create`'s repair loop, which would otherwise build a full
+/// combined `Vec<Diagnostic>` on every round purely to compare lengths).
+#[must_use]
+pub fn improves_on_len(current_len: usize, candidate_len: usize) -> bool {
+    candidate_len < current_len
 }
 
 /// Whether `diagnostics` clears `create`'s repair-loop gate: zero `Error`

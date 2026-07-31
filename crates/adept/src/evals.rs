@@ -78,6 +78,23 @@ pub enum Assertion {
     },
 }
 
+impl Assertion {
+    /// The `kind` discriminant this assertion serializes under (`"contains"`,
+    /// `"file_exists"`, `"file_contains"`, or `"command"`), matching the
+    /// `#[serde(tag = "kind", ...)]` on this enum. Callers that need the
+    /// discriminant as a string (e.g. to summarize a case's assertions)
+    /// should use this rather than re-encoding the mapping by hand.
+    #[must_use]
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Assertion::Contains { .. } => "contains",
+            Assertion::FileExists { .. } => "file_exists",
+            Assertion::FileContains { .. } => "file_contains",
+            Assertion::Command { .. } => "command",
+        }
+    }
+}
+
 /// One test case in an eval dataset: a prompt the skill should handle, plus
 /// the assertions a harness checks the response against.
 ///
@@ -196,7 +213,38 @@ pub fn to_jsonl(cases: &[EvalCase]) -> String {
 /// Returns the first [`EvalError`] encountered.
 pub fn validate(text: &str) -> Result<(), EvalError> {
     let cases = parse_jsonl_with_lines(text)?;
-    for (line, case) in &cases {
+    validate_parsed(&cases)
+}
+
+/// Validate already-parsed `cases` in memory, without serializing them to
+/// JSONL and reparsing — the same checks [`validate`] performs (every
+/// `schema_version` understood, dataset non-empty), for a caller that just
+/// built or already parsed its cases and doesn't need the string round trip.
+/// Line numbers are reported as 1-indexed positions in `cases` (there is no
+/// source text to point at).
+///
+/// [`validate`] delegates to the same underlying check
+/// ([`validate_parsed`]), so the two can never disagree about what is valid.
+///
+/// # Errors
+/// Returns the first [`EvalError`] encountered.
+pub fn validate_cases(cases: &[EvalCase]) -> Result<(), EvalError> {
+    let numbered: Vec<(usize, &EvalCase)> =
+        cases.iter().enumerate().map(|(i, c)| (i + 1, c)).collect();
+    validate_parsed_refs(&numbered)
+}
+
+/// Shared check used by both [`validate`] and [`validate_cases`]: every
+/// case's `schema_version` is understood, and the dataset is non-empty.
+fn validate_parsed(cases: &[(usize, EvalCase)]) -> Result<(), EvalError> {
+    let numbered: Vec<(usize, &EvalCase)> =
+        cases.iter().map(|(line, case)| (*line, case)).collect();
+    validate_parsed_refs(&numbered)
+}
+
+/// Reference-based core of [`validate_parsed`] / [`validate_cases`].
+fn validate_parsed_refs(cases: &[(usize, &EvalCase)]) -> Result<(), EvalError> {
+    for (line, case) in cases {
         if case.schema_version != SCHEMA_VERSION {
             return Err(EvalError::UnsupportedSchemaVersion {
                 line: *line,
@@ -295,6 +343,29 @@ mod tests {
     fn validate_accepts_well_formed_dataset() {
         let jsonl = to_jsonl(&[sample_case()]);
         validate(&jsonl).unwrap();
+    }
+
+    #[test]
+    fn validate_cases_agrees_with_validate() {
+        let cases = vec![sample_case()];
+        validate_cases(&cases).unwrap();
+        validate(&to_jsonl(&cases)).unwrap();
+
+        let empty: Vec<EvalCase> = Vec::new();
+        assert!(matches!(
+            validate_cases(&empty).unwrap_err(),
+            EvalError::Empty
+        ));
+
+        let mut bad = sample_case();
+        bad.schema_version = 999;
+        match validate_cases(&[bad]).unwrap_err() {
+            EvalError::UnsupportedSchemaVersion { line, found } => {
+                assert_eq!(line, 1);
+                assert_eq!(found, 999);
+            }
+            other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
+        }
     }
 
     #[test]

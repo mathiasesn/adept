@@ -8,6 +8,8 @@ mod cli;
 mod commands;
 mod config;
 mod logging;
+#[cfg(test)]
+mod test_fixtures;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};

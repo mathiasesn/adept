@@ -2,6 +2,36 @@
 //! can be audited, mirroring `adept_score::prompts`. Template rendering
 //! (`render`) is shared with `adept_score` rather than duplicated here.
 
+use adept::Diagnostic;
+
+/// Render `diagnostics` as a `- CODE: message — hint: ...` bullet list (one
+/// line per diagnostic, newline-terminated), the shared rendering both
+/// `create`'s repair prompt (with `show_severity: true`, since a candidate's
+/// own severity distinguishes blocking from non-blocking findings) and
+/// `fix`'s repair prompt (with `show_severity: false`, since it only ever
+/// requests fixes for diagnostics it already knows are fixable) send to the
+/// model. The `hint` suffix is included only when
+/// [`Diagnostic::fix_suggestion`] is `Some`.
+#[must_use]
+pub fn render_diagnostic_bullets<'a>(
+    diagnostics: impl IntoIterator<Item = &'a Diagnostic>,
+    show_severity: bool,
+) -> String {
+    let mut out = String::new();
+    for d in diagnostics {
+        if show_severity {
+            out.push_str(&format!("- {} ({}): {}", d.code, d.severity, d.message));
+        } else {
+            out.push_str(&format!("- {}: {}", d.code, d.message));
+        }
+        if let Some(hint) = &d.fix_suggestion {
+            out.push_str(&format!(" — hint: {hint}"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// System prompt for a description-scoped fix request (`SL301`
 /// `description-tokens-over-budget` and/or `SL206` `no-negative-guidance`).
 ///

@@ -200,21 +200,10 @@ fn execute(
                 return EXIT_USAGE_ERROR;
             }
         },
-        OutputFormat::Human => print!("{}", render_human(&report, !report.siblings_found)),
+        OutputFormat::Human => print!("{}", render_human(&report)),
     }
 
     if args.write {
-        for path in report.files.keys() {
-            if let Some(parent) = path.parent() {
-                if let Err(err) = std::fs::create_dir_all(parent) {
-                    eprintln!(
-                        "adept: error: failed to create directory {}: {err}",
-                        parent.display()
-                    );
-                    return EXIT_USAGE_ERROR;
-                }
-            }
-        }
         if let Err(err) = write_all_transactionally(&report.files) {
             eprintln!("adept: error: failed to write generated skill: {err}");
             return EXIT_USAGE_ERROR;
@@ -254,22 +243,10 @@ fn execute(
     }
 }
 
-/// The `kind` tag name for an assertion, matching the JSON `"kind"` value
-/// (`docs/EVALS.md`'s `### `kind`` headings), used to keep the human preview
-/// compact rather than dumping the full assertion payload per case.
-fn assertion_kind_name(assertion: &adept::evals::Assertion) -> &'static str {
-    match assertion {
-        adept::evals::Assertion::Contains { .. } => "contains",
-        adept::evals::Assertion::FileExists { .. } => "file_exists",
-        adept::evals::Assertion::FileContains { .. } => "file_contains",
-        adept::evals::Assertion::Command { .. } => "command",
-    }
-}
-
-fn render_human(report: &adept_agent::CreateReport, no_siblings_line: bool) -> String {
+fn render_human(report: &adept_agent::CreateReport) -> String {
     let mut out = format!("adept create: {}\n", report.skill_name);
 
-    if no_siblings_line {
+    if !report.siblings_found {
         out.push_str("(no sibling skills found)\n");
     }
 
@@ -298,7 +275,11 @@ fn render_human(report: &adept_agent::CreateReport, no_siblings_line: bool) -> S
         report.eval_cases.len()
     ));
     for case in &report.eval_cases {
-        let kinds: Vec<&str> = case.assertions.iter().map(assertion_kind_name).collect();
+        let kinds: Vec<&str> = case
+            .assertions
+            .iter()
+            .map(adept::evals::Assertion::kind)
+            .collect();
         let kinds = if kinds.is_empty() {
             "no assertions".to_string()
         } else {
@@ -315,24 +296,8 @@ fn render_human(report: &adept_agent::CreateReport, no_siblings_line: bool) -> S
     out
 }
 
-fn render_json(report: &adept_agent::CreateReport) -> Result<String, serde_json::Error> {
-    let files: BTreeMap<String, &str> = report
-        .files
-        .iter()
-        .map(|(path, contents)| (path.display().to_string(), contents.as_str()))
-        .collect();
-
-    let value = serde_json::json!({
-        "skill_name": report.skill_name,
-        "rounds_used": report.rounds_used,
-        "siblings_found": report.siblings_found,
-        "outcome": report.outcome,
-        "candidate_diagnostics": report.candidate_diagnostics,
-        "new_sibling_diagnostics": report.new_sibling_diagnostics,
-        "eval_cases": report.eval_cases,
-        "files": files,
-    });
-    serde_json::to_string_pretty(&value)
+pub(crate) fn render_json(report: &adept_agent::CreateReport) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(report)
 }
 
 /// Describe the run for `run_metadata.json`.
@@ -345,6 +310,16 @@ fn capture_metadata(
     capture_dir_source: &'static str,
 ) -> RunMetadata {
     let mut metadata = RunMetadata::new("create");
+    // `create` uses its own two prompts (authoring + eval generation), not
+    // `adept_score`'s, so record both here rather than leaving the generic
+    // `adept_score::PROMPT_VERSION` `RunMetadata::new` stamped by default —
+    // otherwise a captured `create` run would say which `score`/`fix` prompt
+    // version was in effect, not which prompts actually produced it.
+    metadata.prompt_version = format!(
+        "create_authoring={}, create_eval={}",
+        adept_agent::CREATE_AUTHORING_PROMPT_VERSION,
+        adept_agent::CREATE_EVAL_PROMPT_VERSION,
+    );
     metadata.model = Some(resolved.model.clone());
     metadata.base_url = Some(resolved.base_url.clone());
     metadata.tokenizer = Some(tokenizer.to_string());
@@ -431,36 +406,9 @@ mod tests {
         }
     }
 
-    fn valid_generate_json(name: &str, description: &str, body: &str) -> String {
-        serde_json::json!({
-            "name": name,
-            "description": description,
-            "disable_model_invocation": false,
-            "body": body,
-            "companion_files": [],
-        })
-        .to_string()
-    }
-
-    fn valid_eval_json(n: usize) -> String {
-        let cases: Vec<_> = (0..n)
-            .map(|i| {
-                serde_json::json!({
-                    "prompt": format!("prompt {i}"),
-                    "assertions": [{"kind": "contains", "value": "ok"}],
-                })
-            })
-            .collect();
-        serde_json::json!({ "cases": cases }).to_string()
-    }
-
-    fn clean_body() -> &'static str {
-        "# Demo Skill\n\n## Overview\n\nDoes the one thing this skill is for.\n\n## Steps\n\n1. Read the input.\n2. Produce the output.\n"
-    }
-
-    fn clean_description() -> &'static str {
-        "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs."
-    }
+    use crate::test_fixtures::{
+        clean_body, clean_description, valid_eval_json, valid_generate_json,
+    };
 
     #[test]
     fn resolve_brief_reads_from_file() {

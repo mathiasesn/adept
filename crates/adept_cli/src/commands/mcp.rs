@@ -215,10 +215,14 @@ fn handle_tools_list() -> Value {
         }),
     ];
 
-    // Only advertise `score_skill` when an LLM backend can actually be
-    // resolved (network-backed; requires `ADEPT_MODEL` etc.) so agents
-    // don't discover a tool that's guaranteed to fail.
-    if LlmConfig::default().resolve().is_ok() {
+    // Only advertise `score_skill`/`create_skill`/`generate_evals` when an
+    // LLM backend can actually be resolved (network-backed; requires
+    // `ADEPT_MODEL` etc.) so agents don't discover a tool that's guaranteed
+    // to fail. Resolved once and shared: all three tools gate on the exact
+    // same resolution.
+    let llm_configured = LlmConfig::default().resolve().is_ok();
+
+    if llm_configured {
         tools.push(json!({
             "name": "score_skill",
             "description": "Score a skill's triggering accuracy, token bloat, and overlap with sibling skills using an LLM. Requires ADEPT_MODEL (and optionally ADEPT_BASE_URL/ADEPT_API_KEY) to be configured; network-backed with a timeout.",
@@ -240,7 +244,7 @@ fn handle_tools_list() -> Value {
     // `ADEPT_MODEL` resolution as `score_skill`) and preview-only: neither
     // accepts any output-path argument, and neither ever touches the
     // filesystem for writing — see `create_skill_tool`/`generate_evals_tool`.
-    if LlmConfig::default().resolve().is_ok() {
+    if llm_configured {
         tools.push(json!({
             "name": "create_skill",
             "description": "Generate a new Agent Skill (SKILL.md, companion files, and a synthetic eval dataset) from a task brief using an LLM. Preview-only: returns the generated files and dataset as data and never writes to disk. Requires ADEPT_MODEL (and optionally ADEPT_BASE_URL/ADEPT_API_KEY) to be configured; network-backed with a timeout.",
@@ -504,6 +508,37 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
     }
 }
 
+/// Run `future` to completion on a fresh single-use `tokio` runtime, bounded
+/// by `timeout`. Shared by `create_skill_tool`/`generate_evals_tool` — the
+/// two MCP tools added alongside this helper — so a runtime-start failure or
+/// a timeout is reported identically for both rather than as two
+/// independently hand-rolled error strings. `score_skill_tool` predates this
+/// helper and keeps its own copy of the same idiom; left untouched here.
+fn run_with_timeout<F, T>(
+    tool_name: &str,
+    timeout: Duration,
+    future: F,
+) -> Result<T, (String, bool)>
+where
+    F: std::future::Future<Output = Result<T, adept_agent::CreateError>>,
+{
+    let runtime = tokio::runtime::Runtime::new().map_err(|err| {
+        (
+            format!("failed to start async runtime for {tool_name}: {err}"),
+            true,
+        )
+    })?;
+
+    match runtime.block_on(async { tokio::time::timeout(timeout, future).await }) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(err)) => Err((json!({ "error": err.to_string() }).to_string(), true)),
+        Err(_elapsed) => Err((
+            json!({ "error": format!("{tool_name} timed out after {timeout:?}") }).to_string(),
+            true,
+        )),
+    }
+}
+
 /// Build an [`LlmConfig`] from `model`/`base_url` argument overrides, then
 /// resolve it. Shared by `create_skill` and `generate_evals`, whose
 /// model-selection story is identical to `score_skill`'s.
@@ -582,56 +617,25 @@ fn create_skill_tool_with_client(
         .and_then(Value::as_str)
         .map(str::to_string);
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            return (
-                format!("failed to start async runtime for create_skill: {err}"),
-                true,
-            );
-        }
-    };
-
-    let outcome = runtime.block_on(async {
-        tokio::time::timeout(
-            CREATE_TIMEOUT,
-            create_skill(client, brief, &out_dir, &options),
-        )
-        .await
-    });
-
-    match outcome {
-        Ok(Ok(report)) => (render_create_report(&report), false),
-        Ok(Err(err)) => (json!({ "error": err.to_string() }).to_string(), true),
-        Err(_elapsed) => (
-            json!({ "error": format!("create_skill timed out after {CREATE_TIMEOUT:?}") })
-                .to_string(),
-            true,
-        ),
+    match run_with_timeout(
+        "create_skill",
+        CREATE_TIMEOUT,
+        create_skill(client, brief, &out_dir, &options),
+    ) {
+        Ok(report) => (render_create_report(&report), false),
+        Err(failure) => failure,
     }
 }
 
 /// Render a [`adept_agent::CreateReport`] as the tool's JSON payload: the
 /// generated file contents keyed by path, as data only (never written by
-/// this process).
+/// this process). Uses `CreateReport`'s own `Serialize` derive directly, the
+/// same encoding `adept create --format json` uses (`commands::create`'s
+/// `render_json`), so the two surfaces can never silently diverge.
 fn render_create_report(report: &adept_agent::CreateReport) -> String {
-    let files: std::collections::BTreeMap<String, &str> = report
-        .files
-        .iter()
-        .map(|(path, contents)| (path.display().to_string(), contents.as_str()))
-        .collect();
-
-    json!({
-        "skill_name": report.skill_name,
-        "rounds_used": report.rounds_used,
-        "siblings_found": report.siblings_found,
-        "outcome": report.outcome,
-        "candidate_diagnostics": report.candidate_diagnostics,
-        "new_sibling_diagnostics": report.new_sibling_diagnostics,
-        "eval_cases": report.eval_cases,
-        "files": files,
-    })
-    .to_string()
+    // `to_string` on a type that derives `Serialize` fails only on writer
+    // errors, which a `String` buffer never produces.
+    serde_json::to_string(report).expect("CreateReport serialization is infallible")
 }
 
 /// `generate_evals` MCP tool: given an existing skill (`path` or `content`)
@@ -680,26 +684,12 @@ fn generate_evals_tool_with_client(
         Err(message) => return (message, true),
     }
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            return (
-                format!("failed to start async runtime for generate_evals: {err}"),
-                true,
-            );
-        }
-    };
-
-    let outcome = runtime.block_on(async {
-        tokio::time::timeout(
-            GENERATE_EVALS_TIMEOUT,
-            adept_agent::generate_evals(client, &skill, brief, &options),
-        )
-        .await
-    });
-
-    match outcome {
-        Ok(Ok(cases)) => {
+    match run_with_timeout(
+        "generate_evals",
+        GENERATE_EVALS_TIMEOUT,
+        adept_agent::generate_evals(client, &skill, brief, &options),
+    ) {
+        Ok(cases) => {
             let jsonl = adept::evals::to_jsonl(&cases);
             (
                 json!({
@@ -710,14 +700,7 @@ fn generate_evals_tool_with_client(
                 false,
             )
         }
-        Ok(Err(err)) => (json!({ "error": err.to_string() }).to_string(), true),
-        Err(_elapsed) => (
-            json!({
-                "error": format!("generate_evals timed out after {GENERATE_EVALS_TIMEOUT:?}")
-            })
-            .to_string(),
-            true,
-        ),
+        Err(failure) => failure,
     }
 }
 
@@ -734,36 +717,9 @@ mod tests {
     /// process.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn valid_generate_json(name: &str, description: &str, body: &str) -> String {
-        json!({
-            "name": name,
-            "description": description,
-            "disable_model_invocation": false,
-            "body": body,
-            "companion_files": [],
-        })
-        .to_string()
-    }
-
-    fn valid_eval_json(n: usize) -> String {
-        let cases: Vec<_> = (0..n)
-            .map(|i| {
-                json!({
-                    "prompt": format!("prompt {i}"),
-                    "assertions": [{"kind": "contains", "value": "ok"}],
-                })
-            })
-            .collect();
-        json!({ "cases": cases }).to_string()
-    }
-
-    fn clean_body() -> &'static str {
-        "# Demo Skill\n\n## Overview\n\nDoes the one thing this skill is for.\n\n## Steps\n\n1. Read the input.\n2. Produce the output.\n"
-    }
-
-    fn clean_description() -> &'static str {
-        "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs."
-    }
+    use crate::test_fixtures::{
+        clean_body, clean_description, valid_eval_json, valid_generate_json,
+    };
 
     /// Recursively list every path under `dir`, for before/after snapshots
     /// asserting a preview-only tool wrote nothing.
@@ -1194,6 +1150,36 @@ mod tests {
             .collect();
         assert!(names.contains(&"gamma"), "directory sibling: {names:?}");
         assert!(names.contains(&"sample"), "target appended: {names:?}");
+    }
+
+    /// The guarantee item 3 in the cleanup brief exists for: `adept create
+    /// --format json` (`commands::create::render_json`) and the
+    /// `create_skill` MCP tool (`render_create_report`) must serialize the
+    /// same `CreateReport` identically, since both now derive straight from
+    /// `CreateReport`'s own `Serialize` rather than two hand-written
+    /// encodings that could silently diverge on a new field.
+    #[tokio::test]
+    async fn create_report_json_is_identical_across_cli_and_mcp_surfaces() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("demo-skill");
+
+        let good = valid_generate_json("demo-skill", clean_description(), clean_body());
+        let eval = valid_eval_json(10);
+        let mock = MockLlmClient::with_texts(vec![good, eval]);
+        let options = CreateOptions::for_model("test-model", adept::Tokenizer::O200kBase);
+        let report = create_skill(&mock, "Extract PDF form data", &out_dir, &options)
+            .await
+            .unwrap();
+
+        let mcp_json = render_create_report(&report);
+        let cli_json = crate::commands::create::render_json(&report).expect("render_json");
+
+        let mcp_value: Value = serde_json::from_str(&mcp_json).unwrap();
+        let cli_value: Value = serde_json::from_str(&cli_json).unwrap();
+        assert_eq!(
+            mcp_value, cli_value,
+            "create_skill MCP tool and `adept create --format json` must emit the same JSON shape"
+        );
     }
 
     #[test]

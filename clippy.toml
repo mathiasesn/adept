@@ -1,0 +1,8 @@
+# adept spawns no subprocess, ever (see `docs/ARCHI.md`'s Invariants list).
+# `command`-kind eval assertions are defined and validated by `adept`'s evals
+# machinery, but adept itself never *executes* them — that's left to
+# whatever harness consumes the generated dataset. Disallowing
+# `std::process::Command` here means any future call to it anywhere in this
+# workspace's own source is a hard clippy error, not something that has to
+# be caught by a human noticing it in review.
+disallowed-types = ["std::process::Command"]

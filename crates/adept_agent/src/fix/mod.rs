@@ -228,13 +228,10 @@ fn render_violations(diagnostics: &[&Diagnostic], budget_line: &str) -> String {
     let mut out = String::new();
     out.push_str(budget_line);
     out.push('\n');
-    for d in diagnostics {
-        out.push_str(&format!("- {}: {}", d.code, d.message));
-        if let Some(hint) = &d.fix_suggestion {
-            out.push_str(&format!(" — hint: {hint}"));
-        }
-        out.push('\n');
-    }
+    out.push_str(&prompts::render_diagnostic_bullets(
+        diagnostics.iter().copied(),
+        false,
+    ));
     out
 }
 

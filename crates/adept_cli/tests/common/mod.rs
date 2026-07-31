@@ -9,6 +9,10 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+// The `use` path reference below is flagged by `clippy::disallowed_types`
+// (configured via the workspace-root `clippy.toml`, see `run_mcp`) the same
+// as the construction site is, so the allow needs to be here too.
+#[allow(clippy::disallowed_types)]
 use std::process::{Command as StdCommand, Stdio};
 
 use assert_cmd::Command;
@@ -61,6 +65,10 @@ pub const SAMPLE_SKILL: &str =
 /// `env` is applied on top of the same cleared baseline [`adept`] uses;
 /// `args` are extra arguments placed after the `mcp` subcommand.
 pub fn run_mcp(env: &[(&str, &str)], args: &[&str], requests: &[String]) -> (String, String) {
+    // Driving the built `adept` binary over stdio is exactly what this
+    // integration test harness must do to exercise `adept mcp` as a black
+    // box; it is not the shipped binary spawning a subprocess itself.
+    #[allow(clippy::disallowed_types)]
     let mut command = StdCommand::new(assert_cmd::cargo::cargo_bin("adept"));
     command.arg("mcp");
     for arg in args {

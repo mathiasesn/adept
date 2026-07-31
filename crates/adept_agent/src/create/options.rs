@@ -24,9 +24,6 @@ pub const DEFAULT_EVAL_CASES: usize = 10;
 pub struct CreateOptions {
     /// The model to use for both the authoring and eval-generation calls.
     pub model: String,
-    /// Which `tiktoken-rs` BPE encoding to count tokens with. Should match
-    /// `lint_config.tokenizer`.
-    pub tokenizer: Tokenizer,
     /// The maximum number of authoring rounds (initial generation plus
     /// repair attempts) before giving up and carrying forward the
     /// best-scoring candidate seen.
@@ -55,12 +52,12 @@ pub struct CreateOptions {
 
 impl CreateOptions {
     /// The default options for creating with `model`, using `tokenizer` for
-    /// both token counting and the embedded [`LintConfig`].
+    /// the embedded [`LintConfig`] (`options.lint_config.tokenizer` is the
+    /// single source of truth; `create` never needs a second copy).
     #[must_use]
     pub fn for_model(model: impl Into<String>, tokenizer: Tokenizer) -> Self {
         Self {
             model: model.into(),
-            tokenizer,
             max_rounds: DEFAULT_MAX_ROUNDS,
             eval_cases: DEFAULT_EVAL_CASES,
             lint_config: LintConfig {

@@ -112,7 +112,7 @@ pub enum CreateOutcome {
 
 /// The result of a `create` run: the accepted candidate's pending files, the
 /// diagnostics remaining on it, and the generated eval dataset.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CreateReport {
     /// The candidate's frontmatter `name`, at the time of emission.
     pub skill_name: String,
@@ -235,15 +235,7 @@ fn render_siblings(siblings: &[Skill]) -> String {
 
 /// Render a bullet-list of diagnostics for a repair request.
 fn render_diagnostics(diagnostics: &[Diagnostic]) -> String {
-    let mut out = String::new();
-    for d in diagnostics {
-        out.push_str(&format!("- {} ({}): {}", d.code, d.severity, d.message));
-        if let Some(hint) = &d.fix_suggestion {
-            out.push_str(&format!(" — hint: {hint}"));
-        }
-        out.push('\n');
-    }
-    out
+    prompts::render_diagnostic_bullets(diagnostics, true)
 }
 
 /// Send the initial authoring request.
@@ -361,8 +353,7 @@ pub async fn generate_evals(
         })
         .collect();
 
-    let jsonl = evals::to_jsonl(&cases);
-    evals::validate(&jsonl)?;
+    evals::validate_cases(&cases)?;
 
     Ok(cases)
 }
@@ -379,9 +370,9 @@ struct RoundResult {
 
 impl RoundResult {
     /// All diagnostics this round is judged on: the candidate's own plus any
-    /// newly-appeared sibling ones. Used by [`gate::improves_on`] to compare
-    /// rounds, and by [`gate::passes_severity_gate`] for candidate-only
-    /// acceptance.
+    /// newly-appeared sibling ones. Used by [`gate::passes_severity_gate`]
+    /// for candidate-only acceptance, and (via [`Self::combined_len`]) by
+    /// [`gate::improves_on_len`] to compare rounds.
     fn combined(&self) -> Vec<Diagnostic> {
         self.candidate_diagnostics
             .iter()
@@ -390,14 +381,28 @@ impl RoundResult {
             .collect()
     }
 
+    /// The length [`Self::combined`] would produce, without building it —
+    /// the round-over-round acceptance comparison only ever needs a count.
+    fn combined_len(&self) -> usize {
+        self.candidate_diagnostics.len() + self.new_sibling_diagnostics.len()
+    }
+
     fn gate_passes(&self) -> bool {
         gate::passes_severity_gate(&self.candidate_diagnostics)
             && self.new_sibling_diagnostics.is_empty()
     }
 }
 
-/// Screen `response` in memory: build the candidate, insert it into a
-/// [`SkillSet`] alongside `siblings`, and lint the whole set.
+/// Screen `response` in memory: build the candidate, insert it into
+/// `combined_skills` (which already holds the siblings, plus — from the
+/// second round on — the previous round's candidate as its last element) in
+/// place, and lint the whole set.
+///
+/// `combined_skills` is owned by the caller across rounds so the sibling
+/// portion is built once, not re-cloned every round: this function only ever
+/// pushes (round 1) or overwrites in place (later rounds) the one candidate
+/// slot, and temporarily moves the vector into the [`SkillSet`] it lints
+/// (moving it back out afterwards) rather than cloning it.
 ///
 /// Note: this omits `siblings`' own parse errors from the combined set,
 /// since the cross-skill (`SetRule`) rules only ever look at `set.skills`
@@ -409,20 +414,27 @@ impl RoundResult {
 fn screen_round(
     out_dir: &Path,
     response: GenerateResponse,
-    siblings: &[Skill],
+    combined_skills: &mut Vec<Skill>,
+    siblings_len: usize,
     baseline_keys: &HashSet<(PathBuf, &'static str, String)>,
     linter: &Linter,
     fmt_config: &adept_fmt::FmtConfig,
 ) -> Result<RoundResult, CreateError> {
     let (skill, companions) = build_candidate(out_dir, &response, fmt_config)?;
 
-    let mut combined_skills = siblings.to_vec();
-    combined_skills.push(skill.clone());
+    if combined_skills.len() > siblings_len {
+        *combined_skills.last_mut().expect("checked above") = skill.clone();
+    } else {
+        combined_skills.push(skill.clone());
+    }
+
+    let skills = std::mem::take(combined_skills);
     let combined_set = SkillSet {
-        skills: combined_skills,
+        skills,
         errors: Vec::new(),
     };
     let all_diagnostics = linter.lint_set(&combined_set);
+    *combined_skills = combined_set.skills;
 
     let (candidate_diagnostics, sibling_diagnostics): (Vec<_>, Vec<_>) = all_diagnostics
         .into_iter()
@@ -488,12 +500,16 @@ pub async fn create_skill(
     let mut response = request_generate(client, brief, &siblings, &options.model).await?;
     apply_name_override(&mut response, options.name_override.as_deref());
 
+    let siblings_len = siblings.len();
+    let mut combined_skills: Vec<Skill> = siblings.to_vec();
+
     loop {
         rounds_used += 1;
         let round = screen_round(
             out_dir,
             response,
-            &siblings,
+            &mut combined_skills,
+            siblings_len,
             &baseline_keys,
             &linter,
             &options.fmt_config,
@@ -502,24 +518,35 @@ pub async fn create_skill(
 
         let is_better = match &best {
             None => true,
-            Some(current_best) => gate::improves_on(&current_best.combined(), &round.combined()),
+            Some(current_best) => {
+                gate::improves_on_len(current_best.combined_len(), round.combined_len())
+            }
         };
 
-        let round_response_for_repair = round.response.clone();
+        let will_break = gate_passes || rounds_used >= options.max_rounds;
         // The repair prompt must describe *this* round's candidate, not
         // whichever candidate is currently winning: `best` may be a
         // different (better-scoring) candidate from an earlier round, and
         // its diagnostics were produced by a different response than the
-        // one we are about to show the model for repair.
-        let diagnostics_for_repair = round.combined();
+        // one we are about to show the model for repair. Only built when a
+        // repair round will actually be sent — the final round never needs
+        // it.
+        let repair_input = if will_break {
+            None
+        } else {
+            Some((round.response.clone(), round.combined()))
+        };
+
         if is_better {
             best = Some(round);
         }
 
-        if gate_passes || rounds_used >= options.max_rounds {
+        if will_break {
             break;
         }
 
+        let (round_response_for_repair, diagnostics_for_repair) =
+            repair_input.expect("not breaking: repair_input was built above");
         response = request_repair(
             client,
             brief,
