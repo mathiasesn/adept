@@ -1,17 +1,20 @@
 # Backlog
 
-Open items as of `43b6733` (MVP baseline `9bf467a` → `2e29dff`, plus the
+Open items as of `1e89f60` (MVP baseline `9bf467a` → `2e29dff`, plus the
 markdown-parsing unification, the vendored-corpus fixture, the reflow
 leaning-toothpick fix, the shared sibling-root rule, the SL303
 bundled-license exemption, the SL104 creation-intent exemption, and the
-`adept fix` command on top).
-Nothing
-here blocks the five shipped surfaces (`check`, `fmt`, `score`, `fix`, `mcp`);
-these
-are known gaps, deliberate deferrals, and follow-ups surfaced by the two-axis
-review. `score` and `mcp` now discover sibling skills through one shared
-`adept::sibling_root` (the parent of the skill's own directory), resolving the
-divergence previously tracked here.
+`adept fix` command on top). Nothing here blocks the five shipped surfaces
+(`check`, `fmt`, `score`, `fix`, `mcp`); these are known gaps, deliberate
+deferrals, and follow-ups surfaced by the two-axis review. `score` and `mcp`
+now discover sibling skills through one shared `adept::sibling_root` (the
+parent of the skill's own directory), resolving the divergence previously
+tracked here.
+
+Items struck through below are closed; they are retained with their commit
+trail so a resolved concern is not rediscovered and re-litigated. The only
+work gated on a release rather than a push is the pre-publish checklist at
+the end.
 
 ## Correctness gaps
 
@@ -108,8 +111,11 @@ seam to contribute its own error codes — the `match` is closed over
 
 ## Performance
 
-Deliberately not done, since `check` runs ~18ms against a 1s target
-(`lint_100_skills`: 18.4ms before the markdown unification, 18.1ms after):
+Deliberately not done, since `check` runs well under the 1s target
+(`lint_100_skills`: 18.4ms before the markdown unification, 18.1ms after,
+19.6ms at `1e89f60`). CI's ~23ms figure is the same benchmark on runner
+hardware, not a regression — compare like for like before reading either
+number as movement:
 
 - Skill discovery/parsing and the per-skill lint loop are sequential and
   embarrassingly parallel (`rayon` would cut wall time ~Ncores).
