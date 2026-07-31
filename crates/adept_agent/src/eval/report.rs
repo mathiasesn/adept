@@ -9,7 +9,7 @@ use crate::eval::prompts::PROMPT_VERSION;
 use crate::eval::tokens::TokenBloatReport;
 use crate::eval::triggering::TriggeringReport;
 
-/// The full result of `adept score` for one skill.
+/// The full result of `adept eval` for one skill.
 ///
 /// Serializes to JSON directly via `serde` for `--format json`; use
 /// [`EvalReport::render`] for the human-readable form.
@@ -26,18 +26,14 @@ pub struct EvalReport {
     /// Token-bloat analysis, if that analysis was run.
     pub token_bloat: Option<TokenBloatReport>,
     /// Overlap/conflict adjudications against other skills in the same
-    /// [`adept::SkillSet`], if that analysis was run. Empty (not `None`) if
-    /// no other skill was similar enough to shortlist.
-    pub overlaps: Vec<OverlapAdjudication>,
-    // TODO(part 2): `adept::evals::EvalBenchmarkReport` (landing concurrently)
-    // does not yet derive `PartialEq`/`Deserialize`, which this struct's
-    // `#[derive(PartialEq, Deserialize)]` requires. Re-enable this field once
-    // those derives land upstream in `crates/adept/src/evals.rs` (out of
-    // scope for this task — that file is owned by a concurrent agent).
-    // /// Eval-dataset grading against `evals/evals.jsonl` run results, if that
-    // /// analysis was run. `None` when no `--results` were supplied, distinct
-    // /// from a report that ran and found nothing.
-    // pub evals: Option<adept::evals::EvalBenchmarkReport>,
+    /// [`adept::SkillSet`], if that analysis was run. `None` when the
+    /// analysis did not run at all; `Some(vec![])` when it ran and found no
+    /// shortlisted overlaps — the two are rendered distinguishably.
+    pub overlaps: Option<Vec<OverlapAdjudication>>,
+    /// Eval-dataset grading against `evals/evals.jsonl` run results, if that
+    /// analysis was run. `None` when no `--results` were supplied, distinct
+    /// from a report that ran and found nothing.
+    pub evals: Option<adept::evals::EvalBenchmarkReport>,
 }
 
 impl EvalReport {
@@ -50,16 +46,21 @@ impl EvalReport {
             skill_name: skill_name.into(),
             triggering: None,
             token_bloat: None,
-            overlaps: Vec::new(),
+            overlaps: None,
+            evals: None,
         }
     }
 
     /// Render this report as human-readable text, suitable for printing
-    /// directly by `adept score`.
+    /// directly by `adept eval`.
     pub fn render(&self) -> String {
+        let prompt_based_ran =
+            self.triggering.is_some() || self.token_bloat.is_some() || self.overlaps.is_some();
         let mut out = String::new();
-        out.push_str(&format!("Score report for skill: {}\n", self.skill_name));
-        out.push_str(&format!("(prompt set version: {})\n", self.prompt_version));
+        out.push_str(&format!("Eval report for skill: {}\n", self.skill_name));
+        if prompt_based_ran {
+            out.push_str(&format!("(prompt set version: {})\n", self.prompt_version));
+        }
         out.push('\n');
 
         if let Some(t) = &self.triggering {
@@ -107,25 +108,75 @@ impl EvalReport {
             out.push('\n');
         }
 
-        out.push_str("== Overlap/conflict detection ==\n");
-        if self.overlaps.is_empty() {
-            out.push_str("  no shortlisted overlaps\n");
-        } else {
-            for o in &self.overlaps {
-                let kind = if o.conflicts {
-                    "CONFLICT"
-                } else if o.overlaps {
-                    "overlap"
-                } else {
-                    "no issue"
-                };
-                out.push_str(&format!(
-                    "  [{kind}] {} <-> {} (similarity {:.2}): {}\n",
-                    o.skill_a, o.skill_b, o.similarity, o.explanation
-                ));
-                if !o.disambiguation.is_empty() {
-                    out.push_str(&format!("      suggestion: {}\n", o.disambiguation));
+        if let Some(overlaps) = &self.overlaps {
+            out.push_str("== Overlap/conflict detection ==\n");
+            if overlaps.is_empty() {
+                out.push_str("  no shortlisted overlaps\n");
+            } else {
+                for o in overlaps {
+                    let kind = if o.conflicts {
+                        "CONFLICT"
+                    } else if o.overlaps {
+                        "overlap"
+                    } else {
+                        "no issue"
+                    };
+                    out.push_str(&format!(
+                        "  [{kind}] {} <-> {} (similarity {:.2}): {}\n",
+                        o.skill_a, o.skill_b, o.similarity, o.explanation
+                    ));
+                    if !o.disambiguation.is_empty() {
+                        out.push_str(&format!("      suggestion: {}\n", o.disambiguation));
+                    }
                 }
+            }
+            out.push('\n');
+        }
+
+        if let Some(evals) = &self.evals {
+            out.push_str("== Eval-dataset grading ==\n");
+            let skill_case_count = evals
+                .cases
+                .iter()
+                .filter(|c| c.arm == adept::evals::Arm::Skill)
+                .count();
+            out.push_str(&format!(
+                "pass rate: {:.0}% ({} cases)\n",
+                evals.pass_rate * 100.0,
+                skill_case_count
+            ));
+            if let (Some(baseline), Some(lift)) =
+                (evals.baseline_pass_rate, evals.lift_percentage_points)
+            {
+                out.push_str(&format!(
+                    "baseline pass rate: {:.0}%  lift: {:+.0}pp\n",
+                    baseline * 100.0,
+                    lift
+                ));
+            }
+            out.push_str(&format!(
+                "assertions: {}/{} met ({} skipped)\n",
+                evals.assertions_met, evals.assertions_checked, evals.assertions_skipped
+            ));
+            if !evals.skipped_reasons.is_empty() {
+                for (reason, count) in &evals.skipped_reasons {
+                    out.push_str(&format!("  skipped: {reason} ({count})\n"));
+                }
+            }
+            if !evals.out_of_range_results.is_empty() {
+                out.push_str(&format!(
+                    "  out-of-range result cases: {:?}\n",
+                    evals.out_of_range_results
+                ));
+            }
+            if !evals.unmatched_cases.is_empty() {
+                out.push_str(&format!(
+                    "  dataset cases with no result: {:?}\n",
+                    evals.unmatched_cases
+                ));
+            }
+            if let (Some(tin), Some(tout)) = (evals.tokens_in, evals.tokens_out) {
+                out.push_str(&format!("tokens: {tin} in / {tout} out\n"));
             }
         }
 
@@ -181,7 +232,7 @@ mod tests {
                 total_tokens: 440,
                 suggestions: vec!["Move the reference table to a companion file".to_string()],
             }),
-            overlaps: vec![OverlapAdjudication {
+            overlaps: Some(vec![OverlapAdjudication {
                 skill_a: "pdf-filler".to_string(),
                 skill_b: "pdf-writer".to_string(),
                 similarity: 0.42,
@@ -189,7 +240,8 @@ mod tests {
                 conflicts: false,
                 explanation: "Both fill PDF forms".to_string(),
                 disambiguation: "Narrow pdf-writer to non-form documents".to_string(),
-            }],
+            }]),
+            evals: None,
         }
     }
 

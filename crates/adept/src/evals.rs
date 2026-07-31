@@ -355,7 +355,7 @@ pub fn parse_results_jsonl(text: &str) -> Result<Vec<CaseResult>, EvalError> {
 /// A [`Skipped`](AssertionOutcome::Skipped) outcome is never a pass — it
 /// means adept could not check the assertion at all (no `cwd`, no reported
 /// exit code), which is different from checking it and finding it false.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssertionOutcome {
     /// The assertion was checked and held.
@@ -367,10 +367,10 @@ pub enum AssertionOutcome {
 }
 
 /// The graded outcome of one [`Assertion`] within a case.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssertionResult {
     /// The assertion's `kind` discriminant (see [`Assertion::kind`]).
-    pub kind: &'static str,
+    pub kind: String,
     /// Pass, fail, or skipped.
     pub outcome: AssertionOutcome,
     /// Present when `outcome` is [`Skipped`](AssertionOutcome::Skipped)
@@ -381,7 +381,7 @@ pub struct AssertionResult {
 }
 
 /// The graded outcome of one [`CaseResult`].
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaseReport {
     /// The 1-indexed dataset case this result graded.
     pub case: usize,
@@ -397,7 +397,7 @@ pub struct CaseReport {
 
 /// The full report produced by [`grade`]: per-case outcomes plus aggregate
 /// metrics, in the spirit of huggingface/upskill's `upskill eval`.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct EvalBenchmarkReport {
     /// One entry per graded [`CaseResult`] (not per dataset case — a case
     /// with both a skill and a baseline result produces two entries).
@@ -456,7 +456,7 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
             continue;
         }
         let case = &cases[result.case - 1];
-        let case_report = grade_case(case, result, &mut report);
+        let (case_report, grading) = grade_case(case, result);
 
         match result.arm {
             Arm::Skill => {
@@ -464,6 +464,12 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
                 skill_total += 1;
                 if case_report.pass {
                     skill_pass += 1;
+                }
+                report.assertions_checked += grading.checked;
+                report.assertions_met += grading.met;
+                report.assertions_skipped += grading.skipped;
+                for (reason, count) in grading.skipped_reasons {
+                    *report.skipped_reasons.entry(reason).or_insert(0) += count;
                 }
             }
             Arm::Baseline => {
@@ -512,17 +518,26 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
     report
 }
 
-/// Grade every assertion of `case` against `result`, folding checked/met/
-/// skipped counts into `report`'s aggregate fields, and return the
-/// per-case outcome.
-fn grade_case(
-    case: &EvalCase,
-    result: &CaseResult,
-    report: &mut EvalBenchmarkReport,
-) -> CaseReport {
+/// Per-result assertion tallies returned by [`grade_case`], folded into the
+/// aggregate report by the caller only for `skill`-arm results — the
+/// baseline arm exists solely to make lift computable and must not inflate
+/// the headline assertion metrics.
+struct CaseGrading {
+    checked: usize,
+    met: usize,
+    skipped: usize,
+    skipped_reasons: HashMap<String, usize>,
+}
+
+/// Grade every assertion of `case` against `result`, returning the per-case
+/// outcome plus its checked/met/skipped tallies (left for the caller to
+/// fold into the aggregate report, arm-conditionally).
+fn grade_case(case: &EvalCase, result: &CaseResult) -> (CaseReport, CaseGrading) {
     let mut assertions = Vec::with_capacity(case.assertions.len());
     let mut checked = 0usize;
     let mut met = 0usize;
+    let mut skipped = 0usize;
+    let mut skipped_reasons: HashMap<String, usize> = HashMap::new();
 
     for assertion in &case.assertions {
         let (outcome, detail) = grade_assertion(assertion, result);
@@ -535,32 +550,37 @@ fn grade_case(
                 checked += 1;
             }
             AssertionOutcome::Skipped => {
-                report.assertions_skipped += 1;
+                skipped += 1;
                 let reason = detail.clone().unwrap_or_else(|| "skipped".to_string());
-                *report.skipped_reasons.entry(reason).or_insert(0) += 1;
+                *skipped_reasons.entry(reason).or_insert(0) += 1;
             }
         }
         assertions.push(AssertionResult {
-            kind: assertion.kind(),
+            kind: assertion.kind().to_string(),
             outcome,
             detail,
         });
     }
-
-    report.assertions_checked += checked;
-    report.assertions_met += met;
 
     // Pass only if every non-skipped assertion passed AND at least one
     // assertion was actually checked — this is what keeps an all-skipped
     // case from silently looking like a perfect pass.
     let pass = checked > 0 && met == checked;
 
-    CaseReport {
-        case: result.case,
-        arm: result.arm,
-        pass,
-        assertions,
-    }
+    (
+        CaseReport {
+            case: result.case,
+            arm: result.arm,
+            pass,
+            assertions,
+        },
+        CaseGrading {
+            checked,
+            met,
+            skipped,
+            skipped_reasons,
+        },
+    )
 }
 
 /// Grade a single assertion against a result, returning its outcome and an
@@ -866,6 +886,33 @@ mod tests {
         assert_eq!(report.pass_rate, 1.0);
         assert_eq!(report.baseline_pass_rate, Some(0.0));
         assert_eq!(report.lift_percentage_points, Some(100.0));
+    }
+
+    #[test]
+    fn grade_baseline_assertions_excluded_from_aggregate_metrics() {
+        // Skill arm: 1 case, 1 assertion, which passes.
+        // Baseline arm: 1 case, 1 assertion, which fails (different value
+        // than what the skill's `Contains` assertion checks) — if the
+        // baseline arm's assertion leaked into the aggregate, the
+        // denominator would be 2 instead of 1 and `assertions_met` would
+        // still be 1, giving a different (wrong) success rate.
+        let cases = vec![contains_case("hello")];
+        let mut baseline = skill_result(1, "goodbye");
+        baseline.arm = Arm::Baseline;
+        let results = vec![skill_result(1, "hello there"), baseline];
+
+        let report = grade(&cases, &results);
+
+        assert_eq!(report.assertions_checked, 1);
+        assert_eq!(report.assertions_met, 1);
+        assert_eq!(report.assertions_skipped, 0);
+        assert!(report.skipped_reasons.is_empty());
+        // Baseline-arm detail is still available per-case.
+        assert_eq!(report.cases.len(), 2);
+        assert!(report
+            .cases
+            .iter()
+            .any(|c| c.arm == Arm::Baseline && !c.pass));
     }
 
     #[test]

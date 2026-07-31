@@ -2,7 +2,7 @@
 //!
 //! This binary wires together the `adept` (core/rules), `adept_fmt`, and
 //! `adept_agent` library crates into six subcommands:
-//! `check`, `fmt`, `score`, `fix`, `create`, and `mcp`.
+//! `check`, `fmt`, `eval`, `fix`, `create`, and `mcp`.
 
 mod cli;
 mod commands;
@@ -48,12 +48,12 @@ fn run(cli: &Cli) -> i32 {
             };
             commands::fmt::run(args, &config, cli.quiet)
         }
-        Command::Score(args) => {
+        Command::Eval(args) => {
             let config = match load_config(cli.config.as_deref(), &args.path) {
                 Ok(config) => config,
                 Err(code) => return code,
             };
-            commands::score::run(args, &config)
+            commands::eval::run(args, &config)
         }
         Command::Fix(args) => {
             let target = first_path(&args.paths).to_path_buf();

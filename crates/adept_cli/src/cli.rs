@@ -39,8 +39,9 @@ pub enum Command {
     Check(CheckArgs),
     /// Format SKILL.md files in place.
     Fmt(FmtArgs),
-    /// Score a skill's triggering accuracy, token bloat, and overlaps using an LLM.
-    Score(ScoreArgs),
+    /// Evaluate a skill's triggering accuracy, token bloat, overlaps, and
+    /// eval-dataset performance.
+    Eval(EvalArgs),
     /// Fix LLM-fixable lint diagnostics in one or more SKILL.md files using an LLM.
     Fix(FixArgs),
     /// Generate a new skill (plus a synthetic eval dataset) from a brief, using an LLM.
@@ -131,15 +132,16 @@ pub struct FmtArgs {
 }
 
 #[derive(Debug, Parser)]
-pub struct ScoreArgs {
-    /// Path to the skill (SKILL.md file or skill directory) to score.
+pub struct EvalArgs {
+    /// Path to the skill (SKILL.md file or skill directory) to evaluate.
     pub path: PathBuf,
 
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
 
-    /// The model to use for scoring (falls back to `ADEPT_MODEL`).
+    /// The model to use for the triggering/token-bloat/overlap analyses
+    /// (falls back to `ADEPT_MODEL`).
     #[arg(long)]
     pub model: Option<String>,
 
@@ -160,17 +162,38 @@ pub struct ScoreArgs {
     pub judge_samples: Option<usize>,
 
     /// Which `tiktoken-rs` BPE encoding to use for token-bloat analysis
-    /// (default `o200k-base`; overrides the config file's `[score]
+    /// (default `o200k-base`; overrides the config file's `[eval]
     /// tokenizer`).
     #[arg(long, value_enum)]
     pub tokenizer: Option<TokenizerArg>,
 
     /// Write verbatim request/response artifacts for every LLM call into a
     /// new timestamped subfolder of this directory. Overrides the config
-    /// file's `[score] capture_dir`; a relative path resolves against the
+    /// file's `[eval] capture_dir`; a relative path resolves against the
     /// current working directory.
     #[arg(long, value_name = "DIR")]
     pub capture_dir: Option<PathBuf>,
+
+    /// Path to a `results.jsonl` sidecar (harness-produced run results) to
+    /// grade the skill's `evals/evals.jsonl` dataset against. Enables the
+    /// `evals` analysis by default when supplied.
+    #[arg(long, value_name = "PATH")]
+    pub results: Option<PathBuf>,
+
+    /// Override the eval dataset path (defaults to `evals/evals.jsonl`
+    /// relative to the skill directory).
+    #[arg(long, value_name = "PATH")]
+    pub evals: Option<PathBuf>,
+
+    /// Only run these analyses (`triggering`, `token-bloat`, `overlap`,
+    /// `evals`; comma-separated or repeated).
+    #[arg(long, value_delimiter = ',')]
+    pub select: Vec<String>,
+
+    /// Skip these analyses (`triggering`, `token-bloat`, `overlap`,
+    /// `evals`; comma-separated or repeated).
+    #[arg(long, value_delimiter = ',')]
+    pub ignore: Vec<String>,
 }
 
 #[derive(Debug, Parser)]

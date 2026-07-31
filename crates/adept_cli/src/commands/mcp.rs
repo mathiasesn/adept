@@ -19,9 +19,11 @@ use std::time::Duration;
 
 use adept::{sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
 use adept_agent::{create_skill, CreateOptions};
-use adept_agent::{EvalOptions, LlmClient, LlmConfig, OpenAiCompatClient};
+use adept_agent::{EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatClient};
 use adept_fmt::{format_str, FmtConfig};
 use serde_json::{json, Value};
+
+use crate::commands::eval::resolve_analyses;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "adept";
@@ -215,33 +217,53 @@ fn handle_tools_list() -> Value {
         }),
     ];
 
-    // Only advertise `score_skill`/`create_skill`/`generate_evals` when an
-    // LLM backend can actually be resolved (network-backed; requires
-    // `ADEPT_MODEL` etc.) so agents don't discover a tool that's guaranteed
-    // to fail. Resolved once and shared: all three tools gate on the exact
-    // same resolution.
+    // `eval_skill` is **always advertised**, unlike `create_skill`/
+    // `generate_evals` below: its `evals` (grading) analysis needs no model
+    // at all, so gating it on `llm_configured` would hide a tool that works
+    // fine offline. The `triggering`/`token-bloat`/`overlap` analyses still
+    // need `ADEPT_MODEL` — see the description and `resolve_analyses`, which
+    // enforces that per-analysis rather than at advertisement time.
+    tools.push(json!({
+        "name": "eval_skill",
+        "description": "Evaluate a skill: triggering accuracy, token bloat, and overlap with sibling skills (each requires ADEPT_MODEL, optionally ADEPT_BASE_URL/ADEPT_API_KEY; network-backed with a timeout), plus offline eval-dataset grading against inline `results` (no model needed, no network call). Selects a default set of analyses from what's available unless `select`/`ignore` narrow it explicitly.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Path to a SKILL.md file or skill directory." },
+                "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." },
+                "directory": { "type": "string", "description": "Skills root to search for sibling skills when detecting overlap. Defaults to the parent directory of `path`; required to get overlap detection when evaluating raw `content`." },
+                "model": { "type": "string", "description": "Override the model to use for the triggering/token-bloat/overlap analyses (defaults to ADEPT_MODEL)." },
+                "base_url": { "type": "string", "description": "Override the OpenAI-compatible base URL (defaults to ADEPT_BASE_URL or the OpenAI API)." },
+                "results": {
+                    "type": "array",
+                    "description": "Inline run results to grade against the eval dataset (same fields as a `results.jsonl` line: case, arm, response, cwd, command_exit_codes, tokens). Enables the `evals` analysis. Passing `results` alongside `content` (no real skill directory) grades `contains` only; `file_exists`/`file_contains` are reported as skipped, naming the missing directory.",
+                    "items": { "type": "object" }
+                },
+                "evals": { "type": "string", "description": "Override path to the eval dataset (defaults to `evals/evals.jsonl` relative to `path`)." },
+                "select": {
+                    "type": "array",
+                    "description": "Only run these analyses (`triggering`, `token-bloat`, `overlap`, `evals`). An explicitly selected analysis whose precondition is missing (no model, no `results`) is an error naming what's missing.",
+                    "items": { "type": "string", "enum": ["triggering", "token-bloat", "overlap", "evals"] }
+                },
+                "ignore": {
+                    "type": "array",
+                    "description": "Skip these analyses (`triggering`, `token-bloat`, `overlap`, `evals`).",
+                    "items": { "type": "string", "enum": ["triggering", "token-bloat", "overlap", "evals"] }
+                }
+            },
+            "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
+        }
+    }));
+
+    // Only advertise `create_skill`/`generate_evals` when an LLM backend can
+    // actually be resolved (network-backed; requires `ADEPT_MODEL` etc.) so
+    // agents don't discover a tool that's guaranteed to fail. Resolved once
+    // and shared between the two — this is the one gate `eval_skill` above
+    // deliberately no longer participates in, since grading doesn't need it.
     let llm_configured = LlmConfig::default().resolve().is_ok();
 
-    if llm_configured {
-        tools.push(json!({
-            "name": "score_skill",
-            "description": "Score a skill's triggering accuracy, token bloat, and overlap with sibling skills using an LLM. Requires ADEPT_MODEL (and optionally ADEPT_BASE_URL/ADEPT_API_KEY) to be configured; network-backed with a timeout.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Path to a SKILL.md file or skill directory." },
-                    "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." },
-                    "directory": { "type": "string", "description": "Skills root to search for sibling skills when detecting overlap. Defaults to the parent directory of `path`; required to get overlap detection when scoring raw `content`." },
-                    "model": { "type": "string", "description": "Override the model to score with (defaults to ADEPT_MODEL)." },
-                    "base_url": { "type": "string", "description": "Override the OpenAI-compatible base URL (defaults to ADEPT_BASE_URL or the OpenAI API)." }
-                },
-                "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
-            }
-        }));
-    }
-
     // `create_skill`/`generate_evals` are also network-backed (same
-    // `ADEPT_MODEL` resolution as `eval_skill`) and preview-only: neither
+    // `ADEPT_MODEL` resolution as `eval_skill`'s LLM analyses) and preview-only: neither
     // accepts any output-path argument, and neither ever touches the
     // filesystem for writing — see `create_skill_tool`/`generate_evals_tool`.
     if llm_configured {
@@ -294,9 +316,13 @@ fn handle_tools_call(params: &Value) -> Result<Value, (i64, String)> {
     match name {
         "check_skill" => Ok(tool_result(check_skill_tool(&arguments))),
         "format_skill" => Ok(tool_result(format_skill_tool(&arguments))),
-        "score_skill" => Ok(tool_result(score_skill_tool(&arguments))),
+        "eval_skill" => Ok(tool_result(eval_skill_tool(&arguments))),
         "create_skill" => Ok(tool_result(create_skill_tool(&arguments))),
         "generate_evals" => Ok(tool_result(generate_evals_tool(&arguments))),
+        "score_skill" => Err((
+            -32602,
+            "unknown tool: score_skill was renamed to eval_skill".to_string(),
+        )),
         other => Err((-32602, format!("unknown tool: {other}"))),
     }
 }
@@ -391,7 +417,7 @@ fn format_skill_tool(arguments: &Value) -> (String, bool) {
 ///
 /// Overlap detection is pairwise, so a skillset containing only the target
 /// skill can never surface an overlap — the skill is compared against itself.
-/// Mirror the `adept score` CLI: discover sibling skills so the target is
+/// Mirror the `adept eval` CLI: discover sibling skills so the target is
 /// adjudicated against its neighbours.
 ///
 /// The search root is `directory` if given. Otherwise, for a real on-disk
@@ -433,21 +459,124 @@ fn overlap_skillset(arguments: &Value, path: &std::path::Path, skill: &Skill) ->
     skills
 }
 
-/// `eval_skill` MCP tool: runs LLM-assisted scoring, given a resolvable
-/// `ADEPT_MODEL`/`ADEPT_BASE_URL`/`ADEPT_API_KEY` (or `model`/`base_url`
-/// arguments). Never panics or hangs: a missing/unresolvable LLM config, a
-/// malformed skill, or a timed-out request all come back as a structured
-/// `(text, is_error=true)` result rather than propagating a panic.
-fn score_skill_tool(arguments: &Value) -> (String, bool) {
+/// Read `select`/`ignore` arrays of analysis names from `arguments`,
+/// defaulting to empty when absent or malformed (validated for real by
+/// [`resolve_analyses`]).
+fn read_analysis_names(arguments: &Value, key: &str) -> Vec<String> {
+    arguments
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parse the `results` argument (an inline JSON array, one object per
+/// `results.jsonl` line) into [`adept::evals::CaseResult`]s.
+///
+/// `content_mode` is `true` when the skill was supplied as raw `content`
+/// rather than a filesystem `path`: an MCP client's `cwd` has no
+/// corresponding real directory on the server in that case, so every
+/// result's `cwd` is forced to `None` regardless of what was sent — this is
+/// what makes `file_exists`/`file_contains` grade as *skipped* (naming the
+/// missing directory) rather than silently passing or erroring.
+fn parse_inline_results(
+    arguments: &Value,
+    content_mode: bool,
+) -> Result<Vec<adept::evals::CaseResult>, String> {
+    let items = arguments
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "`results` must be an array of result objects".to_string())?;
+
+    let mut results = Vec::with_capacity(items.len());
+    for (idx, item) in items.iter().enumerate() {
+        let mut result: adept::evals::CaseResult =
+            serde_json::from_value(item.clone()).map_err(|err| format!("results[{idx}]: {err}"))?;
+        if content_mode {
+            result.cwd = None;
+        }
+        results.push(result);
+    }
+    Ok(results)
+}
+
+/// The skill's own directory, given a path to its `SKILL.md` file or the
+/// skill's own directory: `path` itself if it's a directory, else its
+/// parent (falling back to `.`). `evals/evals.jsonl` discovery is relative
+/// to this. Mirrors `commands::eval`'s identical helper (not shared across
+/// the crate boundary of a single small function).
+fn skill_directory(path: &std::path::Path) -> std::path::PathBuf {
+    if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    }
+}
+
+/// Grade inline `results` against the eval dataset (an `evals` argument
+/// override, or `evals/evals.jsonl` relative to `path`'s skill directory).
+/// Purely offline: no LLM client is touched anywhere in this path.
+fn grade_inline(
+    arguments: &Value,
+    path: &std::path::Path,
+    content_mode: bool,
+) -> Result<adept::evals::EvalBenchmarkReport, String> {
+    let results = parse_inline_results(arguments, content_mode)?;
+
+    let dataset_path = match arguments.get("evals").and_then(Value::as_str) {
+        Some(p) => std::path::PathBuf::from(p),
+        None => skill_directory(path).join("evals").join("evals.jsonl"),
+    };
+    let dataset_text = std::fs::read_to_string(&dataset_path).map_err(|err| {
+        format!(
+            "failed to read eval dataset {}: {err}",
+            dataset_path.display()
+        )
+    })?;
+    adept::evals::validate(&dataset_text)
+        .map_err(|err| format!("invalid eval dataset {}: {err}", dataset_path.display()))?;
+    let cases = adept::evals::parse_jsonl(&dataset_text).map_err(|err| {
+        format!(
+            "failed to parse eval dataset {}: {err}",
+            dataset_path.display()
+        )
+    })?;
+
+    Ok(adept::evals::grade(&cases, &results))
+}
+
+/// `eval_skill` MCP tool: runs whichever of the four analyses
+/// (`triggering`/`token-bloat`/`overlap`/`evals`) are selected — by default,
+/// whatever's available (a model for the first three, inline `results` for
+/// the last) — and returns one [`EvalReport`] covering all of them. Never
+/// panics or hangs: a missing/unresolvable LLM config, a malformed skill or
+/// dataset, or a timed-out request all come back as a structured
+/// `(text, is_error=true)` result rather than propagating a panic. Read-only
+/// — this function never writes to the skill directory.
+fn eval_skill_tool(arguments: &Value) -> (String, bool) {
     let (source, path) = match read_source(arguments) {
         Ok(pair) => pair,
         Err(message) => return (message, true),
     };
+    // Mirrors `overlap_skillset`'s distinction: only a caller-supplied
+    // `path` argument counts as "on disk", not `read_source`'s synthetic
+    // `SKILL.md` default used for raw `content`.
+    let content_mode = arguments.get("path").and_then(Value::as_str).is_none();
 
     let skill = match AnthropicSkillParser.parse_str(&path, &source) {
         Ok(skill) => skill,
         Err(err) => return (json!({ "error": err.to_string() }).to_string(), true),
     };
+
+    let select = read_analysis_names(arguments, "select");
+    let ignore = read_analysis_names(arguments, "ignore");
 
     let llm_config = LlmConfig {
         base_url: arguments
@@ -460,50 +589,92 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    let resolved = match llm_config.resolve() {
-        Ok(resolved) => resolved,
-        Err(err) => {
-            return (
-                json!({
-                    "error": format!(
-                        "no LLM model configured for eval_skill: {err} (set ADEPT_MODEL, or pass a `model` argument)"
-                    )
-                })
-                .to_string(),
-                true,
-            );
-        }
+    let model_available = llm_config.resolve().is_ok();
+    let results_available = arguments.get("results").is_some();
+
+    let selection = match resolve_analyses(&select, &ignore, model_available, results_available) {
+        Ok(selection) => selection,
+        Err(message) => return (json!({ "error": message }).to_string(), true),
     };
 
-    let client = OpenAiCompatClient::new(resolved.clone());
-    let options = EvalOptions::for_model(&resolved.model, adept::Tokenizer::default());
-    let skillset = overlap_skillset(arguments, &path, &skill);
+    let needs_llm = selection.contains("triggering")
+        || selection.contains("token-bloat")
+        || selection.contains("overlap");
 
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            return (
-                format!("failed to start async runtime for eval_skill: {err}"),
-                true,
-            );
+    let mut report = EvalReport::new(skill.frontmatter.name.clone());
+
+    if needs_llm {
+        let resolved = match llm_config.resolve() {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                return (
+                    json!({
+                        "error": format!(
+                            "no LLM model configured for eval_skill: {err} (set ADEPT_MODEL, or pass a `model` argument)"
+                        )
+                    })
+                    .to_string(),
+                    true,
+                );
+            }
+        };
+
+        let client = OpenAiCompatClient::new(resolved.clone());
+        let mut options = EvalOptions::for_model(&resolved.model, adept::Tokenizer::default());
+        if !selection.contains("triggering") {
+            options.triggering = None;
         }
-    };
+        options.token_bloat = selection.contains("token-bloat");
 
-    let outcome = runtime.block_on(tokio::time::timeout(
-        SCORE_TIMEOUT,
-        adept_agent::eval_skill(&client, &skill, &skillset, &options),
-    ));
+        let skillset = if selection.contains("overlap") {
+            overlap_skillset(arguments, &path, &skill)
+        } else {
+            Vec::new()
+        };
 
-    match outcome {
-        Ok(Ok(report)) => match serde_json::to_string(&report) {
-            Ok(json) => (json, false),
-            Err(err) => (format!("failed to render score report: {err}"), true),
-        },
-        Ok(Err(err)) => (json!({ "error": err.to_string() }).to_string(), true),
-        Err(_elapsed) => (
-            json!({ "error": format!("eval_skill timed out after {SCORE_TIMEOUT:?}") }).to_string(),
-            true,
-        ),
+        let runtime = match tokio::runtime::Runtime::new() {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                return (
+                    format!("failed to start async runtime for eval_skill: {err}"),
+                    true,
+                );
+            }
+        };
+
+        let outcome = runtime.block_on(tokio::time::timeout(
+            SCORE_TIMEOUT,
+            adept_agent::eval_skill(&client, &skill, &skillset, &options),
+        ));
+
+        match outcome {
+            Ok(Ok(llm_report)) => {
+                report.prompt_version = llm_report.prompt_version;
+                report.triggering = llm_report.triggering;
+                report.token_bloat = llm_report.token_bloat;
+                report.overlaps = llm_report.overlaps;
+            }
+            Ok(Err(err)) => return (json!({ "error": err.to_string() }).to_string(), true),
+            Err(_elapsed) => {
+                return (
+                    json!({ "error": format!("eval_skill timed out after {SCORE_TIMEOUT:?}") })
+                        .to_string(),
+                    true,
+                )
+            }
+        }
+    }
+
+    if selection.contains("evals") {
+        match grade_inline(arguments, &path, content_mode) {
+            Ok(benchmark) => report.evals = Some(benchmark),
+            Err(message) => return (json!({ "error": message }).to_string(), true),
+        }
+    }
+
+    match serde_json::to_string(&report) {
+        Ok(json) => (json, false),
+        Err(err) => (format!("failed to render eval report: {err}"), true),
     }
 }
 

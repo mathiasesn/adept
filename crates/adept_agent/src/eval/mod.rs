@@ -141,19 +141,21 @@ pub async fn eval_skill(
     }
 
     if !skillset.is_empty() {
-        report.overlaps = detect_overlaps(
-            client,
-            skillset,
-            &options.model,
-            options.overlap_similarity_threshold,
-        )
-        .await?
-        .into_iter()
-        .filter(|adjudication| {
-            adjudication.skill_a == skill.frontmatter.name
-                || adjudication.skill_b == skill.frontmatter.name
-        })
-        .collect();
+        report.overlaps = Some(
+            detect_overlaps(
+                client,
+                skillset,
+                &options.model,
+                options.overlap_similarity_threshold,
+            )
+            .await?
+            .into_iter()
+            .filter(|adjudication| {
+                adjudication.skill_a == skill.frontmatter.name
+                    || adjudication.skill_b == skill.frontmatter.name
+            })
+            .collect(),
+        );
     }
 
     Ok(report)
@@ -235,7 +237,7 @@ mod tests {
         assert_eq!(triggering.metrics.precision, 1.0);
         assert_eq!(triggering.metrics.recall, 1.0);
         assert!(report.token_bloat.is_some());
-        assert!(report.overlaps.is_empty());
+        assert!(report.overlaps.is_none());
         assert_eq!(mock.call_count(), 4);
 
         std::fs::remove_dir_all(&dir).ok();

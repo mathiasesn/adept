@@ -154,16 +154,248 @@ fn fmt_in_place_rewrites_file_and_is_idempotent() {
 }
 
 #[test]
-fn score_without_model_exits_two_with_actionable_message() {
+fn eval_without_model_or_results_exits_two_with_actionable_message() {
     adept()
-        .arg("score")
+        .arg("eval")
         .arg(fixture("clean-skill").join("SKILL.md"))
         .env_remove("ADEPT_MODEL")
         .env_remove("ADEPT_BASE_URL")
         .env_remove("ADEPT_API_KEY")
         .assert()
         .code(2)
-        .stderr(predicate::str::contains("ADEPT_MODEL"));
+        .stderr(predicate::str::contains("nothing to evaluate"));
+}
+
+#[test]
+fn eval_select_triggering_without_model_exits_two_naming_model() {
+    adept()
+        .arg("eval")
+        .arg(fixture("clean-skill").join("SKILL.md"))
+        .arg("--select")
+        .arg("triggering")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("model"));
+}
+
+#[test]
+fn eval_select_unknown_analysis_is_rejected() {
+    adept()
+        .arg("eval")
+        .arg(fixture("clean-skill").join("SKILL.md"))
+        .arg("--select")
+        .arg("bogus")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("unknown analysis"));
+}
+
+#[test]
+fn eval_select_evals_without_results_exits_two_naming_results() {
+    adept()
+        .arg("eval")
+        .arg(fixture("clean-skill").join("SKILL.md"))
+        .arg("--select")
+        .arg("evals")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("--results"));
+}
+
+#[test]
+fn eval_select_evals_offline_runs_with_no_model_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("demo-skill");
+    std::fs::create_dir_all(skill_dir.join("evals")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo-skill\ndescription: does a demo thing. Use when demoing things.\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        skill_dir.join("evals").join("evals.jsonl"),
+        "{\"schema_version\":1,\"prompt\":\"demo\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+    )
+    .unwrap();
+    let results_path = dir.path().join("results.jsonl");
+    std::fs::write(&results_path, "{\"case\":1,\"response\":\"it is ok\"}\n").unwrap();
+
+    adept()
+        .arg("eval")
+        .arg(skill_dir.join("SKILL.md"))
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Eval-dataset grading"));
+}
+
+#[test]
+fn eval_select_evals_omits_unselected_analysis_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("demo");
+    std::fs::create_dir_all(skill_dir.join("evals")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: does a demo thing. Use when demoing things.\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        skill_dir.join("evals").join("evals.jsonl"),
+        "{\"schema_version\":1,\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n\
+         {\"schema_version\":1,\"prompt\":\"two\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"},{\"kind\":\"command\",\"command\":\"true\"}]}\n",
+    )
+    .unwrap();
+    let results_path = dir.path().join("results.jsonl");
+    std::fs::write(
+        &results_path,
+        "{\"case\":1,\"response\":\"it is ok\"}\n\
+         {\"case\":2,\"response\":\"nope\"}\n\
+         {\"case\":1,\"response\":\"whatever\",\"arm\":\"baseline\"}\n\
+         {\"case\":2,\"response\":\"whatever\",\"arm\":\"baseline\"}\n",
+    )
+    .unwrap();
+
+    adept()
+        .arg("eval")
+        .arg(skill_dir.join("SKILL.md"))
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(1)
+        .stdout(
+            predicate::str::contains("Triggering accuracy")
+                .not()
+                .and(predicate::str::contains("Token bloat").not())
+                .and(predicate::str::contains("Overlap/conflict detection").not())
+                .and(predicate::str::contains("prompt set version").not())
+                .and(predicate::str::contains("pass rate: 50% (2 cases)"))
+                .and(predicate::str::contains("assertions: 1/2 met (1 skipped)")),
+        );
+
+    adept()
+        .arg("eval")
+        .arg(skill_dir.join("SKILL.md"))
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .arg("--format")
+        .arg("json")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(1)
+        .stdout(
+            predicate::str::contains("\"triggering\": null")
+                .and(predicate::str::contains("\"token_bloat\": null"))
+                .and(predicate::str::contains("\"overlaps\": null")),
+        );
+}
+
+#[test]
+fn eval_accepts_skill_directory_path_not_just_skill_md() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("demo-skill");
+    std::fs::create_dir_all(skill_dir.join("evals")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo-skill\ndescription: does a demo thing. Use when demoing things.\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        skill_dir.join("evals").join("evals.jsonl"),
+        "{\"schema_version\":1,\"prompt\":\"demo\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+    )
+    .unwrap();
+    let results_path = dir.path().join("results.jsonl");
+    std::fs::write(&results_path, "{\"case\":1,\"response\":\"it is ok\"}\n").unwrap();
+
+    // Pass the skill *directory*, not the SKILL.md file, as the spec's
+    // examples do (`adept eval ./my-skill`).
+    adept()
+        .arg("eval")
+        .arg(&skill_dir)
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Eval-dataset grading"));
+}
+
+#[test]
+fn eval_rejects_directory_without_skill_md_with_exit_two() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("not-a-skill")).unwrap();
+    let results_path = dir.path().join("results.jsonl");
+    std::fs::write(&results_path, "{\"case\":1,\"response\":\"it is ok\"}\n").unwrap();
+
+    adept()
+        .arg("eval")
+        .arg(dir.path().join("not-a-skill"))
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("no SKILL.md found"));
+}
+
+#[test]
+fn adept_score_is_gone_from_help_and_fails_rather_than_running() {
+    adept()
+        .arg("score")
+        .arg(fixture("clean-skill").join("SKILL.md"))
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrecognized subcommand"));
+
+    adept()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("eval").and(predicate::str::contains("score").not()));
+}
+
+#[test]
+fn legacy_score_config_section_fails_with_exit_two_naming_eval() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("adept.toml"),
+        "[score]\nmodel = \"old-model\"\n",
+    )
+    .unwrap();
+
+    adept()
+        .current_dir(dir.path())
+        .arg("check")
+        .arg(dir.path())
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("[score]").and(predicate::str::contains("[eval]")));
 }
 
 #[test]
@@ -197,9 +429,9 @@ fn check_rejects_invalid_tokenizer_value() {
 }
 
 #[test]
-fn score_help_documents_tokenizer_flag() {
+fn eval_help_documents_tokenizer_flag() {
     adept()
-        .arg("score")
+        .arg("eval")
         .arg("--help")
         .assert()
         .success()
@@ -207,7 +439,41 @@ fn score_help_documents_tokenizer_flag() {
 }
 
 #[test]
-fn mcp_score_skill_without_llm_config_returns_structured_error_not_hang_or_panic() {
+fn mcp_eval_skill_without_llm_config_returns_structured_error_not_hang_or_panic() {
+    let (stdout, _stderr) = run_mcp(
+        &[],
+        &[],
+        &[
+            MCP_INITIALIZE.to_string(),
+            mcp_tools_call(
+                2,
+                "eval_skill",
+                serde_json::json!({ "content": SAMPLE_SKILL, "select": ["triggering"] }),
+            ),
+        ],
+    );
+
+    let mut saw_eval_error = false;
+    for parsed in jsonrpc_messages(&stdout) {
+        assert_eq!(parsed["jsonrpc"], "2.0");
+        if parsed["id"] == 2 {
+            // Either a structured tool-level error (isError: true) or a
+            // JSON-RPC-level error is acceptable, but it must not hang, and
+            // it must not be a bare panic message.
+            let is_tool_error = parsed["result"]["isError"] == true;
+            let is_rpc_error = parsed.get("error").is_some();
+            assert!(
+                is_tool_error || is_rpc_error,
+                "expected a structured error for eval_skill without LLM config, got {parsed}"
+            );
+            saw_eval_error = true;
+        }
+    }
+    assert!(saw_eval_error, "expected a response for id=2");
+}
+
+#[test]
+fn mcp_tools_call_score_skill_errors_naming_eval_skill() {
     let (stdout, _stderr) = run_mcp(
         &[],
         &[],
@@ -221,23 +487,18 @@ fn mcp_score_skill_without_llm_config_returns_structured_error_not_hang_or_panic
         ],
     );
 
-    let mut saw_score_error = false;
-    for parsed in jsonrpc_messages(&stdout) {
-        assert_eq!(parsed["jsonrpc"], "2.0");
-        if parsed["id"] == 2 {
-            // Either a structured tool-level error (isError: true) or a
-            // JSON-RPC-level error is acceptable, but it must not hang, and
-            // it must not be a bare panic message.
-            let is_tool_error = parsed["result"]["isError"] == true;
-            let is_rpc_error = parsed.get("error").is_some();
-            assert!(
-                is_tool_error || is_rpc_error,
-                "expected a structured error for score_skill without LLM config, got {parsed}"
-            );
-            saw_score_error = true;
-        }
-    }
-    assert!(saw_score_error, "expected a response for id=2");
+    let response = jsonrpc_messages(&stdout)
+        .into_iter()
+        .find(|parsed| parsed["id"] == 2)
+        .expect("expected a response for id=2");
+    let error = response
+        .get("error")
+        .expect("score_skill must be a JSON-RPC error, not a silent no-op");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("eval_skill"),
+        "error should name the replacement tool: {message}"
+    );
 }
 
 #[test]
@@ -266,7 +527,7 @@ fn help_and_version_work() {
     adept().arg("--version").assert().success();
     adept().arg("check").arg("--help").assert().success();
     adept().arg("fmt").arg("--help").assert().success();
-    adept().arg("score").arg("--help").assert().success();
+    adept().arg("eval").arg("--help").assert().success();
 }
 
 #[test]

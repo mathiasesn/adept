@@ -18,12 +18,12 @@ use serde::Deserialize;
 
 const CONFIG_FILE_NAME: &str = "adept.toml";
 
-/// Resolve an LLM client and its resolved configuration for `adept score` or
+/// Resolve an LLM client and its resolved configuration for `adept eval` or
 /// `adept fix`, given the CLI/config-file `base_url`/`model` overrides for
 /// that command's own section.
 ///
 /// `section` names the config-file table to mention in the error message
-/// (`"score"` or `"fix"`) — the two sections are resolved fully
+/// (`"eval"` or `"fix"`) — the two sections are resolved fully
 /// independently (no cross-fallback between them), only sharing the
 /// `ADEPT_*` environment variables via [`LlmConfig::resolve`].
 ///
@@ -85,7 +85,7 @@ pub fn value_source(from_flag: bool, from_config_file: bool, env_var: &str) -> &
     }
 }
 
-/// Resolve the effective capture directory for `score` or `fix`.
+/// Resolve the effective capture directory for `eval` or `fix`.
 ///
 /// Precedence is the documented **CLI flag > `adept.toml` > off**. The two
 /// layers differ in how a *relative* path is anchored: a `--capture-dir`
@@ -117,7 +117,7 @@ pub fn resolve_capture_dir(
     Some((anchored, SOURCE_CONFIG_FILE))
 }
 
-/// Resolve the capture directory for `score`/`fix` and, if capture is on,
+/// Resolve the capture directory for `eval`/`fix` and, if capture is on,
 /// create the sink and attach it to `client`.
 ///
 /// Returns the (possibly capture-enabled) client alongside the sink the
@@ -182,7 +182,7 @@ pub fn shared_sources(
     ])
 }
 
-/// Build the `tokio` runtime `adept score`/`adept fix` drive their single
+/// Build the `tokio` runtime `adept eval`/`adept fix` drive their single
 /// async call from, printing the shared error message on failure.
 #[must_use]
 pub fn build_runtime() -> Option<tokio::runtime::Runtime> {
@@ -199,7 +199,7 @@ pub fn build_runtime() -> Option<tokio::runtime::Runtime> {
 /// flags and `ADEPT_*` environment variables by [`adept_agent::LlmConfig::resolve`].
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
-pub struct ScoreFileConfig {
+pub struct EvalFileConfig {
     pub model: Option<String>,
     pub base_url: Option<String>,
     /// Which `tiktoken-rs` BPE encoding to use for token-bloat analysis.
@@ -214,8 +214,8 @@ pub struct ScoreFileConfig {
 
 /// LLM-related settings for `adept fix`, layered under CLI flags and
 /// `ADEPT_*` environment variables by [`adept_agent::LlmConfig::resolve`].
-/// Kept fully independent of [`ScoreFileConfig`]: `[fix]` never falls back
-/// to `[score]` or vice versa — the only shared fallback is the `ADEPT_*`
+/// Kept fully independent of [`EvalFileConfig`]: `[fix]` never falls back
+/// to `[eval]` or vice versa — the only shared fallback is the `ADEPT_*`
 /// environment variables.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -236,14 +236,14 @@ pub struct FixFileConfig {
     /// Directory to write verbatim LLM call artifacts into. `None` (the
     /// default) disables capture. Overridden by `--capture-dir`; a relative
     /// path resolves against the directory holding this `adept.toml` — see
-    /// [`resolve_capture_dir`]. Independent of `[score] capture_dir`.
+    /// [`resolve_capture_dir`]. Independent of `[eval] capture_dir`.
     pub capture_dir: Option<PathBuf>,
 }
 
 /// LLM-related settings for `adept create`, layered under CLI flags and
 /// `ADEPT_*` environment variables by [`adept_agent::LlmConfig::resolve`].
-/// Kept fully independent of [`ScoreFileConfig`]/[`FixFileConfig`]: `[create]`
-/// never falls back to `[score]` or `[fix]` or vice versa — the only shared
+/// Kept fully independent of [`EvalFileConfig`]/[`FixFileConfig`]: `[create]`
+/// never falls back to `[eval]` or `[fix]` or vice versa — the only shared
 /// fallback is the `ADEPT_*` environment variables.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -268,7 +268,7 @@ pub struct CreateFileConfig {
     /// Directory to write verbatim LLM call artifacts into. `None` (the
     /// default) disables capture. Overridden by `--capture-dir`; a relative
     /// path resolves against the directory holding this `adept.toml` — see
-    /// [`resolve_capture_dir`]. Independent of `[score]`/`[fix] capture_dir`.
+    /// [`resolve_capture_dir`]. Independent of `[eval]`/`[fix] capture_dir`.
     pub capture_dir: Option<PathBuf>,
 }
 
@@ -278,7 +278,7 @@ pub struct CreateFileConfig {
 pub struct AdeptConfig {
     pub lint: LintConfig,
     pub fmt: FmtConfig,
-    pub score: ScoreFileConfig,
+    pub eval: EvalFileConfig,
     pub fix: FixFileConfig,
     pub create: CreateFileConfig,
     /// The directory containing the `adept.toml` this config was loaded
@@ -307,6 +307,13 @@ pub enum ConfigLoadError {
         #[source]
         source: toml::de::Error,
     },
+    /// The config file still has a `[score]` section, from before `adept
+    /// score` was renamed to `adept eval`. Deliberately a hard error rather
+    /// than silently ignored: `AdeptConfig` has no `deny_unknown_fields`, so
+    /// a stale `[score]` table would otherwise parse, be dropped, and quietly
+    /// stop applying the user's `model`/`capture_dir`/`num_prompts`.
+    #[error("{path}: `[score]` is no longer read; rename it to `[eval]`")]
+    LegacyScoreSection { path: PathBuf },
 }
 
 /// Walk upward from `start` (a file or directory) looking for `adept.toml`,
@@ -340,6 +347,11 @@ pub fn load_config_file(path: &Path) -> Result<AdeptConfig, ConfigLoadError> {
         path: path.to_path_buf(),
         source,
     })?;
+    if contains_legacy_score_section(&text) {
+        return Err(ConfigLoadError::LegacyScoreSection {
+            path: path.to_path_buf(),
+        });
+    }
     let mut config: AdeptConfig =
         toml::from_str(&text).map_err(|source| ConfigLoadError::Parse {
             path: path.to_path_buf(),
@@ -347,6 +359,20 @@ pub fn load_config_file(path: &Path) -> Result<AdeptConfig, ConfigLoadError> {
         })?;
     config.origin_dir = path.parent().map(Path::to_path_buf);
     Ok(config)
+}
+
+/// Whether `text` (an `adept.toml`'s raw contents) declares a top-level
+/// `[score]` table — the pre-rename section name. Checked separately from
+/// (and before) the `AdeptConfig` deserialization itself, since
+/// `AdeptConfig` has no `deny_unknown_fields` and would otherwise parse a
+/// stale `[score]` section, silently ignore it, and quietly drop the user's
+/// `model`/`capture_dir`/`num_prompts`. A malformed document is not this
+/// function's concern — `toml::from_str` below still reports that.
+fn contains_legacy_score_section(text: &str) -> bool {
+    matches!(
+        text.parse::<toml::Value>(),
+        Ok(toml::Value::Table(table)) if table.contains_key("score")
+    )
 }
 
 /// Resolve the effective config: `--config` forces a specific file;
@@ -415,20 +441,37 @@ mod tests {
     }
 
     #[test]
-    fn fix_and_score_sections_are_parsed_independently() {
+    fn fix_and_eval_sections_are_parsed_independently() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("adept.toml"),
-            "[score]\nmodel = \"score-model\"\n\n[fix]\nmodel = \"fix-model\"\nmax_rounds = 5\n",
+            "[eval]\nmodel = \"eval-model\"\n\n[fix]\nmodel = \"fix-model\"\nmax_rounds = 5\n",
         )
         .unwrap();
 
         let config = resolve_config(None, dir.path()).unwrap();
-        assert_eq!(config.score.model.as_deref(), Some("score-model"));
+        assert_eq!(config.eval.model.as_deref(), Some("eval-model"));
         assert_eq!(config.fix.model.as_deref(), Some("fix-model"));
         assert_eq!(config.fix.max_rounds, Some(5));
-        assert_eq!(config.score.base_url, None);
+        assert_eq!(config.eval.base_url, None);
         assert_eq!(config.fix.base_url, None);
+    }
+
+    #[test]
+    fn legacy_score_section_is_a_hard_error_naming_eval() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("adept.toml"),
+            "[score]\nmodel = \"old-model\"\n",
+        )
+        .unwrap();
+
+        let err = resolve_config(None, dir.path()).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("[score]") && message.contains("[eval]"),
+            "message should name both the removed and replacement sections: {message}"
+        );
     }
 
     #[test]
@@ -476,15 +519,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join("adept.toml"),
-            "[score]\ncapture_dir = \"score-cap\"\n",
+            "[eval]\ncapture_dir = \"eval-cap\"\n",
         )
         .unwrap();
 
         let config = resolve_config(None, dir.path()).unwrap();
-        assert_eq!(config.score.capture_dir, Some(PathBuf::from("score-cap")));
+        assert_eq!(config.eval.capture_dir, Some(PathBuf::from("eval-cap")));
         assert_eq!(
             config.fix.capture_dir, None,
-            "[fix] must never inherit [score] capture_dir"
+            "[fix] must never inherit [eval] capture_dir"
         );
 
         let origin = config.origin_dir.clone();
@@ -492,11 +535,11 @@ mod tests {
             resolve_capture_dir(None, config.fix.capture_dir.as_deref(), origin.as_deref())
                 .is_none()
         );
-        let (score_dir, source) =
-            resolve_capture_dir(None, config.score.capture_dir.as_deref(), origin.as_deref())
+        let (eval_dir, source) =
+            resolve_capture_dir(None, config.eval.capture_dir.as_deref(), origin.as_deref())
                 .unwrap();
         assert_eq!(source, SOURCE_CONFIG_FILE);
-        assert_eq!(score_dir, origin.unwrap().join("score-cap"));
+        assert_eq!(eval_dir, origin.unwrap().join("eval-cap"));
     }
 
     #[test]

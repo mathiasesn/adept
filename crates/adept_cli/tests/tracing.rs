@@ -81,15 +81,15 @@ fn mcp_stdout_is_identical_with_and_without_logging() {
 }
 
 #[test]
-fn mcp_score_skill_schema_never_exposes_capture() {
+fn mcp_eval_skill_schema_never_exposes_capture() {
     // Spec §12: capture is CLI-only and unreachable from MCP, so the
-    // `score_skill` tool's public JSON-RPC contract must be unchanged by
+    // `eval_skill` tool's public JSON-RPC contract must be unchanged by
     // the capture layer. Driven over real stdio, against the real schema.
     //
-    // `score_skill` is only advertised once an LLM backend resolves, so
+    // `eval_skill` is always advertised (grading needs no model), so
     // `ADEPT_MODEL` is set — the tool is listed, never called, so this
     // performs no network I/O.
-    let (stdout, _stderr) = run_mcp(&[("ADEPT_MODEL", "gpt-test")], &[], &mcp_requests());
+    let (stdout, _stderr) = run_mcp(&[], &[], &mcp_requests());
     let list = jsonrpc_messages(&stdout)
         .into_iter()
         .find(|message| message["id"] == 2)
@@ -99,13 +99,13 @@ fn mcp_score_skill_schema_never_exposes_capture() {
         .as_array()
         .expect("tools array")
         .iter()
-        .find(|tool| tool["name"] == "score_skill")
-        .expect("a score_skill tool");
+        .find(|tool| tool["name"] == "eval_skill")
+        .expect("an eval_skill tool");
 
     let schema = &tool["inputSchema"];
     let properties = schema["properties"]
         .as_object()
-        .expect("score_skill input schema properties");
+        .expect("eval_skill input schema properties");
     for name in properties.keys() {
         assert!(
             !name.to_ascii_lowercase().contains("capture"),
@@ -117,7 +117,7 @@ fn mcp_score_skill_schema_never_exposes_capture() {
     let rendered = serde_json::to_string(schema).unwrap().to_ascii_lowercase();
     assert!(
         !rendered.contains("capture"),
-        "capture reached the score_skill schema: {rendered}"
+        "capture reached the eval_skill schema: {rendered}"
     );
 }
 
@@ -197,7 +197,7 @@ fn verbose_flag_is_global_and_documented() {
         .stdout(predicate::str::contains("--verbose"));
 
     // `global = true` means every subcommand accepts it.
-    for subcommand in ["check", "fmt", "score", "fix", "mcp"] {
+    for subcommand in ["check", "fmt", "eval", "fix", "mcp"] {
         adept()
             .arg(subcommand)
             .arg("--help")
@@ -208,8 +208,8 @@ fn verbose_flag_is_global_and_documented() {
 }
 
 #[test]
-fn capture_dir_flag_is_advertised_on_score_and_fix_only() {
-    for subcommand in ["score", "fix"] {
+fn capture_dir_flag_is_advertised_on_eval_and_fix_only() {
+    for subcommand in ["eval", "fix"] {
         adept()
             .arg(subcommand)
             .arg("--help")
@@ -231,7 +231,7 @@ fn capture_dir_flag_is_advertised_on_score_and_fix_only() {
 }
 
 #[test]
-fn score_with_uncreatable_capture_dir_exits_two_before_any_network_io() {
+fn eval_with_uncreatable_capture_dir_exits_two_before_any_network_io() {
     // `run` resolves the capture sink *before* `execute` builds a runtime or
     // issues a request, so this exercises the failure path without a single
     // byte on the wire. The base URL is a reserved-for-documentation address
@@ -242,7 +242,7 @@ fn score_with_uncreatable_capture_dir_exits_two_before_any_network_io() {
     let capture = blocker.join("run");
 
     adept()
-        .arg("score")
+        .arg("eval")
         .arg(fixture("clean-skill").join("SKILL.md"))
         .arg("--capture-dir")
         .arg(&capture)

@@ -1,9 +1,8 @@
 ---
 source: crates/adept_agent/src/eval/report.rs
-assertion_line: 198
 expression: sample_report().render()
 ---
-Score report for skill: pdf-filler
+Eval report for skill: pdf-filler
 (prompt set version: adept_score-prompts-v1)
 
 == Triggering accuracy ==
