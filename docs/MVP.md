@@ -29,8 +29,14 @@ A fast, ruff-style CLI has first-mover potential.
 ## Non-goals
 - A hosted registry/marketplace or index (the "registry-style index" idea) — deferred
   entirely; future work.
-- Executing or sandbox-testing skill scripts.
-- Full agent-harness end-to-end evals (only prompt→trigger judgments in `score`).
+- ~~Executing or sandbox-testing skill scripts.~~ **Superseded** post-MVP —
+  see `docs/BACKLOG.md`, "External prior art: `huggingface/upskill`", item 1.
+  Deterministic verifiers (including a shell `command` verifier) will back an
+  `adept fix` accept gate, under binding safety constraints recorded there.
+- ~~Full agent-harness end-to-end evals (only prompt→trigger judgments in `score`).~~
+  **Superseded** post-MVP — see the same section, item 2. Skill-lift
+  measurement needs with/without runs graded end to end. `score` itself keeps
+  the narrower prompt→trigger meaning described in this spec.
 
 ## Constraints
 - Rust; project structure modeled on ruff but simpler (cargo workspace with crates like

@@ -307,7 +307,9 @@ checks frontmatter validity or token budgets. The single overlap is
 triggering accuracy is an LLM judge over synthetic prompts, a proxy for
 behaviour, where upskill measures behaviour directly.
 
-Ranked, with the caveat in items 1 and 2 read before starting either:
+Ranked. Items 1 and 2 are **accepted at full scope**, which supersedes two of
+the spec's original non-goals; read the "Deferred by design" section below
+alongside them, and `docs/MVP.md` where those non-goals originate.
 
 1. **Deterministic verifiers as an `adept fix` accept gate.** upskill's
    `verifiers.py` is ~150 lines of dumb, reliable grading — `contains`,
@@ -317,12 +319,18 @@ Ranked, with the caveat in items 1 and 2 read before starting either:
    Today every adept LLM surface is judged by another LLM call; `fix`'s
    accept/reject gate relies on re-linting alone. Deterministic assertions
    would give it a gate that cannot itself hallucinate.
-   **Conflicts with a stated non-goal** — the shell `command` verifier is
-   "executing or sandbox-testing skill scripts" below. A narrowed version
-   (`contains` / `file_exists` / `file_contains` only, no process execution)
-   delivers most of the value and conflicts with nothing; the full version
-   needs the non-goal explicitly superseded, not quietly ignored. Decide
-   which before writing code.
+   **Adopted at full scope, including the shell `command` verifier**, which
+   supersedes the "executing or sandbox-testing skill scripts" non-goal (see
+   below, and `docs/MVP.md`). Executing skill-supplied commands is a real new
+   threat surface for a tool that until now only reads files, so the design
+   owes three things before any code lands: execution must be opt-in via
+   flag/config rather than on by default; it must be unreachable from `check`
+   and `fmt`, which stay offline and side-effect-free; and upskill's limits
+   (60s timeout, ~1200-char output truncation) are the floor, not the design.
+   Sandboxing is the genuinely open question — upskill leans on its executor
+   (including a container image for the HF Jobs path) for isolation, and
+   adept, as a single binary with no orchestration layer, has no equivalent
+   to lean on.
 2. **Baseline / lift, reported as lift-per-token.** upskill's headline metric
    is *skill lift*: pass rate with the skill minus pass rate without it,
    computed automatically in single-model mode. `adept score` reports an
@@ -330,9 +338,16 @@ Ranked, with the caveat in items 1 and 2 read before starting either:
    the skill earns the context budget it spends. Pairing lift with the
    existing token-bloat analysis gives lift-per-token, which is the number
    that actually decides whether a skill should exist — and which neither
-   tool computes today. **Also conflicts with a stated non-goal**: a true
-   baseline comparison is a full agent-harness end-to-end eval, not a
-   prompt→trigger judgment. Same decision as item 1.
+   tool computes today. **Adopted at full scope**, superseding the "full
+   agent-harness end-to-end evals" non-goal: a real baseline comparison means
+   running a task with and without the skill and grading the outcome, which
+   is an end-to-end eval by definition. Two consequences to design around.
+   First, this is a *new surface*, not an extension of `score` — `score`
+   answers "would this skill trigger", lift answers "did this skill help",
+   and collapsing them into one command would make the existing F1 output
+   mean two different things depending on flags. Second, it depends on
+   item 1: lift is only as trustworthy as the grader that decides whether a
+   run passed, so the verifiers land first.
 3. **Run persistence and history.** upskill writes
    `runs/<timestamp>/run_N/{run_metadata,run_result}.json` plus a
    `batch_summary.json` and an aggregate `results.csv`, queryable via
@@ -373,15 +388,28 @@ story and should not grow one.
 ## Deferred by design
 
 From the spec's non-goals and constraints — recorded so they aren't
-rediscovered as bugs. Note that items 1 and 2 of the upskill survey above
-bear directly on the second and third bullets; adopting either in full is a
-design change to be argued, not a follow-up to be picked up:
+rediscovered as bugs:
 
 - Hosted registry / marketplace / index.
-- Executing or sandbox-testing skill scripts.
-- Full agent-harness end-to-end evals (only prompt→trigger judgments).
+- ~~Executing or sandbox-testing skill scripts.~~ **Superseded** by item 1 of
+  the upskill survey above: adept will grow deterministic verifiers including
+  a shell `command` verifier, to give `adept fix` an accept gate that is not
+  itself an LLM. The non-goal is retired as a *product* boundary, not as a
+  safety one — the constraints in item 1 (opt-in, never reachable from
+  `check`/`fmt`, hard timeout and output caps, sandboxing story required)
+  replace it and are binding.
+- ~~Full agent-harness end-to-end evals (only prompt→trigger judgments).~~
+  **Superseded** by item 2: measuring skill lift requires running a task with
+  and without the skill and grading the result. `score` keeps its narrower
+  prompt→trigger meaning; lift belongs to a new surface, and depends on the
+  verifiers from item 1 landing first.
 - Non-Anthropic skill formats. The parser trait exists; see the filename
   limitation above before building on it.
+
+Both supersessions originate in `docs/MVP.md`'s non-goals list, annotated
+there to match. They are decisions of record, not open questions — but note
+neither has an implementation yet, so nothing in the shipped binary has
+changed and `check`/`fmt` remain offline and side-effect-free.
 
 ## Pre-publish checklist
 
