@@ -12,7 +12,7 @@
 //! Level selection follows the `ty` shape: repeated `-v` flags pick a
 //! default level (off / info / debug / trace), and the `ADEPT_LOG`
 //! environment variable overrides them wholesale using `EnvFilter`
-//! directive syntax (e.g. `ADEPT_LOG=adept_score::client=trace`). Adept
+//! directive syntax (e.g. `ADEPT_LOG=adept_agent::client=trace`). Adept
 //! uses its own `ADEPT_*` namespace rather than `RUST_LOG`.
 //!
 //! With no `-v` and no `ADEPT_LOG` the filter is `off`, so stdout *and*
@@ -59,7 +59,7 @@ fn default_filter(verbosity: u8) -> EnvFilter {
         _ => "trace",
     };
     EnvFilter::new(format!(
-        "adept={level},adept_cli={level},adept_fmt={level},adept_score={level},adept_agent={level}"
+        "adept={level},adept_cli={level},adept_fmt={level},adept_agent={level}"
     ))
 }
 

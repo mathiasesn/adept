@@ -77,7 +77,7 @@ impl FixResponse {
 
 /// Strip a single leading/trailing markdown code fence, if present.
 ///
-/// `adept_score` parses model JSON directly with no fence-stripping (its
+/// `crate::eval` parses model JSON directly with no fence-stripping (its
 /// prompts rely on `json_response: true` alone); there is no existing
 /// helper of this kind to reuse, so this is a small purpose-built one.
 /// `pub(crate)` so `create`'s own response types can reuse it too.

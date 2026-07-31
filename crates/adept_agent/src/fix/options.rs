@@ -21,7 +21,7 @@ pub struct FixOptions {
     pub model: String,
     /// Which `tiktoken-rs` BPE encoding to count tokens with. Should match
     /// `lint_config.tokenizer`; kept as a separate field (mirroring
-    /// `adept_score::ScoreOptions`) so callers can construct a
+    /// `crate::ScoreOptions`) so callers can construct a
     /// [`FixOptions`] without first building a full [`LintConfig`].
     pub tokenizer: Tokenizer,
     /// The maximum number of fix rounds to attempt before giving up.

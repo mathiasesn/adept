@@ -1,5 +1,6 @@
-//! LLM-assisted agent capabilities for Agent Skills (`adept fix` and
-//! `adept create`).
+//! LLM-assisted agent capabilities for Agent Skills: LLM transport
+//! ([`llm`]), evaluation (`adept eval`, in [`eval`]), lint autofix
+//! (`adept fix`), and skill generation (`adept create`).
 //!
 //! [`candidate`] (model JSON response parsing and companion-path
 //! sandboxing), [`diff`] (multi-file unified diff rendering), [`prompts`]
@@ -11,16 +12,17 @@
 //! token-conservation guard are specific to that command and live under
 //! `fix::`.
 //!
-//! This crate is the deliberate top-of-stack exception to the workspace's
-//! one-way dependency rule: it may compose `adept_score` and `adept_fmt`;
-//! nothing in the library stack may depend on it; only `adept_cli` consumes
-//! it.
+//! `adept_fmt` depends only on `adept`. This crate (`adept_agent`) is
+//! top-of-stack and may compose `adept` and `adept_fmt`; nothing in the
+//! library stack may depend on it; only `adept_cli` consumes it.
 
 pub mod candidate;
 pub mod create;
 pub mod diff;
+pub mod eval;
 pub mod fix;
 mod gate;
+pub mod llm;
 pub mod prompts;
 pub mod writer;
 
@@ -30,7 +32,13 @@ pub use candidate::{
 pub use create::{
     create_skill, generate_evals, CreateError, CreateOptions, CreateOutcome, CreateReport,
 };
+pub use eval::{eval_skill, EvalError, EvalOptions, EvalReport};
 pub use fix::{fix_skill, FixError, FixOptions, FixOutcome, FixReport, DEFAULT_MAX_ROUNDS};
+pub use llm::{
+    CaptureSink, CapturedCall, ChatMessage, ChatRequest, ChatResponse, ChatRole, ConfigError,
+    LlmClient, LlmConfig, LlmError, MockLlmClient, OpenAiCompatClient, RedactedString,
+    ResolvedLlmConfig, RunMetadata, DEFAULT_BASE_URL, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
+};
 pub use prompts::{
     BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, CREATE_AUTHORING_PROMPT_VERSION,
     CREATE_AUTHORING_SYSTEM, CREATE_AUTHORING_USER_TEMPLATE, CREATE_EVAL_PROMPT_VERSION,

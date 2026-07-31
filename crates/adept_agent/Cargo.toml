@@ -5,18 +5,28 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "LLM-assisted agent capabilities for Agent Skills: lint autofix (`adept fix`) and skill generation (`adept create`)."
+description = "LLM-assisted agent capabilities for Agent Skills: LLM transport, evaluation (`adept eval`), lint autofix (`adept fix`), and skill generation (`adept create`)."
 
 [dependencies]
 adept = { workspace = true }
-adept_score = { workspace = true }
 adept_fmt = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 similar = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"
+tracing = { workspace = true }
+jiff = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+insta = { workspace = true, features = ["json"] }
 tempfile = { workspace = true }
+# Dev-only: the library dependency rule ("tracing-subscriber belongs to
+# adept_cli, libraries emit but never subscribe") is about what ships. A
+# dev-dependency is not linked into the library, so this cannot pull a
+# subscriber into a downstream build; it exists so the secret-redaction
+# tests can assert against real emitted tracing output rather than a proxy.
+tracing-subscriber = { workspace = true }

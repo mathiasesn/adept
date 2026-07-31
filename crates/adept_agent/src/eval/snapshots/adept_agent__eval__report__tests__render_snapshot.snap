@@ -1,6 +1,6 @@
 ---
-source: crates/adept_score/src/report.rs
-assertion_line: 184
+source: crates/adept_agent/src/eval/report.rs
+assertion_line: 198
 expression: sample_report().render()
 ---
 Score report for skill: pdf-filler

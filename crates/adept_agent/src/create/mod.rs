@@ -1,7 +1,7 @@
 //! LLM-assisted skill generation (`adept create`) for Agent Skills.
 //!
 //! Mirrors [`crate::fix`]'s shape: everything that talks to a model goes
-//! through a `&dyn adept_score::LlmClient`, and the single public entry
+//! through a `&dyn crate::LlmClient`, and the single public entry
 //! point, [`create_skill`], only *computes* a candidate — it never writes to
 //! disk. Callers that want to apply the result pass [`CreateReport::files`]
 //! to [`crate::writer::write_all_transactionally`].
@@ -39,11 +39,11 @@ pub use options::{CreateOptions, DEFAULT_EVAL_CASES, DEFAULT_MAX_ROUNDS};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use crate::{ChatMessage, ChatRequest, LlmClient, LlmError};
 use adept::{
     evals, AdeptError, AnthropicSkillParser, Diagnostic, ExtraField, Frontmatter, Linter, Skill,
     SkillParser, SkillSet,
 };
-use adept_score::{ChatMessage, ChatRequest, LlmClient, LlmError};
 
 use crate::gate;
 use crate::prompts;
@@ -245,7 +245,7 @@ async fn request_generate(
     siblings: &[Skill],
     model: &str,
 ) -> Result<GenerateResponse, CreateError> {
-    let user = adept_score::prompts::render(
+    let user = crate::eval::prompts::render(
         prompts::CREATE_AUTHORING_USER_TEMPLATE,
         &[("brief", brief), ("siblings", &render_siblings(siblings))],
     );
@@ -272,7 +272,7 @@ async fn request_repair(
     diagnostics: &[Diagnostic],
     model: &str,
 ) -> Result<GenerateResponse, CreateError> {
-    let user = adept_score::prompts::render(
+    let user = crate::eval::prompts::render(
         prompts::CREATE_REPAIR_USER_TEMPLATE,
         &[
             ("brief", brief),
@@ -321,7 +321,7 @@ pub async fn generate_evals(
     brief: &str,
     options: &CreateOptions,
 ) -> Result<Vec<evals::EvalCase>, CreateError> {
-    let user = adept_score::prompts::render(
+    let user = crate::eval::prompts::render(
         prompts::CREATE_EVAL_USER_TEMPLATE,
         &[
             ("brief", brief),
@@ -590,8 +590,8 @@ pub async fn create_skill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MockLlmClient;
     use adept::Tokenizer;
-    use adept_score::MockLlmClient;
 
     fn base_options() -> CreateOptions {
         CreateOptions::for_model("test-model", Tokenizer::O200kBase)

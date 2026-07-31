@@ -4,12 +4,12 @@
 use adept::Skill;
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{ChatMessage, ChatRequest, LlmClient};
 use crate::eval::prompts::{
     render, GENERATE_TRIGGER_PROMPTS_SYSTEM, GENERATE_TRIGGER_PROMPTS_USER_TEMPLATE,
     JUDGE_TRIGGER_SYSTEM, JUDGE_TRIGGER_USER_TEMPLATE,
 };
 use crate::eval::EvalError;
+use crate::llm::{ChatMessage, ChatRequest, LlmClient};
 
 /// The default number of candidate prompts to generate (half positive,
 /// half negative) when [`TriggeringOptions::num_prompts`] is not

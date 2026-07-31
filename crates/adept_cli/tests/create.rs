@@ -123,7 +123,7 @@ async fn generated_skill_passes_real_check_and_fmt_check() {
         .collect();
     let eval = serde_json::json!({ "cases": cases }).to_string();
 
-    let mock = adept_score::MockLlmClient::with_texts(vec![good, eval]);
+    let mock = adept_agent::MockLlmClient::with_texts(vec![good, eval]);
     let options = adept_agent::CreateOptions::for_model("test-model", adept::Tokenizer::O200kBase);
     let report = adept_agent::create_skill(&mock, "Extract PDF form data", &out_dir, &options)
         .await

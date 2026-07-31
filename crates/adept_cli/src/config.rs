@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use adept::LintConfig;
-use adept_fmt::FmtConfig;
-use adept_score::{
+use adept_agent::{
     CaptureSink, LlmConfig, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ENV_API_KEY,
     ENV_BASE_URL, ENV_MODEL,
 };
+use adept_fmt::FmtConfig;
 use serde::Deserialize;
 
 const CONFIG_FILE_NAME: &str = "adept.toml";
@@ -121,7 +121,7 @@ pub fn resolve_capture_dir(
 /// create the sink and attach it to `client`.
 ///
 /// Returns the (possibly capture-enabled) client alongside the sink the
-/// caller must [`adept_score::CaptureSink::finalize`] with its exit code, or
+/// caller must [`adept_agent::CaptureSink::finalize`] with its exit code, or
 /// `Err(2)` — the usage-error exit code — when the directory cannot be
 /// created. Capture is opt-in and requested explicitly, so failing to create
 /// the directory is a usage error rather than a silent skip.
@@ -196,7 +196,7 @@ pub fn build_runtime() -> Option<tokio::runtime::Runtime> {
 }
 
 /// LLM-related settings that can be set via config file, layered under CLI
-/// flags and `ADEPT_*` environment variables by [`adept_score::LlmConfig::resolve`].
+/// flags and `ADEPT_*` environment variables by [`adept_agent::LlmConfig::resolve`].
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ScoreFileConfig {
@@ -213,7 +213,7 @@ pub struct ScoreFileConfig {
 }
 
 /// LLM-related settings for `adept fix`, layered under CLI flags and
-/// `ADEPT_*` environment variables by [`adept_score::LlmConfig::resolve`].
+/// `ADEPT_*` environment variables by [`adept_agent::LlmConfig::resolve`].
 /// Kept fully independent of [`ScoreFileConfig`]: `[fix]` never falls back
 /// to `[score]` or vice versa — the only shared fallback is the `ADEPT_*`
 /// environment variables.
@@ -241,7 +241,7 @@ pub struct FixFileConfig {
 }
 
 /// LLM-related settings for `adept create`, layered under CLI flags and
-/// `ADEPT_*` environment variables by [`adept_score::LlmConfig::resolve`].
+/// `ADEPT_*` environment variables by [`adept_agent::LlmConfig::resolve`].
 /// Kept fully independent of [`ScoreFileConfig`]/[`FixFileConfig`]: `[create]`
 /// never falls back to `[score]` or `[fix]` or vice versa — the only shared
 /// fallback is the `ADEPT_*` environment variables.

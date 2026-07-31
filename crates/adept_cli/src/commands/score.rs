@@ -1,7 +1,7 @@
 //! `adept score`.
 
 use adept::{Skill, SkillSet};
-use adept_score::{OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ScoreOptions};
+use adept_agent::{EvalOptions, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata};
 
 use crate::cli::{OutputFormat, ScoreArgs};
 use crate::config::{
@@ -12,7 +12,7 @@ pub const EXIT_OK: i32 = 0;
 pub const EXIT_USAGE_ERROR: i32 = 2;
 
 /// Run `adept score`, building its own `tokio` runtime and a real
-/// [`adept_score::OpenAiCompatClient`]. Returns the process exit code.
+/// [`adept_agent::OpenAiCompatClient`]. Returns the process exit code.
 pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
     let base_url = args
         .base_url
@@ -63,13 +63,13 @@ fn execute(
     client: &OpenAiCompatClient,
     skill: &Skill,
     skillset: &[Skill],
-    options: &ScoreOptions,
+    options: &EvalOptions,
 ) -> i32 {
     let Some(runtime) = build_runtime() else {
         return EXIT_USAGE_ERROR;
     };
 
-    let report = runtime.block_on(adept_score::score_skill(client, skill, skillset, options));
+    let report = runtime.block_on(adept_agent::eval_skill(client, skill, skillset, options));
 
     match report {
         Ok(report) => {
@@ -100,7 +100,7 @@ fn capture_metadata(
     config: &AdeptConfig,
     resolved: &ResolvedLlmConfig,
     tokenizer: adept::Tokenizer,
-    options: &ScoreOptions,
+    options: &EvalOptions,
     capture_dir_source: &'static str,
 ) -> RunMetadata {
     let mut metadata = RunMetadata::new("score");
@@ -141,8 +141,8 @@ fn capture_metadata(
     metadata
 }
 
-fn build_options(args: &ScoreArgs, model: &str, tokenizer: adept::Tokenizer) -> ScoreOptions {
-    let mut options = ScoreOptions::for_model(model, tokenizer);
+fn build_options(args: &ScoreArgs, model: &str, tokenizer: adept::Tokenizer) -> EvalOptions {
+    let mut options = EvalOptions::for_model(model, tokenizer);
     if let Some(triggering) = options.triggering.as_mut() {
         if let Some(n) = args.num_prompts {
             triggering.num_prompts = n;
@@ -173,18 +173,18 @@ fn load_skill_and_set(path: &std::path::Path) -> Result<(Skill, Vec<Skill>), Str
     Ok((skill, skillset))
 }
 
-/// A thin wrapper so tests can drive `score_skill` with an injected
-/// [`LlmClient`] (e.g. [`adept_score::MockLlmClient`]) instead of a real
+/// A thin wrapper so tests can drive `eval_skill` with an injected
+/// [`LlmClient`] (e.g. [`adept_agent::MockLlmClient`]) instead of a real
 /// network client, exercising the same options-building and
 /// report-rendering logic used by [`run`].
 #[cfg(test)]
 pub async fn run_with_client(
-    client: &dyn adept_score::LlmClient,
+    client: &dyn adept_agent::LlmClient,
     skill: &Skill,
     skillset: &[Skill],
-    options: &ScoreOptions,
-) -> Result<String, adept_score::ScoreError> {
-    let report = adept_score::score_skill(client, skill, skillset, options).await?;
+    options: &EvalOptions,
+) -> Result<String, adept_agent::EvalError> {
+    let report = adept_agent::eval_skill(client, skill, skillset, options).await?;
     Ok(report.render())
 }
 
@@ -192,7 +192,7 @@ pub async fn run_with_client(
 mod tests {
     use super::*;
     use adept::{AnthropicSkillParser, SkillParser};
-    use adept_score::MockLlmClient;
+    use adept_agent::MockLlmClient;
 
     fn sample_skill() -> Skill {
         let path = std::path::Path::new("SKILL.md");
@@ -235,7 +235,7 @@ mod tests {
         ]);
 
         let skill = sample_skill();
-        let mut options = ScoreOptions::for_model("test-model", adept::Tokenizer::default());
+        let mut options = EvalOptions::for_model("test-model", adept::Tokenizer::default());
         options.triggering.as_mut().unwrap().num_prompts = 2;
 
         let rendered = run_with_client(&mock, &skill, &[], &options).await.unwrap();

@@ -1,6 +1,6 @@
 //! All prompt templates used by `adept_agent`, gathered in one module so they
-//! can be audited, mirroring `adept_score::prompts`. Template rendering
-//! (`render`) is shared with `adept_score` rather than duplicated here.
+//! can be audited, mirroring `crate::eval::prompts`. Template rendering
+//! (`render`) is shared with `crate::eval` rather than duplicated here.
 
 use adept::Diagnostic;
 

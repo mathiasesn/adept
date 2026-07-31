@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "crates/adept",
     "crates/adept_fmt",
-    "crates/adept_score",
     "crates/adept_agent",
     "crates/adept_cli",
 ]
@@ -18,7 +17,6 @@ rust-version = "1.85"
 [workspace.dependencies]
 adept = { path = "crates/adept" }
 adept_fmt = { path = "crates/adept_fmt" }
-adept_score = { path = "crates/adept_score" }
 adept_agent = { path = "crates/adept_agent" }
 
 serde = { version = "1", features = ["derive"] }

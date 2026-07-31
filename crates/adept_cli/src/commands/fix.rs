@@ -4,7 +4,7 @@ use adept::{Skill, SkillSet};
 use adept_agent::{
     fix_skill, write_all_transactionally, FixOptions, FixReport, DEFAULT_MAX_ROUNDS,
 };
-use adept_score::{OpenAiCompatClient, ResolvedLlmConfig, RunMetadata};
+use adept_agent::{OpenAiCompatClient, ResolvedLlmConfig, RunMetadata};
 
 use crate::cli::{FixArgs, OutputFormat};
 use crate::commands::check::apply_select_ignore;
@@ -19,7 +19,7 @@ pub const EXIT_CHANGES_PENDING: i32 = 1;
 pub const EXIT_USAGE_ERROR: i32 = 2;
 
 /// Run `adept fix`, building its own `tokio` runtime and a real
-/// [`adept_score::OpenAiCompatClient`]. Returns the process exit code.
+/// [`adept_agent::OpenAiCompatClient`]. Returns the process exit code.
 pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
     let base_url = args
         .base_url
@@ -277,12 +277,12 @@ fn build_options(
 }
 
 /// A thin wrapper so tests can drive `fix_skill` with an injected
-/// [`adept_score::LlmClient`] (e.g. [`adept_score::MockLlmClient`]) instead
+/// [`adept_agent::LlmClient`] (e.g. [`adept_agent::MockLlmClient`]) instead
 /// of a real network client, exercising the same report-rendering logic
 /// used by [`run`].
 #[cfg(test)]
 pub async fn run_with_client(
-    client: &dyn adept_score::LlmClient,
+    client: &dyn adept_agent::LlmClient,
     skill: &Skill,
     options: &FixOptions,
 ) -> Result<String, adept_agent::FixError> {
@@ -294,7 +294,7 @@ pub async fn run_with_client(
 mod tests {
     use super::*;
     use adept::{AnthropicSkillParser, SkillParser};
-    use adept_score::MockLlmClient;
+    use adept_agent::MockLlmClient;
     use std::path::PathBuf;
 
     fn sample_skill() -> Skill {

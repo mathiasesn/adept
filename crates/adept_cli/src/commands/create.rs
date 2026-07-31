@@ -10,7 +10,7 @@ use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 
 use adept_agent::{create_skill, write_all_transactionally, CreateOptions, CreateOutcome};
-use adept_score::{ResolvedLlmConfig, RunMetadata};
+use adept_agent::{ResolvedLlmConfig, RunMetadata};
 
 use crate::cli::{CreateArgs, OutputFormat};
 use crate::config::{
@@ -24,7 +24,7 @@ pub const EXIT_FINDINGS: i32 = 1;
 pub const EXIT_USAGE_ERROR: i32 = 2;
 
 /// Run `adept create`, building its own `tokio` runtime and a real
-/// [`adept_score::OpenAiCompatClient`]. Returns the process exit code.
+/// [`adept_agent::OpenAiCompatClient`]. Returns the process exit code.
 pub fn run(args: &CreateArgs, config: &AdeptConfig, quiet: bool) -> i32 {
     let brief = match resolve_brief(args) {
         Ok(brief) => brief,
@@ -175,7 +175,7 @@ fn build_options(
 fn execute(
     args: &CreateArgs,
     quiet: bool,
-    client: &dyn adept_score::LlmClient,
+    client: &dyn adept_agent::LlmClient,
     brief: &str,
     out_dir: &Path,
     options: &CreateOptions,
@@ -311,8 +311,8 @@ fn capture_metadata(
 ) -> RunMetadata {
     let mut metadata = RunMetadata::new("create");
     // `create` uses its own two prompts (authoring + eval generation), not
-    // `adept_score`'s, so record both here rather than leaving the generic
-    // `adept_score::PROMPT_VERSION` `RunMetadata::new` stamped by default —
+    // the `eval` analyses' prompts, so record both here rather than leaving the generic
+    // `adept_agent::PROMPT_VERSION` `RunMetadata::new` stamped by default —
     // otherwise a captured `create` run would say which `score`/`fix` prompt
     // version was in effect, not which prompts actually produced it.
     metadata.prompt_version = format!(
@@ -434,7 +434,7 @@ mod tests {
 
         let good = valid_generate_json("demo-skill", clean_description(), clean_body());
         let eval = valid_eval_json(10);
-        let mock = adept_score::MockLlmClient::with_texts(vec![good, eval]);
+        let mock = adept_agent::MockLlmClient::with_texts(vec![good, eval]);
         let options = CreateOptions::for_model("test-model", adept::Tokenizer::O200kBase);
         let args = base_args();
 
@@ -454,7 +454,7 @@ mod tests {
 
         let good = valid_generate_json("demo-skill", clean_description(), clean_body());
         let eval = valid_eval_json(10);
-        let mock = adept_score::MockLlmClient::with_texts(vec![good, eval]);
+        let mock = adept_agent::MockLlmClient::with_texts(vec![good, eval]);
         let mut write_args = base_args();
         write_args.write = true;
         let code = execute(
@@ -477,7 +477,7 @@ mod tests {
 
         let bad = valid_generate_json("demo-skill", "short", clean_body());
         let eval = valid_eval_json(10);
-        let mock = adept_score::MockLlmClient::with_texts(vec![bad.clone(), bad, eval]);
+        let mock = adept_agent::MockLlmClient::with_texts(vec![bad.clone(), bad, eval]);
         let options = CreateOptions::for_model("test-model", adept::Tokenizer::O200kBase);
         let mut args = base_args();
         args.write = true;
@@ -504,7 +504,7 @@ mod tests {
 
         let good = valid_generate_json("demo-skill", clean_description(), clean_body());
         let eval = valid_eval_json(10);
-        let mock = adept_score::MockLlmClient::with_texts(vec![good, eval]);
+        let mock = adept_agent::MockLlmClient::with_texts(vec![good, eval]);
         let options = CreateOptions::for_model("test-model", adept::Tokenizer::O200kBase);
         let report = adept_agent::create_skill(&mock, "Extract PDF form data", &out_dir, &options)
             .await
@@ -529,7 +529,7 @@ mod tests {
 
         let good = valid_generate_json("demo-skill", clean_description(), clean_body());
         let empty_eval = serde_json::json!({ "cases": [] }).to_string();
-        let mock = adept_score::MockLlmClient::with_texts(vec![good, empty_eval]);
+        let mock = adept_agent::MockLlmClient::with_texts(vec![good, empty_eval]);
         let options = CreateOptions::for_model("test-model", adept::Tokenizer::O200kBase);
         let mut args = base_args();
         args.write = true;
@@ -591,7 +591,7 @@ mod tests {
         })
         .to_string();
         let eval = valid_eval_json(10);
-        let mock = adept_score::MockLlmClient::with_texts(vec![candidate, eval]);
+        let mock = adept_agent::MockLlmClient::with_texts(vec![candidate, eval]);
         let options = CreateOptions::for_model("test-model", adept::Tokenizer::O200kBase);
         let mut args = base_args();
         args.write = true;

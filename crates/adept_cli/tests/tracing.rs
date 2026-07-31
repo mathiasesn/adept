@@ -13,7 +13,7 @@
 //!    unchanged from the same run with logging cranked up.
 //! 3. **The `--capture-dir` surface exists and fails loudly.** No test here
 //!    performs network I/O; the capture *write* path is exercised by
-//!    `adept_score`'s own unit tests against a `CaptureSink` directly.
+//!    `adept_agent`'s own unit tests against a `CaptureSink` directly.
 
 mod common;
 

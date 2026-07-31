@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 use adept::{Skill, TokenCounter};
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{ChatMessage, ChatRequest, LlmClient};
 use crate::eval::prompts::{
     render, TOKEN_BLOAT_SUGGESTIONS_SYSTEM, TOKEN_BLOAT_SUGGESTIONS_USER_TEMPLATE,
 };
 use crate::eval::EvalError;
+use crate::llm::{ChatMessage, ChatRequest, LlmClient};
 
 /// Token-bloat analysis for one skill.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -3,7 +3,7 @@
 //! Implementation choice: this implements the JSON-RPC 2.0 stdio transport
 //! directly (newline-delimited JSON messages, per the MCP spec) rather than
 //! depending on the `rmcp` SDK crate. `adept mcp` exposes five tools
-//! (`check_skill`, `format_skill`, `score_skill`, `create_skill`,
+//! (`check_skill`, `format_skill`, `eval_skill`, `create_skill`,
 //! `generate_evals`) behind `initialize` /
 //! `tools/list` / `tools/call`, which is a small enough surface that a
 //! direct implementation keeps the dependency footprint (and the risk of
@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use adept::{sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
 use adept_agent::{create_skill, CreateOptions};
+use adept_agent::{EvalOptions, LlmClient, LlmConfig, OpenAiCompatClient};
 use adept_fmt::{format_str, FmtConfig};
-use adept_score::{LlmClient, LlmConfig, OpenAiCompatClient, ScoreOptions};
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -65,7 +65,7 @@ fn bounded_u64_argument(
     }
 }
 
-/// How long `score_skill` will wait for the LLM backend before giving up.
+/// How long `eval_skill` will wait for the LLM backend before giving up.
 const SCORE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long `create_skill` will wait for the LLM backend before giving up.
@@ -241,7 +241,7 @@ fn handle_tools_list() -> Value {
     }
 
     // `create_skill`/`generate_evals` are also network-backed (same
-    // `ADEPT_MODEL` resolution as `score_skill`) and preview-only: neither
+    // `ADEPT_MODEL` resolution as `eval_skill`) and preview-only: neither
     // accepts any output-path argument, and neither ever touches the
     // filesystem for writing — see `create_skill_tool`/`generate_evals_tool`.
     if llm_configured {
@@ -387,7 +387,7 @@ fn format_skill_tool(arguments: &Value) -> (String, bool) {
     }
 }
 
-/// Build the skillset used for overlap detection in `score_skill`.
+/// Build the skillset used for overlap detection in `eval_skill`.
 ///
 /// Overlap detection is pairwise, so a skillset containing only the target
 /// skill can never surface an overlap — the skill is compared against itself.
@@ -433,7 +433,7 @@ fn overlap_skillset(arguments: &Value, path: &std::path::Path, skill: &Skill) ->
     skills
 }
 
-/// `score_skill` MCP tool: runs LLM-assisted scoring, given a resolvable
+/// `eval_skill` MCP tool: runs LLM-assisted scoring, given a resolvable
 /// `ADEPT_MODEL`/`ADEPT_BASE_URL`/`ADEPT_API_KEY` (or `model`/`base_url`
 /// arguments). Never panics or hangs: a missing/unresolvable LLM config, a
 /// malformed skill, or a timed-out request all come back as a structured
@@ -466,7 +466,7 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
             return (
                 json!({
                     "error": format!(
-                        "no LLM model configured for score_skill: {err} (set ADEPT_MODEL, or pass a `model` argument)"
+                        "no LLM model configured for eval_skill: {err} (set ADEPT_MODEL, or pass a `model` argument)"
                     )
                 })
                 .to_string(),
@@ -476,14 +476,14 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
     };
 
     let client = OpenAiCompatClient::new(resolved.clone());
-    let options = ScoreOptions::for_model(&resolved.model, adept::Tokenizer::default());
+    let options = EvalOptions::for_model(&resolved.model, adept::Tokenizer::default());
     let skillset = overlap_skillset(arguments, &path, &skill);
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(runtime) => runtime,
         Err(err) => {
             return (
-                format!("failed to start async runtime for score_skill: {err}"),
+                format!("failed to start async runtime for eval_skill: {err}"),
                 true,
             );
         }
@@ -491,7 +491,7 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
 
     let outcome = runtime.block_on(tokio::time::timeout(
         SCORE_TIMEOUT,
-        adept_score::score_skill(&client, &skill, &skillset, &options),
+        adept_agent::eval_skill(&client, &skill, &skillset, &options),
     ));
 
     match outcome {
@@ -501,8 +501,7 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
         },
         Ok(Err(err)) => (json!({ "error": err.to_string() }).to_string(), true),
         Err(_elapsed) => (
-            json!({ "error": format!("score_skill timed out after {SCORE_TIMEOUT:?}") })
-                .to_string(),
+            json!({ "error": format!("eval_skill timed out after {SCORE_TIMEOUT:?}") }).to_string(),
             true,
         ),
     }
@@ -541,8 +540,8 @@ where
 
 /// Build an [`LlmConfig`] from `model`/`base_url` argument overrides, then
 /// resolve it. Shared by `create_skill` and `generate_evals`, whose
-/// model-selection story is identical to `score_skill`'s.
-fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_score::ResolvedLlmConfig, String> {
+/// model-selection story is identical to `eval_skill`'s.
+fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_agent::ResolvedLlmConfig, String> {
     let llm_config = LlmConfig {
         base_url: arguments
             .get("base_url")
@@ -569,7 +568,7 @@ fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_score::Resolved
 /// as `create_skill`'s `out_dir`: used only as a path prefix for attributing
 /// diagnostics, and, via `adept::sibling_root`, as the read-only root
 /// `adept::SkillSet::discover` searches for sibling skills — the same
-/// discovery `score_skill`'s `directory` argument already performs. Nothing
+/// discovery `eval_skill`'s `directory` argument already performs. Nothing
 /// in this function or in `adept_agent::create_skill` opens a file for
 /// writing.
 fn create_skill_tool(arguments: &Value) -> (String, bool) {
@@ -583,7 +582,7 @@ fn create_skill_tool(arguments: &Value) -> (String, bool) {
 
 /// The client-parameterized core of `create_skill`, kept separate from
 /// [`create_skill_tool`] so tests can drive it with
-/// `adept_score::MockLlmClient` instead of a real network client.
+/// `adept_agent::MockLlmClient` instead of a real network client.
 fn create_skill_tool_with_client(
     arguments: &Value,
     client: &dyn LlmClient,
@@ -657,7 +656,7 @@ fn generate_evals_tool(arguments: &Value) -> (String, bool) {
 
 /// The client-parameterized core of `generate_evals`, kept separate from
 /// [`generate_evals_tool`] so tests can drive it with
-/// `adept_score::MockLlmClient` instead of a real network client.
+/// `adept_agent::MockLlmClient` instead of a real network client.
 fn generate_evals_tool_with_client(
     arguments: &Value,
     client: &dyn LlmClient,
@@ -707,7 +706,7 @@ fn generate_evals_tool_with_client(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adept_score::MockLlmClient;
+    use adept_agent::MockLlmClient;
     use std::sync::Mutex;
 
     const SAMPLE_SKILL: &str = "---\nname: sample\ndescription: does a thing. Use when the user asks for a thing. Do not use otherwise.\n---\n\n# Sample\n\nBody text.\n";

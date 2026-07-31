@@ -2,7 +2,7 @@
 //!
 //! LLM-free assertions drive the compiled `adept` binary directly. Anything
 //! that needs `fix_skill` to actually run drives it in-process against
-//! `adept_score::MockLlmClient`, since the real binary would need a live
+//! `adept_agent::MockLlmClient`, since the real binary would need a live
 //! LLM endpoint.
 
 mod common;
@@ -89,7 +89,7 @@ async fn preview_computes_but_writes_nothing() {
     let skill = adept::parse_skill(&path).unwrap();
     let short_description =
         "Extracts data from PDF forms and documents. Do not use for scanned image-only PDFs.";
-    let mock = adept_score::MockLlmClient::with_texts(vec![format!(
+    let mock = adept_agent::MockLlmClient::with_texts(vec![format!(
         r#"{{"description": "{short_description}"}}"#
     )]);
     let options = adept_agent::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
@@ -113,7 +113,7 @@ async fn write_all_transactionally_clears_fixable_findings() {
     let skill = adept::parse_skill(&path).unwrap();
     let short_description =
         "Extracts data from PDF forms and documents. Do not use for scanned image-only PDFs.";
-    let mock = adept_score::MockLlmClient::with_texts(vec![format!(
+    let mock = adept_agent::MockLlmClient::with_texts(vec![format!(
         r#"{{"description": "{short_description}"}}"#
     )]);
     let options = adept_agent::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
@@ -152,7 +152,7 @@ async fn check_equivalent_reports_pending_changes_when_over_budget() {
         ]
     })
     .to_string();
-    let mock = adept_score::MockLlmClient::with_texts(vec![description_response, body_response]);
+    let mock = adept_agent::MockLlmClient::with_texts(vec![description_response, body_response]);
     let options = adept_agent::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
 
     let report = adept_agent::fix_skill(&mock, &skill, &options)
@@ -167,7 +167,7 @@ async fn check_equivalent_reports_pending_changes_when_over_budget() {
 async fn check_equivalent_reports_clean_on_already_clean_skill() {
     let path = fixture("clean-skill").join("SKILL.md");
     let skill = adept::parse_skill(&path).unwrap();
-    let mock = adept_score::MockLlmClient::with_texts(Vec::<String>::new());
+    let mock = adept_agent::MockLlmClient::with_texts(Vec::<String>::new());
     let options = adept_agent::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
 
     let report = adept_agent::fix_skill(&mock, &skill, &options)
@@ -188,7 +188,7 @@ async fn rejected_rewrite_leaves_original_file_unchanged() {
     // shrinks the fixable set.
     let still_long_body = format!("# Over Budget Body\n\n{}", "word ".repeat(2400));
     let response = serde_json::json!({ "body": still_long_body }).to_string();
-    let mock = adept_score::MockLlmClient::with_texts(vec![response.clone(), response]);
+    let mock = adept_agent::MockLlmClient::with_texts(vec![response.clone(), response]);
     let options = adept_agent::FixOptions::for_model("test-model", adept::Tokenizer::O200kBase);
 
     let report = adept_agent::fix_skill(&mock, &skill, &options)

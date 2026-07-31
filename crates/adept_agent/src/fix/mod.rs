@@ -1,11 +1,11 @@
 //! LLM-assisted lint autofix (`adept fix`) for Agent Skills.
 //!
-//! Like `adept_score`, the async seam is [`adept_score::LlmClient`]:
+//! Like `crate::eval`, the async seam is [`crate::LlmClient`]:
 //! everything here that talks to a model goes through a `&dyn LlmClient`,
-//! so callers can pass `adept_score::OpenAiCompatClient` for real fixing or
-//! `adept_score::MockLlmClient` for fully offline tests. The single public
+//! so callers can pass `crate::OpenAiCompatClient` for real fixing or
+//! `crate::MockLlmClient` for fully offline tests. The single public
 //! entry point, [`fix_skill`], is `async fn`; callers are expected to drive
-//! it from a `tokio` runtime, same as `adept_score::score_skill`.
+//! it from a `tokio` runtime, same as `crate::eval_skill`.
 //!
 //! [`fix_skill`] only *computes* a candidate rewrite (a [`FixReport`] whose
 //! [`FixReport::files`] are the pending writes, if accepted) — it never
@@ -36,11 +36,11 @@ pub use relocate::{conserves_content, ConservationError, CONTENT_TOLERANCE};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::{ChatMessage, ChatRequest, LlmClient, LlmError};
 use adept::{
     discover_companion_files, AdeptError, AnthropicSkillParser, Diagnostic, FixKind, FixRegion,
     Linter, Skill, SkillParser, TokenCounter,
 };
-use adept_score::{ChatMessage, ChatRequest, LlmClient, LlmError};
 
 /// Errors from attempting to fix a skill: LLM transport failures,
 /// malformed LLM-produced JSON, an unsafe companion-file path, a
@@ -266,7 +266,7 @@ async fn request_region_fix(
         ),
     };
 
-    let user = adept_score::prompts::render(
+    let user = crate::eval::prompts::render(
         template,
         &[
             ("skill_name", skill.frontmatter.name.as_str()),
@@ -545,8 +545,8 @@ pub async fn fix_skill(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MockLlmClient;
     use adept::Tokenizer;
-    use adept_score::MockLlmClient;
     use std::io::Write;
 
     fn write_skill(dir: &std::path::Path, description: &str, body: &str) -> PathBuf {

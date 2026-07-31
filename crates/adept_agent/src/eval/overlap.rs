@@ -10,9 +10,11 @@
 use adept::Skill;
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{ChatMessage, ChatRequest, LlmClient};
-use crate::eval::prompts::{render, OVERLAP_ADJUDICATION_SYSTEM, OVERLAP_ADJUDICATION_USER_TEMPLATE};
+use crate::eval::prompts::{
+    render, OVERLAP_ADJUDICATION_SYSTEM, OVERLAP_ADJUDICATION_USER_TEMPLATE,
+};
 use crate::eval::EvalError;
+use crate::llm::{ChatMessage, ChatRequest, LlmClient};
 
 /// The default Jaccard-similarity threshold above which a pair of skills is
 /// shortlisted for LLM adjudication.

@@ -25,7 +25,10 @@ version = "0.1.0"
 dependencies = [
  "adept",
  "adept_fmt",
- "adept_score",
+ "async-trait",
+ "insta",
+ "jiff",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -33,6 +36,8 @@ dependencies = [
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -42,7 +47,6 @@ dependencies = [
  "adept",
  "adept_agent",
  "adept_fmt",
- "adept_score",
  "anyhow",
  "assert_cmd",
  "clap",
@@ -71,24 +75,6 @@ dependencies = [
  "serde_yaml",
  "similar",
  "thiserror 1.0.69",
-]
-
-[[package]]
-name = "adept_score"
-version = "0.1.0"
-dependencies = [
- "adept",
- "async-trait",
- "insta",
- "jiff",
- "reqwest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
