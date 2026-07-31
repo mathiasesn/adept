@@ -26,7 +26,9 @@ pub mod writer;
 pub use candidate::{
     resolve_companion_path, CompanionEdit, FixCandidate, FixResponse, UnsafeCompanionPath,
 };
-pub use create::{create_skill, CreateError, CreateOptions, CreateOutcome, CreateReport};
+pub use create::{
+    create_skill, generate_evals, CreateError, CreateOptions, CreateOutcome, CreateReport,
+};
 pub use fix::{fix_skill, FixError, FixOptions, FixOutcome, FixReport, DEFAULT_MAX_ROUNDS};
 pub use prompts::{
     BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, CREATE_AUTHORING_PROMPT_VERSION,

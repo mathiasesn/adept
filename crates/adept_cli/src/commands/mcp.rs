@@ -17,8 +17,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use adept::{sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
+use adept_agent::{create_skill, CreateOptions};
 use adept_fmt::{format_str, FmtConfig};
-use adept_score::{LlmConfig, OpenAiCompatClient, ScoreOptions};
+use adept_score::{LlmClient, LlmConfig, OpenAiCompatClient, ScoreOptions};
 use serde_json::{json, Value};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -32,6 +33,20 @@ const MAX_LINE_WIDTH: u64 = 500;
 
 /// How long `score_skill` will wait for the LLM backend before giving up.
 const SCORE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long `create_skill` will wait for the LLM backend before giving up.
+/// Longer than [`SCORE_TIMEOUT`]: `create` may make several authoring/repair
+/// rounds plus one eval-generation call, all before returning.
+const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long `generate_evals` will wait for the LLM backend before giving up.
+/// A single call, so shorter than [`CREATE_TIMEOUT`].
+const GENERATE_EVALS_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Default number of synthetic eval cases `generate_evals` requests when the
+/// caller doesn't specify `eval_cases`. Mirrors
+/// `adept_agent::create::DEFAULT_EVAL_CASES`.
+const DEFAULT_GENERATE_EVALS_CASES: usize = adept_agent::create::DEFAULT_EVAL_CASES;
 
 /// Run the MCP stdio server: read newline-delimited JSON-RPC requests from
 /// `stdin`, write newline-delimited JSON-RPC responses to `stdout`, and log
@@ -187,6 +202,47 @@ fn handle_tools_list() -> Value {
         }));
     }
 
+    // `create_skill`/`generate_evals` are also network-backed (same
+    // `ADEPT_MODEL` resolution as `score_skill`) and preview-only: neither
+    // accepts any output-path argument, and neither ever touches the
+    // filesystem for writing — see `create_skill_tool`/`generate_evals_tool`.
+    if LlmConfig::default().resolve().is_ok() {
+        tools.push(json!({
+            "name": "create_skill",
+            "description": "Generate a new Agent Skill (SKILL.md, companion files, and a synthetic eval dataset) from a task brief using an LLM. Preview-only: returns the generated files and dataset as data and never writes to disk. Requires ADEPT_MODEL (and optionally ADEPT_BASE_URL/ADEPT_API_KEY) to be configured; network-backed with a timeout.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "brief": { "type": "string", "description": "The task brief describing what the skill should do." },
+                    "directory": { "type": "string", "description": "The directory the generated skill would be created in (used to attribute paths and, via its parent, to discover sibling skills for the collision screen). Read-only: never written to. Defaults to the current directory." },
+                    "name": { "type": "string", "description": "Override the skill name the model would otherwise derive from the brief." },
+                    "model": { "type": "string", "description": "Override the model to generate with (defaults to ADEPT_MODEL)." },
+                    "base_url": { "type": "string", "description": "Override the OpenAI-compatible base URL (defaults to ADEPT_BASE_URL or the OpenAI API)." },
+                    "max_rounds": { "type": "integer", "description": "Maximum authoring/repair rounds (defaults to adept's built-in default).", "minimum": 1 },
+                    "eval_cases": { "type": "integer", "description": "Number of synthetic eval cases to generate (defaults to adept's built-in default).", "minimum": 1 }
+                },
+                "required": ["brief"]
+            }
+        }));
+        tools.push(json!({
+            "name": "generate_evals",
+            "description": "Generate a synthetic eval dataset (evals.jsonl cases) for a skill, given a filesystem path or raw content plus the original task brief, using an LLM. Preview-only: returns the generated dataset as data and never writes to disk. Requires ADEPT_MODEL (and optionally ADEPT_BASE_URL/ADEPT_API_KEY) to be configured; network-backed with a timeout.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Path to a SKILL.md file or skill directory." },
+                    "content": { "type": "string", "description": "Raw SKILL.md source text (used instead of `path`)." },
+                    "brief": { "type": "string", "description": "The original task brief behind the skill, used to ground the generated cases." },
+                    "eval_cases": { "type": "integer", "description": "Number of synthetic eval cases to generate (default 10).", "minimum": 1 },
+                    "model": { "type": "string", "description": "Override the model to generate with (defaults to ADEPT_MODEL)." },
+                    "base_url": { "type": "string", "description": "Override the OpenAI-compatible base URL (defaults to ADEPT_BASE_URL or the OpenAI API)." }
+                },
+                "required": ["brief"],
+                "anyOf": [ { "required": ["path"] }, { "required": ["content"] } ]
+            }
+        }));
+    }
+
     json!({ "tools": tools })
 }
 
@@ -201,6 +257,8 @@ fn handle_tools_call(params: &Value) -> Result<Value, (i64, String)> {
         "check_skill" => Ok(tool_result(check_skill_tool(&arguments))),
         "format_skill" => Ok(tool_result(format_skill_tool(&arguments))),
         "score_skill" => Ok(tool_result(score_skill_tool(&arguments))),
+        "create_skill" => Ok(tool_result(create_skill_tool(&arguments))),
+        "generate_evals" => Ok(tool_result(generate_evals_tool(&arguments))),
         other => Err((-32602, format!("unknown tool: {other}"))),
     }
 }
@@ -412,11 +470,505 @@ fn score_skill_tool(arguments: &Value) -> (String, bool) {
     }
 }
 
+/// Build an [`LlmConfig`] from `model`/`base_url` argument overrides, then
+/// resolve it. Shared by `create_skill` and `generate_evals`, whose
+/// model-selection story is identical to `score_skill`'s.
+fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_score::ResolvedLlmConfig, String> {
+    let llm_config = LlmConfig {
+        base_url: arguments
+            .get("base_url")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        api_key: None,
+        model: arguments
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    };
+    llm_config.resolve().map_err(|err| {
+        format!("no LLM model configured: {err} (set ADEPT_MODEL, or pass a `model` argument)")
+    })
+}
+
+/// `create_skill` MCP tool: runs the full `adept_agent::create_skill`
+/// pipeline (generate -> screen -> repair, then generate and validate an
+/// eval dataset) and returns the result as data.
+///
+/// **Preview-only, by construction, not just by test**: this function never
+/// calls `write_all_transactionally` or any other filesystem-writing API.
+/// The `directory` argument (defaulting to `.`) is passed straight through
+/// as `create_skill`'s `out_dir`: used only as a path prefix for attributing
+/// diagnostics, and, via `adept::sibling_root`, as the read-only root
+/// `adept::SkillSet::discover` searches for sibling skills — the same
+/// discovery `score_skill`'s `directory` argument already performs. Nothing
+/// in this function or in `adept_agent::create_skill` opens a file for
+/// writing.
+fn create_skill_tool(arguments: &Value) -> (String, bool) {
+    let resolved = match resolve_llm_from_arguments(arguments) {
+        Ok(resolved) => resolved,
+        Err(err) => return (json!({ "error": err }).to_string(), true),
+    };
+    let client = OpenAiCompatClient::new(resolved.clone());
+    create_skill_tool_with_client(arguments, &client, &resolved.model)
+}
+
+/// The client-parameterized core of `create_skill`, kept separate from
+/// [`create_skill_tool`] so tests can drive it with
+/// `adept_score::MockLlmClient` instead of a real network client.
+fn create_skill_tool_with_client(
+    arguments: &Value,
+    client: &dyn LlmClient,
+    model: &str,
+) -> (String, bool) {
+    let brief = match arguments.get("brief").and_then(Value::as_str) {
+        Some(brief) if !brief.trim().is_empty() => brief,
+        _ => return ("missing or empty `brief`".to_string(), true),
+    };
+
+    let out_dir = arguments
+        .get("directory")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let tokenizer = adept::Tokenizer::default();
+    let mut options = CreateOptions::for_model(model, tokenizer);
+    if let Some(max_rounds) = arguments.get("max_rounds").and_then(Value::as_u64) {
+        options.max_rounds = max_rounds as usize;
+    }
+    if let Some(eval_cases) = arguments.get("eval_cases").and_then(Value::as_u64) {
+        options.eval_cases = eval_cases as usize;
+    }
+    options.name_override = arguments
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return (
+                format!("failed to start async runtime for create_skill: {err}"),
+                true,
+            );
+        }
+    };
+
+    let outcome = runtime.block_on(async {
+        tokio::time::timeout(
+            CREATE_TIMEOUT,
+            create_skill(client, brief, &out_dir, &options),
+        )
+        .await
+    });
+
+    match outcome {
+        Ok(Ok(report)) => (render_create_report(&report), false),
+        Ok(Err(err)) => (json!({ "error": err.to_string() }).to_string(), true),
+        Err(_elapsed) => (
+            json!({ "error": format!("create_skill timed out after {CREATE_TIMEOUT:?}") })
+                .to_string(),
+            true,
+        ),
+    }
+}
+
+/// Render a [`adept_agent::CreateReport`] as the tool's JSON payload: the
+/// generated file contents keyed by path, as data only (never written by
+/// this process).
+fn render_create_report(report: &adept_agent::CreateReport) -> String {
+    let files: std::collections::BTreeMap<String, &str> = report
+        .files
+        .iter()
+        .map(|(path, contents)| (path.display().to_string(), contents.as_str()))
+        .collect();
+
+    json!({
+        "skill_name": report.skill_name,
+        "rounds_used": report.rounds_used,
+        "siblings_found": report.siblings_found,
+        "outcome": report.outcome,
+        "candidate_diagnostics": report.candidate_diagnostics,
+        "new_sibling_diagnostics": report.new_sibling_diagnostics,
+        "eval_cases": report.eval_cases,
+        "files": files,
+    })
+    .to_string()
+}
+
+/// `generate_evals` MCP tool: given an existing skill (`path` or `content`)
+/// and the original task brief, calls `adept_agent::generate_evals` — the
+/// same eval-dataset generation step `create_skill` uses internally — and
+/// returns the (already-validated) result as data.
+///
+/// Preview-only, by construction: this function only parses arguments,
+/// dispatches to the shared library function, and shapes its output as
+/// JSON; it never opens a file for writing.
+fn generate_evals_tool(arguments: &Value) -> (String, bool) {
+    let resolved = match resolve_llm_from_arguments(arguments) {
+        Ok(resolved) => resolved,
+        Err(err) => return (json!({ "error": err }).to_string(), true),
+    };
+    let client = OpenAiCompatClient::new(resolved.clone());
+    generate_evals_tool_with_client(arguments, &client, &resolved.model)
+}
+
+/// The client-parameterized core of `generate_evals`, kept separate from
+/// [`generate_evals_tool`] so tests can drive it with
+/// `adept_score::MockLlmClient` instead of a real network client.
+fn generate_evals_tool_with_client(
+    arguments: &Value,
+    client: &dyn LlmClient,
+    model: &str,
+) -> (String, bool) {
+    let brief = match arguments.get("brief").and_then(Value::as_str) {
+        Some(brief) if !brief.trim().is_empty() => brief,
+        _ => return ("missing or empty `brief`".to_string(), true),
+    };
+
+    let (source, path) = match read_source(arguments) {
+        Ok(pair) => pair,
+        Err(message) => return (message, true),
+    };
+    let skill = match AnthropicSkillParser.parse_str(&path, &source) {
+        Ok(skill) => skill,
+        Err(err) => return (json!({ "error": err.to_string() }).to_string(), true),
+    };
+
+    let mut options = CreateOptions::for_model(model, adept::Tokenizer::default());
+    if let Some(eval_cases) = arguments.get("eval_cases").and_then(Value::as_u64) {
+        options.eval_cases = eval_cases as usize;
+    } else {
+        options.eval_cases = DEFAULT_GENERATE_EVALS_CASES;
+    }
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            return (
+                format!("failed to start async runtime for generate_evals: {err}"),
+                true,
+            );
+        }
+    };
+
+    let outcome = runtime.block_on(async {
+        tokio::time::timeout(
+            GENERATE_EVALS_TIMEOUT,
+            adept_agent::generate_evals(client, &skill, brief, &options),
+        )
+        .await
+    });
+
+    match outcome {
+        Ok(Ok(cases)) => {
+            let jsonl = adept::evals::to_jsonl(&cases);
+            (
+                json!({
+                    "eval_cases": cases,
+                    "jsonl": jsonl,
+                })
+                .to_string(),
+                false,
+            )
+        }
+        Ok(Err(err)) => (json!({ "error": err.to_string() }).to_string(), true),
+        Err(_elapsed) => (
+            json!({
+                "error": format!("generate_evals timed out after {GENERATE_EVALS_TIMEOUT:?}")
+            })
+            .to_string(),
+            true,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adept_score::MockLlmClient;
+    use std::sync::Mutex;
 
     const SAMPLE_SKILL: &str = "---\nname: sample\ndescription: does a thing. Use when the user asks for a thing. Do not use otherwise.\n---\n\n# Sample\n\nBody text.\n";
+
+    /// Serializes tests that mutate process-wide `ADEPT_*` env vars, since
+    /// `cargo test` runs this crate's unit tests on multiple threads in one
+    /// process.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn valid_generate_json(name: &str, description: &str, body: &str) -> String {
+        json!({
+            "name": name,
+            "description": description,
+            "disable_model_invocation": false,
+            "body": body,
+            "companion_files": [],
+        })
+        .to_string()
+    }
+
+    fn valid_eval_json(n: usize) -> String {
+        let cases: Vec<_> = (0..n)
+            .map(|i| {
+                json!({
+                    "prompt": format!("prompt {i}"),
+                    "assertions": [{"kind": "contains", "value": "ok"}],
+                })
+            })
+            .collect();
+        json!({ "cases": cases }).to_string()
+    }
+
+    fn clean_body() -> &'static str {
+        "# Demo Skill\n\n## Overview\n\nDoes the one thing this skill is for.\n\n## Steps\n\n1. Read the input.\n2. Produce the output.\n"
+    }
+
+    fn clean_description() -> &'static str {
+        "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs."
+    }
+
+    /// Recursively list every path under `dir`, for before/after snapshots
+    /// asserting a preview-only tool wrote nothing.
+    fn list_all(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                out.extend(list_all(&path));
+            } else {
+                out.push(path);
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn tools_list_exposes_create_skill_and_generate_evals_when_model_configured() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ADEPT_MODEL", "test-model");
+        let request = json!({ "jsonrpc": "2.0", "id": 10, "method": "tools/list" });
+        let response = handle_message(&request.to_string()).expect("expected a response");
+        std::env::remove_var("ADEPT_MODEL");
+
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        let tools = parsed["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"create_skill"), "names: {names:?}");
+        assert!(names.contains(&"generate_evals"), "names: {names:?}");
+    }
+
+    /// Pins the schema field-by-field: neither tool may ever grow an
+    /// output-path argument (an `out`/`out_dir`/`output_path`/... field), so
+    /// a future edit adding write capability fails this test rather than
+    /// silently shipping.
+    #[test]
+    fn create_skill_and_generate_evals_schemas_have_no_output_path_argument() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("ADEPT_MODEL", "test-model");
+        let request = json!({ "jsonrpc": "2.0", "id": 11, "method": "tools/list" });
+        let response = handle_message(&request.to_string()).expect("expected a response");
+        std::env::remove_var("ADEPT_MODEL");
+
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        let tools = parsed["result"]["tools"].as_array().unwrap();
+
+        let create = tools
+            .iter()
+            .find(|t| t["name"] == "create_skill")
+            .expect("create_skill tool");
+        let create_props: std::collections::BTreeSet<&str> = create["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            create_props,
+            std::collections::BTreeSet::from([
+                "brief",
+                "directory",
+                "name",
+                "model",
+                "base_url",
+                "max_rounds",
+                "eval_cases",
+            ]),
+            "create_skill schema must be exactly this field set: {create_props:?}"
+        );
+
+        let generate = tools
+            .iter()
+            .find(|t| t["name"] == "generate_evals")
+            .expect("generate_evals tool");
+        let generate_props: std::collections::BTreeSet<&str> = generate["inputSchema"]
+            ["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            generate_props,
+            std::collections::BTreeSet::from([
+                "path",
+                "content",
+                "brief",
+                "eval_cases",
+                "model",
+                "base_url",
+            ]),
+            "generate_evals schema must be exactly this field set: {generate_props:?}"
+        );
+
+        // Belt and braces: no field name on either schema even looks like an
+        // output/write path, whatever exact set the assertions above pin.
+        for tool_props in [&create_props, &generate_props] {
+            for name in tool_props {
+                let lower = name.to_ascii_lowercase();
+                assert!(
+                    !lower.contains("out") && !lower.contains("write") && !lower.contains("dest"),
+                    "field `{name}` looks like an output-path argument"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn create_skill_tool_returns_generated_skill_and_eval_dataset_without_touching_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let before = list_all(tmp.path());
+        assert!(before.is_empty());
+
+        let good = valid_generate_json("demo-skill", clean_description(), clean_body());
+        let eval = valid_eval_json(10);
+        let mock = MockLlmClient::with_texts(vec![good, eval]);
+
+        // `directory` is the skill's own would-be directory (so its basename
+        // must match the model-chosen name for SL004 to stay clean), not the
+        // siblings root; `tmp.path()` (its parent) is what gets discovered
+        // for siblings and is asserted empty below.
+        let out_dir = tmp.path().join("demo-skill");
+        let arguments = json!({
+            "brief": "Extract PDF form data",
+            "directory": out_dir.to_str().unwrap(),
+        });
+        let (text, is_error) = create_skill_tool_with_client(&arguments, &mock, "test-model");
+        assert!(!is_error, "tool call failed: {text}");
+
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["skill_name"], "demo-skill");
+        assert_eq!(parsed["eval_cases"].as_array().unwrap().len(), 10);
+        assert!(parsed["files"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.ends_with("SKILL.md")));
+        assert!(parsed["files"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .any(|k| k.ends_with("evals.jsonl")));
+
+        // The central invariant: preview-only, so the directory used for
+        // sibling discovery must be exactly as it started — no SKILL.md, no
+        // evals/ directory, nothing at all.
+        let after = list_all(tmp.path());
+        assert_eq!(
+            before, after,
+            "create_skill must never write to disk, found: {after:?}"
+        );
+    }
+
+    #[test]
+    fn generate_evals_tool_returns_validated_dataset_without_touching_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let before = list_all(tmp.path());
+        assert!(before.is_empty());
+
+        let eval = valid_eval_json(5);
+        let mock = MockLlmClient::with_texts(vec![eval]);
+
+        let arguments = json!({
+            "content": SAMPLE_SKILL,
+            "brief": "Do a thing for the user",
+            "eval_cases": 5,
+        });
+        let (text, is_error) = generate_evals_tool_with_client(&arguments, &mock, "test-model");
+        assert!(!is_error, "tool call failed: {text}");
+
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        let cases = parsed["eval_cases"].as_array().unwrap();
+        assert_eq!(cases.len(), 5);
+        let jsonl = parsed["jsonl"].as_str().unwrap();
+        adept::evals::validate(jsonl).expect("returned dataset must already be valid");
+
+        let after = list_all(tmp.path());
+        assert_eq!(
+            before, after,
+            "generate_evals must never write to disk, found: {after:?}"
+        );
+    }
+
+    #[test]
+    fn generate_evals_tool_rejects_dataset_that_fails_validation() {
+        let empty_eval = json!({ "cases": [] }).to_string();
+        let mock = MockLlmClient::with_texts(vec![empty_eval]);
+
+        let arguments = json!({
+            "content": SAMPLE_SKILL,
+            "brief": "Do a thing for the user",
+        });
+        let (text, is_error) = generate_evals_tool_with_client(&arguments, &mock, "test-model");
+        assert!(is_error, "an empty dataset must be reported as an error");
+        assert!(text.contains("validation"), "text: {text}");
+    }
+
+    #[test]
+    fn handle_message_tools_call_create_skill_without_model_is_a_pure_synchronous_error() {
+        // No `ADEPT_MODEL` in the process env and no `model` argument: this
+        // must fail during config resolution, before any client is built or
+        // any I/O (network or filesystem) is attempted — `handle_message`
+        // itself never touches the network or the filesystem.
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 12,
+            "method": "tools/call",
+            "params": { "name": "create_skill", "arguments": { "brief": "Do the thing" } }
+        });
+        let response = handle_message(&request.to_string()).expect("expected a response");
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["result"]["isError"], true);
+        let text = parsed["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("ADEPT_MODEL"), "text: {text}");
+    }
+
+    #[test]
+    fn handle_message_tools_call_generate_evals_without_model_is_a_pure_synchronous_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 13,
+            "method": "tools/call",
+            "params": {
+                "name": "generate_evals",
+                "arguments": { "content": SAMPLE_SKILL, "brief": "Do the thing" }
+            }
+        });
+        let response = handle_message(&request.to_string()).expect("expected a response");
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(parsed["result"]["isError"], true);
+        let text = parsed["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("ADEPT_MODEL"), "text: {text}");
+    }
 
     #[test]
     fn initialize_returns_protocol_version() {

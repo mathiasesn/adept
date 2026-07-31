@@ -304,13 +304,30 @@ async fn request_repair(
     GenerateResponse::parse(&response.content)
 }
 
-/// Send the eval-dataset generation request for the accepted candidate.
-async fn request_eval_generation(
+/// Generate and validate a synthetic eval dataset for `skill`, given the
+/// original task `brief` (the only record of intent the skill's own
+/// name/description/body may have omitted).
+///
+/// This is the single implementation of the eval-generation step: both
+/// [`create_skill`] (after its own repair loop accepts a candidate) and
+/// `adept_cli`'s `generate_evals` MCP tool (given an already-authored skill)
+/// call this rather than each re-implementing the request/parse/stamp/
+/// validate sequence, so the two surfaces cannot drift against
+/// `docs/EVALS.md`'s published contract.
+///
+/// `options.model` selects the model and `options.eval_cases` the number of
+/// cases requested; the rest of `options` is unused here.
+///
+/// # Errors
+/// Returns [`CreateError::Llm`] if the request fails, [`CreateError::MalformedResponse`]
+/// if the model's response isn't the documented JSON shape, or
+/// [`CreateError::InvalidEvalDataset`] if the generated dataset fails
+/// `adept::evals::validate`.
+pub async fn generate_evals(
     client: &dyn LlmClient,
-    brief: &str,
     skill: &Skill,
-    n: usize,
-    model: &str,
+    brief: &str,
+    options: &CreateOptions,
 ) -> Result<Vec<evals::EvalCase>, CreateError> {
     let user = adept_score::prompts::render(
         prompts::CREATE_EVAL_USER_TEMPLATE,
@@ -319,11 +336,11 @@ async fn request_eval_generation(
             ("skill_name", skill.frontmatter.name.as_str()),
             ("description", skill.frontmatter.description.as_str()),
             ("body", skill.body.as_str()),
-            ("n", &n.to_string()),
+            ("n", &options.eval_cases.to_string()),
         ],
     );
     let request = ChatRequest::new(
-        model.to_string(),
+        options.model.clone(),
         vec![
             ChatMessage::system(prompts::CREATE_EVAL_SYSTEM),
             ChatMessage::user(user),
@@ -334,7 +351,7 @@ async fn request_eval_generation(
 
     let response = client.chat(request).await?;
     let parsed = EvalGenerationResponse::parse(&response.content)?;
-    Ok(parsed
+    let cases: Vec<evals::EvalCase> = parsed
         .cases
         .into_iter()
         .map(|c| evals::EvalCase {
@@ -342,7 +359,12 @@ async fn request_eval_generation(
             prompt: c.prompt,
             assertions: c.assertions,
         })
-        .collect())
+        .collect();
+
+    let jsonl = evals::to_jsonl(&cases);
+    evals::validate(&jsonl)?;
+
+    Ok(cases)
 }
 
 /// One round's screening result: the candidate itself, its own diagnostics,
@@ -511,16 +533,8 @@ pub async fn create_skill(
         CreateOutcome::BestEffort
     };
 
-    let eval_cases = request_eval_generation(
-        client,
-        brief,
-        &best.skill,
-        options.eval_cases,
-        &options.model,
-    )
-    .await?;
+    let eval_cases = generate_evals(client, &best.skill, brief, options).await?;
     let eval_jsonl = evals::to_jsonl(&eval_cases);
-    evals::validate(&eval_jsonl)?;
 
     let mut files: BTreeMap<PathBuf, String> = BTreeMap::new();
     files.insert(best.skill.path.clone(), best.skill.source.clone());
