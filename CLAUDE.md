@@ -31,18 +31,19 @@ Virtual cargo workspace, five crates, one binary (`adept`):
 - `adept` — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, and `markdown` (the shared pulldown-cmark lexer).
 - `adept_fmt` — formatter: canonical frontmatter + Markdown reflow. Idempotent, atomic writes.
 - `adept_score` — LLM-assisted scoring (triggering accuracy, token bloat, overlap) behind `&dyn LlmClient`. Fully async; **never** creates a tokio runtime.
-- `adept_agent` — LLM autofix for `FixKind::Llm` diagnostics; top-of-stack, deliberately composes `adept_score` (LLM transport) and `adept_fmt` (canonicalization).
+- `adept_agent` — LLM-assisted agent capabilities; top-of-stack, deliberately composes `adept_score` (LLM transport) and `adept_fmt` (canonicalization). `fix` (autofix for `FixKind::Llm` diagnostics) is its own submodule; `candidate`/`diff`/`prompts`/`writer`/`gate` are crate-level machinery shared with `create` (generate → screen → repair → generate-evals skill authoring).
 - `adept_cli` — clap CLI + `adept.toml` config + hand-rolled MCP stdio server.
 
 Dependency direction: `adept_fmt` and `adept_score` depend on `adept` and never on each other — shared behaviour moves *down* into `adept`, never sideways. `adept_agent` is the one deliberate exception: it sits above both and may compose them. Nothing in the library stack may depend on `adept_agent`; only `adept_cli` does.
 
-Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml` is discovered by walking up from the target path. `[fix]` and `[score]` are independent sections (no fallback between them); the `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY` env vars are the only thing they share.
+Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml` is discovered by walking up from the target path. `[fix]`, `[score]` and `[create]` are three independent sections (no fallback between any of them); the `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY` env vars are the only thing they share.
 
 ## Invariants (violating one is a design change, not a style choice)
 
 - **`check` and `fmt` never touch the network.** Only `score`/`fix` (and the MCP `score_skill` tool) do. No test may perform network I/O — use `adept_score::MockLlmClient`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O error.
-- **MCP stdout carries only JSON-RPC.** All logging goes to stderr; a stray `println!` in `commands/mcp.rs` breaks every client silently. `handle_message` stays I/O-pure.
+- **MCP stdout carries only JSON-RPC.** All logging goes to stderr; a stray `println!` in `commands/mcp.rs` breaks every client silently. `handle_message` stays I/O-pure. The MCP `create_skill`/`generate_evals` tools are preview-only and never write to disk.
+- **adept spawns no subprocess, ever.** Not `check`/`fmt`/`score`/`fix`, not `create` (the `command` eval assertion is defined and validated, never executed).
 - **Rule codes are permanent and never reused.** `SL202` is retired and stays retired so old configs fail closed.
 - **One parser-construction site.** All markdown goes through `adept::markdown::parser()`, the sole caller of `Parser::new_ext` (`crates/adept/src/markdown/mod.rs`); `grep -rn "Parser::new" crates/` must keep yielding exactly one hit, or the linter and formatter drift on what a heading is.
 - **Never load BPE tables outside `token.rs::load_bpe`** (caches the `Result` too). Expensive objects are built once in `static OnceLock`, which is why `Rule: Send + Sync`.

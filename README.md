@@ -14,6 +14,8 @@ binary with four surfaces:
   full Markdown reflow).
 - `adept score` — LLM-assisted scoring: triggering accuracy, token bloat,
   and cross-skill overlap detection.
+- `adept create` — LLM-assisted skill generation from a written brief:
+  generate → lint → repair, plus a synthetic eval dataset.
 - `adept mcp` — an MCP server (stdio) so agents can lint/format skills
   themselves.
 
@@ -188,6 +190,40 @@ A fix candidate for `SL302` is rejected (even if it clears the diagnostic)
 unless it *relocates* content into companion files rather than deleting
 it — the token-conservation guard in `adept_agent::relocate`.
 
+## `adept create`
+
+LLM-assisted skill generation from a written brief: one call generates a
+candidate skill, it's screened by inserting it into the linter alongside any
+sibling skills, and a bounded repair loop feeds diagnostics back until the
+candidate clears zero `Error`/`Warning` findings (`Info` findings don't
+block). A second call generates a synthetic eval dataset
+(`evals/evals.jsonl`) for the accepted skill — see
+[`docs/EVALS.md`](docs/EVALS.md) for the dataset schema. **Preview by
+default**, like `fix` — nothing is written unless you pass `--write`:
+
+```console
+$ adept create --from-file brief.md --out skills/pdf-filler
+adept create: pdf-filler
+2 rounds used, gate reached (0 errors, 0 warnings, 1 info)
+wrote: SKILL.md, evals/evals.jsonl
+```
+
+| Flag | Purpose |
+| ------------- | ----------------------------------------------------------- |
+| `--from-file <path>` | Read the task brief from a file (else non-TTY stdin, else an interactive prompt). |
+| `--out <dir>` | Destination directory for the new skill (default: current directory). |
+| `--name` | Override the skill name the model derives from the brief. |
+| `--write` / `-w` | Write the generated skill and eval dataset to disk. |
+| `--overwrite` | Allow writing into a directory that already has a `SKILL.md`. |
+| `--max-rounds <n>` | Bound the generate/repair loop (default `2`). |
+| `--model <M>` / `--base-url <U>` | LLM overrides, resolved against `[create]`, independent of `[score]`/`[fix]`. |
+| `--capture-dir <DIR>` | Save the raw request/response of every LLM call (see below). |
+| `--format json` | Machine-readable output: generated files, remaining diagnostics, dataset. |
+
+A run that exhausts `--max-rounds` still writes/prints the best candidate
+seen, reports every remaining diagnostic, and exits `1` — it never leaves
+you empty-handed, but the exit code says the file is not guaranteed clean.
+
 ## `adept mcp`
 
 Runs `adept` as an MCP server over stdio, exposing the static/offline
@@ -224,6 +260,11 @@ $ ADEPT_MODEL=gpt-4o-mini echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 
 tool error instead of silently truncating or producing degenerate
 one-word-per-line output.
 
+Two more tools, `create_skill` and `generate_evals`, mirror `adept create`'s
+generation and eval-dataset pipeline. **Both are preview-only**: they return
+the generated skill and dataset as data and never write to disk — writing
+stays a CLI-only capability (`adept create --write`).
+
 Point any MCP-compatible client at `adept mcp` as a stdio server.
 
 ## Configuration
@@ -254,10 +295,19 @@ base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
 max_rounds = 2             # falls back to adept_agent::DEFAULT_MAX_ROUNDS
 capture_dir = ".adept-capture"   # independent of [score] capture_dir
+
+[create]
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+tokenizer = "o200k_base"  # or "cl100k_base"
+max_rounds = 2             # falls back to adept_agent::DEFAULT_MAX_ROUNDS
+eval_cases = 10             # falls back to adept_agent::create::DEFAULT_EVAL_CASES; no CLI flag
+capture_dir = ".adept-capture"   # independent of [score]/[fix] capture_dir
 ```
 
-`[fix]` is fully independent of `[score]` — set both if you want `fix` and
-`score` to use different models.
+`[fix]` and `[create]` are each fully independent of `[score]` (and of each
+other) — set any of them if you want `fix`, `create`, and `score` to use
+different models.
 
 Precedence: CLI flag > config file value > built-in default.
 
@@ -281,7 +331,7 @@ call), `-vvv` trace. It is a global flag, accepted by every subcommand.
 `ADEPT_LOG=adept_score::client=trace`. With no `-v` and no `ADEPT_LOG`,
 nothing is logged at all.
 
-For anything you need to keep, use `--capture-dir` on `score` or `fix`
+For anything you need to keep, use `--capture-dir` on `score`, `fix`, or `create`
 instead of scraping the log. Each invocation writes a timestamped folder
 holding the verbatim request and response of every LLM call, plus enough
 metadata (model, base URL, prompt version, adept version, resolved

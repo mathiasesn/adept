@@ -232,15 +232,20 @@ network latency, not CPU:
   `score` can still reach different conclusions about the same pair.
 - **`--statistics` prints counts in addition to diagnostics**, not instead of.
   One line in `check.rs` if instead-of is wanted.
-- **`FixFileConfig` and `ScoreFileConfig` are structurally identical.** Both
-  carry `model`, `base_url` and `tokenizer` (`fix` adds `max_rounds`), and both
-  resolve through the same shared `resolve_llm_client` helper. A
-  `#[serde(flatten)]`ed common `LlmFileConfig` would remove the duplication, at
-  the cost of making the two sections harder to document independently. Not
-  worth it at three fields; revisit if a third LLM-backed command appears or
-  the shared field set grows. The independence of the `[fix]` and `[score]`
-  *sections* is a spec requirement and must survive any such refactor — this is
-  about the Rust structs, not the TOML surface.
+- **`FixFileConfig`, `ScoreFileConfig` and `CreateFileConfig` are structurally
+  near-identical, and the trigger this item named has now fired.** All three
+  carry `model`, `base_url`, `tokenizer` and `capture_dir` (`fix` and `create`
+  add `max_rounds`; `create` alone adds `eval_cases`), and all three resolve
+  through the same shared `resolve_llm_client` helper. This item previously
+  read "revisit if a third LLM-backed command appears" — `adept create` is
+  that third command (`crates/adept_cli/src/config.rs::CreateFileConfig`), so
+  the condition is met. The refactor itself (a `#[serde(flatten)]`ed common
+  `LlmFileConfig`) was deliberately kept **out of scope** of the `create` task,
+  since it would also touch `score` and `fix`; it remains open, now with its
+  trigger fired rather than merely hypothetical. The independence of the
+  `[fix]`/`[score]`/`[create]` *sections* is a spec requirement and must
+  survive any such refactor — this is about the Rust structs, not the TOML
+  surface.
 - **`FixKind::Deterministic` is a documented placeholder with no
   implementors.** It exists so the tag's shape does not have to change when
   mechanical autofixes land (spec non-goal: "those belong on a future
@@ -387,14 +392,41 @@ any generator's refine loop, including adept's own. The HF Jobs remote
 executor stays out of scope: adept has no orchestration story and should
 not grow one.
 
-## Planned surface: `adept create`
+## Shipped surface: `adept create`
 
 A sixth surface, a sibling of `score` and `fix` rather than of `check` and
-`fmt`: generate a new skill from a description of the task it should cover.
+`fmt`: generates a new skill from a description of the task it should cover.
 Where `fix` repairs an existing `SKILL.md` and `score` judges one, `create`
 produces one that did not exist. This reverses the "skill generation is not
 worth taking" conclusion recorded above; that paragraph is annotated
-accordingly.
+accordingly. Full design and rationale: `specs/adept-create-command.md`
+(retained as the historical working document; not updated after landing).
+
+**Status: shipped.** `adept_agent::create` (generate → screen → repair →
+generate-evals, computing only — it never writes) and the `adept create` CLI
+surface (`--from-file`/stdin/interactive-prompt precedence, `--out`,
+`--name`, `--write`, `--overwrite`, `--format json`, the `[create]` config
+section) both landed, alongside preview-only MCP `create_skill` and
+`generate_evals` tools. See `docs/ARCHI.md` §4/§8/§9/§12 for the shipped
+shapes and `docs/EVALS.md` for the eval-dataset schema `create` writes.
+
+**Amendment to this section's original "refuses to emit" framing.** The text
+below described a `create` that "refuses to emit a skill its own linter
+rejects." The shipped behavior, per `specs/adept-create-command.md`, is
+narrower: **the gate drives the repair loop; it does not veto the output.**
+An exhausted `max_rounds` still emits the best candidate seen, reports every
+remaining diagnostic prominently, and exits `1` — the user is never left
+empty-handed after paying for N LLM rounds. Read every "refuses to emit"
+sentence below in light of this amendment, not as contradicting it.
+
+**Item 1's "executing skill scripts" non-goal remains intact.** `create`
+generates and validates eval datasets (including the shell `command`
+assertion kind) but never runs them — no verifier engine, no runner, no
+subprocess, pinned by a dedicated test (`specs/adept-create-command.md`
+acceptance criteria). The "Deferred by design" supersession of that non-goal,
+recorded below against upskill item 1 (deterministic verifiers as a `fix`
+accept gate), is about a *different*, still-unimplemented piece of work and
+did not fire as part of shipping `create`.
 
 **Source of the authoring rules.** `mattpocock/skills`,
 `skills/productivity/writing-great-skills/SKILL.md` (read 2026-07-31; it is

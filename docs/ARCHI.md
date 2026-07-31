@@ -31,7 +31,8 @@ The shape is modelled on ruff: stable rule codes, `path:line:col: CODE message` 
 - **`adept fmt`** — prettier-style formatting: canonical frontmatter plus full Markdown reflow. Idempotent, atomic writes.
 - **`adept score`** — LLM-assisted scoring against any OpenAI-compatible endpoint: triggering accuracy, token bloat, cross-skill overlap.
 - **`adept fix`** — LLM-assisted lint autofix for `FixKind::Llm` diagnostics (`SL206`, `SL301`, `SL302`). Preview-by-default; `--write` applies.
-- **`adept mcp`** — a JSON-RPC 2.0 stdio MCP server exposing `check_skill`, `format_skill`, and (conditionally) `score_skill`.
+- **`adept create`** — LLM-assisted skill generation from a written brief: generate → screen → repair → generate-evals. Preview-by-default; `--write` applies. Also emits a synthetic eval dataset (`evals/evals.jsonl`) alongside the skill — see §9's `adept::evals` and `docs/EVALS.md`.
+- **`adept mcp`** — a JSON-RPC 2.0 stdio MCP server exposing `check_skill`, `format_skill`, (conditionally) `score_skill`, and the preview-only `create_skill`/`generate_evals`.
 
 Architecturally it is a **cargo virtual workspace of four libraries and one binary**, with a strict dependency direction: everything depends on the core crate, nothing depends on the CLI, and `adept_agent` sits at the top of the stack, composing its siblings (see the amended rule in §16).
 
@@ -43,6 +44,8 @@ adept_cli  (bin: `adept`)
   ├── adept_score ───────────────── ┤
   └── adept ◄──────────────────────┘   (core: data model, parser, diagnostics, rule engine, tokenizer)
 ```
+
+`adept_agent` is a rename of the crate formerly named `adept_fix`: it now houses `fix` (the original `adept fix` implementation) as a submodule, with `candidate`, `diff`, `prompts`, `writer`, and `gate` promoted to crate-level shared machinery reused by `create` (a sibling module implementing `adept create`). The rename kept every public item's name (`fix_skill`, `write_all_transactionally`, `FixKind`, `FixRegion`); only the crate and its module layout moved. `FixKind`/`FixRegion` still live in `adept`, untouched.
 
 `adept_fmt` and `adept_score` do not know about each other. `adept_agent` deliberately depends on both (reusing `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather than duplicating them — see §16). Only `adept_cli` composes all of them into the binary.
 
@@ -132,15 +135,25 @@ crates/adept_agent/        LLM-ASSISTED AGENT CAPABILITIES — depends on adept,
                             (LlmClient), and adept_fmt (canonicalization); the one crate allowed
                             to depend on both siblings — see the amended dependency rule in §16
   src/
-    lib.rs                 Crate-root re-exports; shared machinery lives here for future siblings
-    candidate.rs            FixCandidate, FixResponse (model JSON), companion-path sandboxing
-    prompts.rs              Description- and body-scope prompt templates + PROMPT_VERSION
+    lib.rs                 Crate-root re-exports; shared machinery lives here for both fix and create
+    candidate.rs            Shared candidate helpers, companion-path sandboxing (resolve_companion_path)
+    prompts.rs              Shared prompt-building helpers + per-surface PROMPT_VERSION constants
     diff.rs                 Multi-file unified diff rendering
     writer.rs               write_all_transactionally — atomic multi-file apply
-    fix/                   `adept fix`'s own implementation (not shared with future siblings)
+    gate.rs                 Shared accept/reject gate: passes_severity_gate, improves_on (fix and create)
+    fix/                   `adept fix`'s own implementation (not shared with create)
       mod.rs                 FixError, FixReport, `fix_skill` (the single entry point)
       options.rs             FixOptions
       relocate.rs             The SL302 token-conservation guard (`conserves_content`)
+    create/                `adept create`'s own implementation: generate -> screen -> repair -> generate-evals
+      mod.rs                 CreateError, CreateOutcome, `create_skill` (the single entry point);
+                             computes only, never writes. Inserts the candidate into a SkillSet
+                             with the siblings at `adept::sibling_root`, lints the whole set
+                             (SkillRule + SetRule), gates on zero Error/zero Warning on the
+                             candidate with Info passing; exhausted `max_rounds` still emits the
+                             best candidate (`CreateOutcome::BestEffort`)
+      candidate.rs            GenerateResponse / EvalGenerationResponse (model JSON)
+      options.rs              CreateOptions, DEFAULT_MAX_ROUNDS, DEFAULT_EVAL_CASES
 
 crates/adept_cli/          BINARY `adept` — composes all four libraries
   src/
@@ -230,9 +243,17 @@ base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"
 max_rounds = 2                 # falls back to adept_agent::DEFAULT_MAX_ROUNDS
 capture_dir = ".adept-capture"  # independent of [score] capture_dir
+
+[create]                      # CreateFileConfig, CLI-local; fully independent of [score]/[fix]
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+tokenizer = "o200k_base"
+max_rounds = 2                 # falls back to adept_agent::DEFAULT_MAX_ROUNDS
+eval_cases = 10                 # falls back to adept_agent::create::DEFAULT_EVAL_CASES; no CLI flag
+capture_dir = ".adept-capture"  # independent of [score]/[fix] capture_dir
 ```
 
-`[lint]` uses `snake_case` keys (serde default on `LintConfig`); `[fmt]` uses `kebab-case` (`#[serde(rename_all = "kebab-case")]`). `[score]` and `[fix]` (`ScoreFileConfig`/`FixFileConfig`) have **no** `rename_all` attribute, so despite what an earlier revision of this table showed, their keys are plain Rust field names (`base_url`, not `base-url`) — verify against the struct, not this table, before trusting either. This inconsistency is real — match the existing casing of the table you are editing. `[fix]` never falls back to `[score]` or vice versa; the only shared fallback between them is the `ADEPT_*` environment variables below. **`capture_dir` follows this same independence** — a `[score] capture_dir` never applies to `adept fix`, and vice versa (pinned by `config.rs::capture_dir_sections_do_not_cross_fall_back`).
+`[lint]` uses `snake_case` keys (serde default on `LintConfig`); `[fmt]` uses `kebab-case` (`#[serde(rename_all = "kebab-case")]`). `[score]`, `[fix]` and `[create]` (`ScoreFileConfig`/`FixFileConfig`/`CreateFileConfig`) have **no** `rename_all` attribute, so despite what an earlier revision of this table showed, their keys are plain Rust field names (`base_url`, not `base-url`) — verify against the struct, not this table, before trusting either. This inconsistency is real — match the existing casing of the table you are editing. These three sections never fall back to one another; the only shared fallback between them is the `ADEPT_*` environment variables below. **`capture_dir` follows this same independence** — a `capture_dir` set in one of `[score]`/`[fix]`/`[create]` never applies to another (pinned by `config.rs::capture_dir_sections_do_not_cross_fall_back`). `[score]` and `[fix]` are structurally near-identical to `[create]` (model/base_url/tokenizer/capture_dir, `fix`/`create` add `max_rounds`); `docs/BACKLOG.md` records that three such sections is the condition it named for revisiting a `#[serde(flatten)]`ed shared `LlmFileConfig` — deliberately not done here.
 
 **Capture directory resolution** (`config.rs::resolve_capture_dir`, used by `score` and `fix`). Precedence is the standard **`--capture-dir` flag > `adept.toml` `capture_dir` > built-in default (off)**, but the two layers anchor a *relative* path differently:
 
@@ -275,6 +296,7 @@ Each command module re-declares its own `EXIT_*` consts. Conventions per command
 - **`score`**: builds its own `tokio::runtime::Runtime` and calls `block_on`. `adept_score` never creates a runtime.
 - **`fix`**: LLM-assisted autofix for `FixKind::Llm` diagnostics. **Preview by default** — computes and prints a `FixReport` (rendered summary or unified diff via `--diff`) without touching disk; `--write` applies pending files via `adept_agent::write_all_transactionally`, `--check` exits `1` if any skill has pending changes, printing the same diff `--diff` would (matching `fmt --check`). `--select`/`--ignore` restrict which diagnostics are attempted; `--max-rounds` bounds the fix/re-lint loop (default `adept_agent::DEFAULT_MAX_ROUNDS = 2`). Also builds its own `tokio::runtime::Runtime`, same as `score`.
 - **`score` and `fix` additionally take `--capture-dir`** (§15), resolved before any request is issued so a bad directory is exit 2, not a silent skip.
+- **`create`**: generates a new skill from a brief taken from `--from-file`, non-TTY stdin, or an interactive multi-line prompt (in that precedence order); exits `2` if none is available. `--out <dir>` (default cwd), `--name` (override the derived skill name), `--write`/`-w` (preview by default), `--overwrite` (opt-in to writing into a directory that already has a `SKILL.md`), `--max-rounds`, `--model`/`--base-url`/`--tokenizer` resolved against `[create]`, `--capture-dir`, `--format human|json`. Computes a candidate via generate → screen → repair (gate: zero Error/zero Warning on the candidate, Info passing) then generates an eval dataset (`evals/evals.jsonl`) for it; a clean candidate exits `0`, one that exhausts `max_rounds` with findings remaining still writes/prints the best candidate and exits `1`. `2` covers usage/I/O errors, an unparseable LLM response, and refusing to clobber an existing skill directory.
 - **`mcp`**: no flags; reads stdin until EOF.
 
 **Output**: diagnostics and reports go to stdout; every error message goes to stderr prefixed `adept: error: `. The `--quiet` flag suppresses only summary/progress lines, never diagnostics.
@@ -296,6 +318,10 @@ Everything public is re-exported from `lib.rs`; there are no public submodules e
 **`markdown`** is the shared Markdown lexer, and the only markdown-aware code in the workspace. It exposes two views over the same document: `parse_document` builds the span-free `Block`/`Inline` AST the formatter re-prints, while `headings` / `link_destinations` / `inline_code_spans` return `Located<T>` values (carrying a 1-based body line) for the `SL1xx` rules, which need positions but no tree. Both views go through `markdown::parser()`, the **single** `pulldown-cmark` `Parser` construction site in the workspace — `grep -rn "Parser::new" crates/` must keep yielding exactly one hit. **Do not construct a `Parser` anywhere else**: an `Options` flag enabled for one view and not the other would let the linter and the formatter drift back into disagreeing about what a heading or a link is. Fence matching, info strings, indented code, nested brackets and reference links all come from the parser, so a markdown-aware rule never needs its own line scan.
 
 **Known limitation**: `SKILL_FILE_NAME` is a private `const` in `skillset.rs`, not part of `SkillParser`. A parser for a format using `skill.yaml` or `AGENT.md` can therefore never be handed a file — the pluggability seam is incomplete. See `docs/BACKLOG.md`.
+
+**`adept::evals`** is the published eval-dataset schema module: `Assertion` (`contains`/`file_exists`/`file_contains`/`command`, `#[serde(tag = "kind")]`), a versioned case object (`schema_version`, independent of any `PROMPT_VERSION`), and `validate` (every line parses, `schema_version` is understood, non-empty). It is documented as a contract in `docs/EVALS.md`, machine-checked against the code by a docs test the same way `docs/RULES.md` is checked against the rule registry. adept only *authors and validates* datasets — `evals::validate` never executes a `command` assertion or anything else; running a dataset is a separate harness's job.
+
+**`adept::companion::is_eval_dataset`** matches a companion path by directory name only (any path with an `evals` component), applied at `SL303` and in `adept_score`'s token-bloat view so a generated dataset is not counted as skill content. It is currently **dormant**: `discover_companion_files` is non-recursive, so a nested `evals/evals.jsonl` is never discovered as a companion file at all, and the predicate can never fire against real output today. It is kept as defence-in-depth for if discovery ever becomes recursive.
 
 ## 10. Formatter and Scorer Surfaces
 
@@ -354,7 +380,9 @@ Then add a fixture under `crates/adept/tests/fixtures/rules/` and an insta snaps
 
 ## 12. MCP Server Contract
 
-`crates/adept_cli/src/commands/mcp.rs`. Hand-rolled JSON-RPC 2.0 over newline-delimited stdio, protocol version `2024-11-05`. The `rmcp` SDK was deliberately not used: the surface is three tools behind `initialize` / `tools/list` / `tools/call`, and a direct implementation keeps both the dependency footprint and the risk of an SDK writing to stdout on our behalf at zero.
+`crates/adept_cli/src/commands/mcp.rs`. Hand-rolled JSON-RPC 2.0 over newline-delimited stdio, protocol version `2024-11-05`. The `rmcp` SDK was deliberately not used: a direct implementation keeps both the dependency footprint and the risk of an SDK writing to stdout on our behalf at zero.
+
+Five tools are advertised (three unconditionally, `score_skill` conditionally): `check_skill`, `format_skill`, `score_skill`, `create_skill`, `generate_evals`. **`create_skill` and `generate_evals` are preview-only and never touch the filesystem** — they return the generated skill/dataset as data, mirroring why capture is CLI-only (§15): an MCP client must not be able to make the server write to arbitrary paths. Writing stays a CLI capability (`adept create --write`).
 
 **The hard invariant: stdout carries only JSON-RPC response messages. Everything else goes to stderr.** `serve()` is the only function that writes to stdout. `handle_message` is pure with respect to I/O — it never touches stdin, stdout, or stderr — which is what lets tests drive it directly without spawning the binary. Any `println!` added below `serve` breaks every MCP client silently. Use `eprintln!`.
 
@@ -369,7 +397,7 @@ Other contract points:
 
 ## 13. Testing & Snapshot Conventions
 
-237 tests across 15 suites, ~8s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
+288 tests across 21 suites, ~7-8s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
 
 **Rule tests are snapshot tests.** Each rule gets a fixture directory under `crates/adept/tests/fixtures/rules/<sl_code>_<slug>/` containing a `SKILL.md` that triggers exactly that rule, plus an `insta` snapshot under `crates/adept/tests/snapshots/rules__snapshot_<name>.snap`. There is also a `cross_clean` fixture asserting a well-formed pair produces nothing. Review snapshot diffs — an accepted snapshot is an accepted behaviour change.
 
@@ -433,7 +461,8 @@ The things not to violate:
 
 - **Dependency direction is one-way, with one documented exception.** `adept_fmt` and `adept_score` depend on `adept` and never on each other; shared behaviour between *those two* moves *down* into `adept`, never sideways. `adept_agent` is a top-of-stack composing crate: it deliberately depends on both `adept_score` (reuses its `LlmClient`/`OpenAiCompatClient` stack rather than re-implementing an LLM transport) and `adept_fmt` (reuses `format_skill` to canonicalize every candidate before re-linting/diffing it), per `specs/adept-fix-command.md`. The invariant this preserves is narrower than "one-way": **nothing may depend on `adept_agent`**, and `adept_fmt`/`adept_score` still never depend on each other or on `adept_agent`. Do not use `adept_agent` as precedent for adding a sideways dependency between `adept_fmt` and `adept_score` themselves.
 - **`check` and `fmt` never touch the network.** Only `score` (and the MCP `score_skill` tool) does.
-- **MCP stdout carries only JSON-RPC.** All logging goes to stderr; `handle_message` stays I/O-pure.
+- **MCP stdout carries only JSON-RPC.** All logging goes to stderr; `handle_message` stays I/O-pure. `create_skill`/`generate_evals` are preview-only and never write to disk.
+- **adept spawns no subprocess, ever.** Not even the `command` eval assertion `create` can generate — adept defines and validates that vocabulary but never executes it.
 - **The tracing writer is stderr, never stdout.** `tracing_subscriber::fmt()` defaults to stdout; `logging.rs` overrides that with an explicit `.with_writer(std::io::stderr)`. A subscriber that lands on stdout breaks every MCP client silently. Only `main` installs one — libraries emit events and never subscribe. See §15.
 - **The API key never leaves `RedactedString`.** `Debug` and `Display` both render `****`, and the newtype is adopted at `ResolvedLlmConfig::api_key`. `Authorization` is omitted entirely from captured metadata; `run_metadata.json` carries only `api_key_present: bool`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O error.
