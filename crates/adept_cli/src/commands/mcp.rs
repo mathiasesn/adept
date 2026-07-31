@@ -505,24 +505,12 @@ fn parse_inline_results(
     Ok(results)
 }
 
-/// The skill's own directory, given a path to its `SKILL.md` file or the
-/// skill's own directory: `path` itself if it's a directory, else its
-/// parent (falling back to `.`). `evals/evals.jsonl` discovery is relative
-/// to this. Mirrors `commands::eval`'s identical helper (not shared across
-/// the crate boundary of a single small function).
-fn skill_directory(path: &std::path::Path) -> std::path::PathBuf {
-    if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        path.parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-    }
-}
-
 /// Grade inline `results` against the eval dataset (an `evals` argument
 /// override, or `evals/evals.jsonl` relative to `path`'s skill directory).
-/// Purely offline: no LLM client is touched anywhere in this path.
+/// Purely offline: no LLM client is touched anywhere in this path. Shares
+/// the read/validate/parse/grade sequence with the CLI's `grade_from_args`
+/// via `commands::eval::{resolve_dataset_path, grade_results}`, so the two
+/// surfaces can't drift on error wording.
 fn grade_inline(
     arguments: &Value,
     path: &std::path::Path,
@@ -530,26 +518,12 @@ fn grade_inline(
 ) -> Result<adept::evals::EvalBenchmarkReport, String> {
     let results = parse_inline_results(arguments, content_mode)?;
 
-    let dataset_path = match arguments.get("evals").and_then(Value::as_str) {
-        Some(p) => std::path::PathBuf::from(p),
-        None => skill_directory(path).join("evals").join("evals.jsonl"),
-    };
-    let dataset_text = std::fs::read_to_string(&dataset_path).map_err(|err| {
-        format!(
-            "failed to read eval dataset {}: {err}",
-            dataset_path.display()
-        )
-    })?;
-    adept::evals::validate(&dataset_text)
-        .map_err(|err| format!("invalid eval dataset {}: {err}", dataset_path.display()))?;
-    let cases = adept::evals::parse_jsonl(&dataset_text).map_err(|err| {
-        format!(
-            "failed to parse eval dataset {}: {err}",
-            dataset_path.display()
-        )
-    })?;
-
-    Ok(adept::evals::grade(&cases, &results))
+    let evals_override = arguments
+        .get("evals")
+        .and_then(Value::as_str)
+        .map(std::path::PathBuf::from);
+    let dataset_path = crate::commands::eval::resolve_dataset_path(evals_override, path);
+    crate::commands::eval::grade_results(&results, &dataset_path)
 }
 
 /// `eval_skill` MCP tool: runs whichever of the four analyses
@@ -1356,5 +1330,121 @@ mod tests {
     fn notification_with_no_id_produces_no_response() {
         let request = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
         assert!(handle_message(&request.to_string()).is_none());
+    }
+
+    /// Pins the divergence from `create_skill`/`generate_evals`: `eval_skill`
+    /// must be advertised even with no model configured at all, since its
+    /// `evals` (grading) analysis needs no `ADEPT_MODEL`. Uses the same
+    /// `ENV_LOCK` serialization as the other tests that mutate the
+    /// process-wide `ADEPT_MODEL` var, so it can't race them.
+    #[test]
+    fn tools_list_advertises_eval_skill_even_with_no_model_configured() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+        std::env::remove_var("ADEPT_BASE_URL");
+        std::env::remove_var("ADEPT_API_KEY");
+
+        let request = json!({ "jsonrpc": "2.0", "id": 20, "method": "tools/list" });
+        let response = handle_message(&request.to_string()).expect("expected a response");
+
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        let tools = parsed["result"]["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(
+            names.contains(&"eval_skill"),
+            "eval_skill must be advertised with no model configured: {names:?}"
+        );
+        assert!(
+            !names.contains(&"create_skill"),
+            "create_skill must stay gated: {names:?}"
+        );
+        assert!(
+            !names.contains(&"generate_evals"),
+            "generate_evals must stay gated: {names:?}"
+        );
+    }
+
+    /// A grading-only `eval_skill` call (no model configured, `results`
+    /// supplied) must succeed — this is the offline path the whole feature
+    /// exists to support.
+    #[test]
+    fn eval_skill_grading_only_call_succeeds_with_no_model_configured() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+        std::env::remove_var("ADEPT_BASE_URL");
+        std::env::remove_var("ADEPT_API_KEY");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill(dir.path(), "demo", "Does a demo thing. Use when demoing.");
+        std::fs::create_dir_all(dir.path().join("demo").join("evals")).unwrap();
+        std::fs::write(
+            dir.path().join("demo").join("evals").join("evals.jsonl"),
+            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        )
+        .unwrap();
+
+        let arguments = json!({
+            "path": path.to_str().unwrap(),
+            "results": [ { "case": 1, "response": "it is ok" } ],
+        });
+        let (text, is_error) = eval_skill_tool(&arguments);
+        assert!(!is_error, "grading-only eval_skill call failed: {text}");
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert!(parsed.get("triggering").is_none());
+        assert_eq!(parsed["evals"]["pass_rate"], 1.0);
+    }
+
+    /// `eval_skill` with `content` (no real skill directory) must grade
+    /// `contains` and report `file_exists`/`file_contains` as `skipped`
+    /// naming the missing directory — not as a pass, and not as an error.
+    #[test]
+    fn eval_skill_with_content_skips_file_assertions_naming_missing_directory() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+        std::env::remove_var("ADEPT_BASE_URL");
+        std::env::remove_var("ADEPT_API_KEY");
+
+        let arguments = json!({
+            "content": SAMPLE_SKILL,
+            "results": [ { "case": 1, "response": "it is ok" } ],
+            "evals": "does-not-matter.jsonl",
+        });
+
+        // Write the referenced dataset next to nothing real: use a temp dir
+        // so the dataset itself is readable, but `content` mode still has no
+        // real skill directory for `cwd`-relative file assertions.
+        let dir = tempfile::tempdir().unwrap();
+        let dataset_path = dir.path().join("evals.jsonl");
+        std::fs::write(
+            &dataset_path,
+            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[\
+             {\"kind\":\"contains\",\"value\":\"ok\"},\
+             {\"kind\":\"file_exists\",\"path\":\"out.txt\"}]}\n",
+        )
+        .unwrap();
+        let arguments = {
+            let mut arguments = arguments;
+            arguments["evals"] = json!(dataset_path.to_str().unwrap());
+            arguments
+        };
+
+        let (text, is_error) = eval_skill_tool(&arguments);
+        assert!(!is_error, "eval_skill with content failed: {text}");
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        let evals = &parsed["evals"];
+        assert_eq!(evals["assertions_checked"], 1);
+        assert_eq!(evals["assertions_met"], 1);
+        assert_eq!(evals["assertions_skipped"], 1);
+        assert!(
+            evals["skipped_reasons"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|reason| reason.contains("cwd")),
+            "skipped reason must name the missing directory: {evals:?}"
+        );
+        // Not reported as a pass: the file assertion being skipped must not
+        // silently look like it passed.
+        assert_eq!(evals["cases"][0]["assertions"][1]["outcome"], "skipped");
     }
 }

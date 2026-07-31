@@ -26,7 +26,7 @@
 //! names via a supplied working directory, never anything it spawns or
 //! discovers on its own.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -415,8 +415,10 @@ pub struct EvalBenchmarkReport {
     /// Total assertions skipped, across all graded results.
     pub assertions_skipped: usize,
     /// Skip reason to count, so a run that silently graded nothing is
-    /// visible rather than looking like a perfect score.
-    pub skipped_reasons: HashMap<String, usize>,
+    /// visible rather than looking like a perfect score. A `BTreeMap` so
+    /// rendering iterates in a stable (sorted-by-reason) order rather than
+    /// whatever order a `HashMap` happens to produce.
+    pub skipped_reasons: BTreeMap<String, usize>,
     /// Baseline arm's pass rate, present only when at least one `baseline`
     /// result was graded.
     pub baseline_pass_rate: Option<f64>,
@@ -1004,6 +1006,16 @@ mod tests {
                 .get("no exit code reported for command")
                 .copied(),
             Some(1)
+        );
+        // `skipped_reasons` is a `BTreeMap`, so with two or more distinct
+        // reasons the iteration order is deterministic (sorted by reason
+        // text) rather than whatever a `HashMap` happens to produce — this
+        // is what keeps a rendered report's skip-reason lines stable across
+        // runs instead of flaking.
+        let reasons: Vec<&str> = report.skipped_reasons.keys().map(String::as_str).collect();
+        assert_eq!(
+            reasons,
+            vec!["no cwd supplied", "no exit code reported for command"]
         );
     }
 

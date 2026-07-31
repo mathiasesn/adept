@@ -137,7 +137,15 @@ pub fn run(args: &EvalArgs, config: &AdeptConfig) -> i32 {
     if selection.contains("evals") {
         match grade_from_args(args, &args.path) {
             Ok(benchmark) => {
-                if benchmark.cases.iter().any(|case| !case.pass) {
+                // Only `Arm::Skill` cases count toward the exit code: a
+                // baseline arm is *expected* to fail (that's what makes lift
+                // meaningful), so a skill that passes every case must still
+                // exit `0` even when its baseline results are failures.
+                if benchmark
+                    .cases
+                    .iter()
+                    .any(|case| case.arm == adept::evals::Arm::Skill && !case.pass)
+                {
                     findings = true;
                 }
                 report.evals = Some(benchmark);
@@ -374,8 +382,9 @@ fn resolve_skill_file(path: &Path) -> Result<PathBuf, String> {
 /// skill's own directory: `path` itself if it's a directory, else its
 /// parent (falling back to `.`). Mirrors `adept::skillset`'s private
 /// `skill_directory` helper (not exported), which `evals/evals.jsonl`
-/// discovery is relative to.
-fn skill_directory(path: &Path) -> PathBuf {
+/// discovery is relative to. Shared with the MCP `eval_skill` tool
+/// (`commands::mcp`) so the two surfaces can't drift on this resolution.
+pub(crate) fn skill_directory(path: &Path) -> PathBuf {
     if path.is_dir() {
         path.to_path_buf()
     } else {
@@ -383,6 +392,45 @@ fn skill_directory(path: &Path) -> PathBuf {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."))
     }
+}
+
+/// Resolve the eval dataset path: `evals_override` if given, else
+/// `evals/evals.jsonl` relative to `skill_path`'s skill directory. Shared by
+/// the CLI (`--evals`) and the MCP `eval_skill` tool (`evals` argument).
+pub(crate) fn resolve_dataset_path(evals_override: Option<PathBuf>, skill_path: &Path) -> PathBuf {
+    evals_override.unwrap_or_else(|| {
+        skill_directory(skill_path)
+            .join("evals")
+            .join("evals.jsonl")
+    })
+}
+
+/// Read/validate/parse the eval dataset at `dataset_path` and grade
+/// `results` against it. Purely offline: no LLM client is touched anywhere
+/// in this path. Shared by `grade_from_args` (CLI, results read from a
+/// `--results` file) and the MCP `eval_skill` tool's `grade_inline`
+/// (results passed inline as JSON), so the read/validate/parse/grade
+/// sequence and its error wording can't drift between the two surfaces.
+pub(crate) fn grade_results(
+    results: &[adept::evals::CaseResult],
+    dataset_path: &Path,
+) -> Result<EvalBenchmarkReport, String> {
+    let dataset_text = std::fs::read_to_string(dataset_path).map_err(|err| {
+        format!(
+            "failed to read eval dataset {}: {err}",
+            dataset_path.display()
+        )
+    })?;
+    adept::evals::validate(&dataset_text)
+        .map_err(|err| format!("invalid eval dataset {}: {err}", dataset_path.display()))?;
+    let cases = adept::evals::parse_jsonl(&dataset_text).map_err(|err| {
+        format!(
+            "failed to parse eval dataset {}: {err}",
+            dataset_path.display()
+        )
+    })?;
+
+    Ok(adept::evals::grade(&cases, results))
 }
 
 /// Read `--results`, discover/read the eval dataset (`--evals` or
@@ -406,27 +454,8 @@ fn grade_from_args(args: &EvalArgs, skill_path: &Path) -> Result<EvalBenchmarkRe
         )
     })?;
 
-    let dataset_path = args.evals.clone().unwrap_or_else(|| {
-        skill_directory(skill_path)
-            .join("evals")
-            .join("evals.jsonl")
-    });
-    let dataset_text = std::fs::read_to_string(&dataset_path).map_err(|err| {
-        format!(
-            "failed to read eval dataset {}: {err}",
-            dataset_path.display()
-        )
-    })?;
-    adept::evals::validate(&dataset_text)
-        .map_err(|err| format!("invalid eval dataset {}: {err}", dataset_path.display()))?;
-    let cases = adept::evals::parse_jsonl(&dataset_text).map_err(|err| {
-        format!(
-            "failed to parse eval dataset {}: {err}",
-            dataset_path.display()
-        )
-    })?;
-
-    Ok(adept::evals::grade(&cases, &results))
+    let dataset_path = resolve_dataset_path(args.evals.clone(), skill_path);
+    grade_results(&results, &dataset_path)
 }
 
 /// A thin wrapper so tests can drive `eval_skill` with an injected
@@ -571,9 +600,16 @@ mod tests {
         assert!(!needs_llm, "an evals-only selection must not need an LLM");
     }
 
+    /// Pins that grading is fully offline: `grade_from_args` never reads
+    /// `ADEPT_MODEL` or any other `ADEPT_*` env var, and never resolves or
+    /// constructs an `LlmClient` — it's a pure read-two-files-and-grade
+    /// path. This used to be asserted by mutating the process-wide
+    /// `ADEPT_MODEL` env var, which raced with other tests in this binary
+    /// that set/remove the same var (e.g. `commands::mcp`'s tests); since
+    /// `grade_from_args` never looks at the environment at all, the
+    /// assertion holds without touching it.
     #[test]
     fn grade_from_args_runs_fully_offline_with_no_model_configured() {
-        std::env::remove_var("ADEPT_MODEL");
         let dir = tempfile::tempdir().unwrap();
         let skill_dir = dir.path().join("demo-skill");
         std::fs::create_dir_all(skill_dir.join("evals")).unwrap();

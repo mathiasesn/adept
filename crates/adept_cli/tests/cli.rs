@@ -301,10 +301,90 @@ fn eval_select_evals_omits_unselected_analysis_sections() {
         .assert()
         .code(1)
         .stdout(
-            predicate::str::contains("\"triggering\": null")
-                .and(predicate::str::contains("\"token_bloat\": null"))
-                .and(predicate::str::contains("\"overlaps\": null")),
+            predicate::str::contains("\"triggering\"")
+                .not()
+                .and(predicate::str::contains("\"token_bloat\"").not())
+                .and(predicate::str::contains("\"overlaps\"").not())
+                .and(predicate::str::contains("\"evals\"")),
         );
+}
+
+/// Finding 1's central regression: a skill that passes every case must exit
+/// `0` even though the baseline arm (which is *expected* to fail — that's
+/// what makes lift meaningful) has failing results. Exit code must be
+/// derived from `Arm::Skill` cases only, not from every `CaseReport`
+/// `grade` produces.
+#[test]
+fn eval_all_skill_cases_pass_with_failing_baseline_exits_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("demo");
+    std::fs::create_dir_all(skill_dir.join("evals")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: does a demo thing. Use when demoing things.\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        skill_dir.join("evals").join("evals.jsonl"),
+        "{\"schema_version\":1,\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+    )
+    .unwrap();
+    let results_path = dir.path().join("results.jsonl");
+    std::fs::write(
+        &results_path,
+        "{\"case\":1,\"response\":\"it is ok\"}\n\
+         {\"case\":1,\"response\":\"nope\",\"arm\":\"baseline\"}\n",
+    )
+    .unwrap();
+
+    adept()
+        .arg("eval")
+        .arg(skill_dir.join("SKILL.md"))
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(0)
+        .stdout(predicate::str::contains("pass rate: 100%"));
+}
+
+/// Complement of the above: one failing skill case must still exit `1`,
+/// baseline or no baseline.
+#[test]
+fn eval_one_failing_skill_case_exits_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("demo");
+    std::fs::create_dir_all(skill_dir.join("evals")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: does a demo thing. Use when demoing things.\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        skill_dir.join("evals").join("evals.jsonl"),
+        "{\"schema_version\":1,\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+    )
+    .unwrap();
+    let results_path = dir.path().join("results.jsonl");
+    std::fs::write(&results_path, "{\"case\":1,\"response\":\"nope\"}\n").unwrap();
+
+    adept()
+        .arg("eval")
+        .arg(skill_dir.join("SKILL.md"))
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("pass rate: 0%"));
 }
 
 #[test]

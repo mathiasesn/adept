@@ -22,17 +22,21 @@ pub struct EvalReport {
     /// The name of the skill this report is for.
     pub skill_name: String,
     /// Triggering-accuracy results, if that analysis was run.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub triggering: Option<TriggeringReport>,
     /// Token-bloat analysis, if that analysis was run.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub token_bloat: Option<TokenBloatReport>,
     /// Overlap/conflict adjudications against other skills in the same
     /// [`adept::SkillSet`], if that analysis was run. `None` when the
     /// analysis did not run at all; `Some(vec![])` when it ran and found no
     /// shortlisted overlaps — the two are rendered distinguishably.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub overlaps: Option<Vec<OverlapAdjudication>>,
     /// Eval-dataset grading against `evals/evals.jsonl` run results, if that
     /// analysis was run. `None` when no `--results` were supplied, distinct
     /// from a report that ran and found nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub evals: Option<adept::evals::EvalBenchmarkReport>,
 }
 
