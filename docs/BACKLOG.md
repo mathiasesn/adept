@@ -288,10 +288,94 @@ network latency, not CPU:
   the single-construction-site invariant is worth more than the duplicated
   option list.
 
+## External prior art: `huggingface/upskill`
+
+Recorded so this survey is not repeated. `huggingface/upskill` (Python,
+`uv`/`uvx`, built on fast-agent) generates and *empirically evaluates* agent
+skills: a teacher model writes a `SKILL.md`, a test generator produces
+synthetic cases, and a student model is run with and without the skill to
+measure whether the skill actually helped. Its pipeline is `generate` →
+`generate_tests` → `eval` → `runs`, its prompts live as three standalone
+"agent cards" (`skill_gen.md`, `test_gen.md`, `evaluator.md`), and its
+graders live in `verifiers.py` / `validators/`.
+
+The two projects are **complementary, not competing**: adept checks
+*conformance* (does this skill file follow the rules that correlate with
+working well) and never runs a skill; upskill measures *outcomes* and never
+checks frontmatter validity or token budgets. The single overlap is
+`adept score`, and it is the overlap where adept is weakest — `score`'s
+triggering accuracy is an LLM judge over synthetic prompts, a proxy for
+behaviour, where upskill measures behaviour directly.
+
+Ranked, with the caveat in items 1 and 2 read before starting either:
+
+1. **Deterministic verifiers as an `adept fix` accept gate.** upskill's
+   `verifiers.py` is ~150 lines of dumb, reliable grading — `contains`,
+   `file_exists`, `file_contains`, shell `command` (exit code, 60s timeout)
+   — plus a pluggable validator registry (a `register_validator("name")`
+   decorator), each returning `{passed, assertions_passed, assertions_total}`.
+   Today every adept LLM surface is judged by another LLM call; `fix`'s
+   accept/reject gate relies on re-linting alone. Deterministic assertions
+   would give it a gate that cannot itself hallucinate.
+   **Conflicts with a stated non-goal** — the shell `command` verifier is
+   "executing or sandbox-testing skill scripts" below. A narrowed version
+   (`contains` / `file_exists` / `file_contains` only, no process execution)
+   delivers most of the value and conflicts with nothing; the full version
+   needs the non-goal explicitly superseded, not quietly ignored. Decide
+   which before writing code.
+2. **Baseline / lift, reported as lift-per-token.** upskill's headline metric
+   is *skill lift*: pass rate with the skill minus pass rate without it,
+   computed automatically in single-model mode. `adept score` reports an
+   absolute F1 with no counterfactual, so a 0.95 does not tell you whether
+   the skill earns the context budget it spends. Pairing lift with the
+   existing token-bloat analysis gives lift-per-token, which is the number
+   that actually decides whether a skill should exist — and which neither
+   tool computes today. **Also conflicts with a stated non-goal**: a true
+   baseline comparison is a full agent-harness end-to-end eval, not a
+   prompt→trigger judgment. Same decision as item 1.
+3. **Run persistence and history.** upskill writes
+   `runs/<timestamp>/run_N/{run_metadata,run_result}.json` plus a
+   `batch_summary.json` and an aggregate `results.csv`, queryable via
+   `upskill runs`. `adept score` is fire-and-forget, so there is no way to
+   tell whether a `fix` improved anything. `PROMPT_VERSION` already exists in
+   `adept_score::prompts` precisely because scores drift between prompt
+   revisions — persisted runs keyed by that version would make the versioning
+   useful rather than just a warning label. Lowest-risk item here: new I/O in
+   `adept_cli`, nothing in the library stack, no non-goal touched.
+4. **Split the generator and judge models.** upskill separates skill
+   generation, test generation and evaluation into distinct roles with
+   distinct model flags and a documented fallback chain (CLI
+   `--test-gen-model` → config `test_gen_model` → `skill_generation_model`).
+   `adept fix` uses one model to both rewrite and screen. A
+   `[fix] model` / `[fix] judge_model` split would let a strong model propose
+   while a cheap one screens. Cheap: config surface plus plumbing through the
+   existing `resolve_llm_client` helper.
+   Note upskill keeps its prompts as external markdown files where adept
+   compiles them in — that part is *not* worth copying, since a single static
+   binary benefits from compiled-in prompts. Only the role split transfers.
+5. **Multi-model comparison (`--runs N`, repeated `-m`).** upskill defaults to
+   these because single-sample LLM eval is noise. adept's `--judge-samples` is
+   the same instinct, but there is no way to compare two models on one skill.
+   `&dyn LlmClient` is already the right seam, so this is mostly CLI surface.
+   Nice-to-have; only after 1–3.
+
+**Explicitly not worth taking:** skill *generation* (`upskill generate`).
+adept's leverage is that `check` and `fmt` are offline, deterministic and
+fast (~19.6ms/100 skills); generation is none of those, and adding it would
+put adept in competition with `skill-creator`-style tooling instead of
+serving it. The natural boundary is that upskill generates and adept
+enforces — the highest-value integration is documenting `adept check
+--format json` as a fast, free gate inside upskill's refine loop, run
+*before* the expensive eval, not achieving feature parity with it. The HF
+Jobs remote executor is likewise out of scope: adept has no orchestration
+story and should not grow one.
+
 ## Deferred by design
 
 From the spec's non-goals and constraints — recorded so they aren't
-rediscovered as bugs:
+rediscovered as bugs. Note that items 1 and 2 of the upskill survey above
+bear directly on the second and third bullets; adopting either in full is a
+design change to be argued, not a follow-up to be picked up:
 
 - Hosted registry / marketplace / index.
 - Executing or sandbox-testing skill scripts.
