@@ -374,16 +374,85 @@ alongside them, and `docs/MVP.md` where those non-goals originate.
    `&dyn LlmClient` is already the right seam, so this is mostly CLI surface.
    Nice-to-have; only after 1–3.
 
-**Explicitly not worth taking:** skill *generation* (`upskill generate`).
-adept's leverage is that `check` and `fmt` are offline, deterministic and
-fast (~19.6ms/100 skills); generation is none of those, and adding it would
-put adept in competition with `skill-creator`-style tooling instead of
-serving it. The natural boundary is that upskill generates and adept
-enforces — the highest-value integration is documenting `adept check
---format json` as a fast, free gate inside upskill's refine loop, run
-*before* the expensive eval, not achieving feature parity with it. The HF
-Jobs remote executor is likewise out of scope: adept has no orchestration
-story and should not grow one.
+~~**Explicitly not worth taking:** skill *generation* (`upskill generate`).~~
+**Superseded** by the `adept create` item below, which adopts generation as
+a first-class surface. The reasoning recorded here is retained because the
+*constraints* it names still bind the design: adept's leverage is that
+`check` and `fmt` are offline, deterministic and fast (~19.6ms/100 skills),
+and generation is none of those — so it must land as a separate, opt-in,
+network-using surface that leaves those two untouched, exactly as `score`
+and `fix` already do. The integration framing also still holds in reverse:
+`adept check --format json` remains the fast, free gate that belongs inside
+any generator's refine loop, including adept's own. The HF Jobs remote
+executor stays out of scope: adept has no orchestration story and should
+not grow one.
+
+## Planned surface: `adept create`
+
+A sixth surface, a sibling of `score` and `fix` rather than of `check` and
+`fmt`: generate a new skill from a description of the task it should cover.
+Where `fix` repairs an existing `SKILL.md` and `score` judges one, `create`
+produces one that did not exist. This reverses the "skill generation is not
+worth taking" conclusion recorded above; that paragraph is annotated
+accordingly.
+
+**Source of the authoring rules.** The intended model is a
+"writing-great-skills"-style authoring guide — the same body of guidance as
+the local `write-a-skill` skill. The specific file named when this item was
+requested (`skills/productivity/writing-great-skills/SKILL.md`) was not
+resolvable on this machine, so the rules below are drawn from that local
+equivalent and must be re-checked against the intended source before
+implementation. The substantive requirements it states:
+
+- Frontmatter is `name` + `description`; the description is the only thing
+  the agent sees when choosing a skill. Third person, ≤1024 chars, first
+  sentence what it does, second sentence "Use when [specific triggers]".
+- `SKILL.md` stays under ~100 lines; split into `REFERENCE.md` /
+  `EXAMPLES.md` when it grows past that, when content spans distinct
+  domains, or when advanced material is rarely needed. References stay one
+  level deep.
+- Bundle utility scripts when the operation is deterministic, would
+  otherwise be regenerated every time, or needs explicit error handling.
+- No time-sensitive information; consistent terminology; concrete examples.
+
+**Why this fits adept specifically.** Every one of those requirements is
+already a rule adept enforces or could enforce — description shape is the
+`SL2xx` family, body size is `SL3xx`, structure and broken references are
+`SL1xx`. That is the argument for adept owning generation rather than
+ceding it: adept is the only tool in this space that can *lint its own
+output before emitting it*. `create` should therefore not be a prompt that
+returns markdown. It should be a generate → `check` → repair loop that
+refuses to emit a skill its own linter rejects, reusing the accept/reject
+machinery `adept_fix` already has. A generator that guarantees a clean
+`adept check` is a materially different product from a generator that
+merely tends to produce good output.
+
+**Placement.** `adept_fix` is already the designated top-of-stack crate that
+may compose `adept_score` and `adept_fmt`; `create` needs the same three
+things (LLM transport, linting, canonicalization) plus a writer. Two
+options, and this is the open design question: a new `adept_create` crate
+alongside `adept_fix` at the top of the stack, or a module within
+`adept_fix` on the grounds that "LLM proposes, linter screens, writer
+commits" is one pipeline instantiated twice. The second is less code and
+keeps one accept-gate implementation; the first keeps a crate named after
+repair from also owning creation. Either way nothing in the library stack
+may depend on it, and `adept_cli` is the only consumer.
+
+**Constraints inherited, not renegotiated.** `create` calls the network, so
+it lives under the same rules as `score` and `fix`: `check` and `fmt` stay
+offline and side-effect-free; no test performs network I/O
+(`MockLlmClient`); exit codes keep their `0`/`1`/`2` meanings; writes are
+atomic. It also *writes new files into a directory the user names*, which
+is a wider blast radius than `fix`'s in-place rewrite of files it was
+pointed at — so it needs a preview-by-default mode with an explicit
+`--write`, mirroring `fix`, and it must refuse to overwrite an existing
+skill directory without an explicit opt-in.
+
+**Ordering.** Independent of the five upskill items above, but sequenced
+behind them in value: `create` produces skills, and items 1–2 are what
+would tell you whether the skills it produces are any good. Building
+generation before the lift measurement means shipping a generator with no
+way to evaluate it beyond its own linter.
 
 ## Deferred by design
 
