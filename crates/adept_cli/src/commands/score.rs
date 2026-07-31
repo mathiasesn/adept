@@ -1,10 +1,17 @@
 //! `adept score`.
 
+use std::sync::Arc;
+
 use adept::{Skill, SkillSet};
-use adept_score::ScoreOptions;
+use adept_score::{
+    CaptureSink, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ScoreOptions, ENV_BASE_URL,
+    ENV_MODEL,
+};
 
 use crate::cli::{OutputFormat, ScoreArgs};
-use crate::config::{build_runtime, resolve_llm_client, AdeptConfig};
+use crate::config::{
+    build_runtime, resolve_capture_dir, resolve_llm_client, value_source, AdeptConfig,
+};
 
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_USAGE_ERROR: i32 = 2;
@@ -36,13 +43,55 @@ pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
         .unwrap_or_default();
     let options = build_options(args, &resolved.model, tokenizer);
 
+    // Capture is opt-in and requested explicitly, so a failure to create
+    // the directory is a usage error rather than a silent skip.
+    let mut client = client;
+    let sink = match resolve_capture_dir(
+        args.capture_dir.as_deref(),
+        config.score.capture_dir.as_deref(),
+        config.origin_dir.as_deref(),
+    ) {
+        Some((dir, source)) => {
+            let metadata = capture_metadata(args, config, &resolved, tokenizer, &options, source);
+            match CaptureSink::new(&dir, metadata) {
+                Ok(sink) => {
+                    let sink = Arc::new(sink);
+                    client = client.with_capture(Arc::clone(&sink));
+                    Some(sink)
+                }
+                Err(err) => {
+                    eprintln!(
+                        "adept: error: failed to create capture directory {}: {err}",
+                        dir.display()
+                    );
+                    return EXIT_USAGE_ERROR;
+                }
+            }
+        }
+        None => None,
+    };
+
+    let exit_code = execute(args, &client, &skill, &skillset, &options);
+    if let Some(sink) = &sink {
+        sink.finalize(exit_code);
+    }
+    exit_code
+}
+
+/// The scoring call itself plus report rendering, split out of [`run`] so
+/// the capture sink can be finalised with the actual exit code.
+fn execute(
+    args: &ScoreArgs,
+    client: &OpenAiCompatClient,
+    skill: &Skill,
+    skillset: &[Skill],
+    options: &ScoreOptions,
+) -> i32 {
     let Some(runtime) = build_runtime() else {
         return EXIT_USAGE_ERROR;
     };
 
-    let report = runtime.block_on(adept_score::score_skill(
-        &client, &skill, &skillset, &options,
-    ));
+    let report = runtime.block_on(adept_score::score_skill(client, skill, skillset, options));
 
     match report {
         Ok(report) => {
@@ -63,6 +112,46 @@ pub fn run(args: &ScoreArgs, config: &AdeptConfig) -> i32 {
             EXIT_USAGE_ERROR
         }
     }
+}
+
+/// Describe the run for `run_metadata.json`: the resolved options plus,
+/// under `sources`, which layer supplied each of them. The API key is only
+/// ever reported as a boolean — its value is never read here.
+fn capture_metadata(
+    args: &ScoreArgs,
+    config: &AdeptConfig,
+    resolved: &ResolvedLlmConfig,
+    tokenizer: adept::Tokenizer,
+    options: &ScoreOptions,
+    capture_dir_source: &str,
+) -> RunMetadata {
+    let mut metadata = RunMetadata::new("score");
+    metadata.model = Some(resolved.model.clone());
+    metadata.base_url = Some(resolved.base_url.clone());
+    metadata.tokenizer = Some(tokenizer.to_string());
+    metadata.api_key_present = resolved.api_key.is_some();
+    metadata.target_path = Some(args.path.display().to_string());
+    if let Some(triggering) = options.triggering.as_ref() {
+        metadata.seed = triggering.seed;
+        metadata.num_prompts = Some(triggering.num_prompts);
+        metadata.judge_samples = Some(triggering.judge_samples);
+    }
+
+    let sources = serde_json::json!({
+        "model": value_source(args.model.is_some(), config.score.model.is_some(), ENV_MODEL),
+        "base_url": value_source(
+            args.base_url.is_some(),
+            config.score.base_url.is_some(),
+            ENV_BASE_URL,
+        ),
+        "tokenizer": value_source(args.tokenizer.is_some(), config.score.tokenizer.is_some(), ""),
+        "num_prompts": value_source(args.num_prompts.is_some(), false, ""),
+        "seed": value_source(args.seed.is_some(), false, ""),
+        "judge_samples": value_source(args.judge_samples.is_some(), false, ""),
+        "capture_dir": capture_dir_source,
+    });
+    metadata.extra.insert("sources".to_string(), sources);
+    metadata
 }
 
 fn build_options(args: &ScoreArgs, model: &str, tokenizer: adept::Tokenizer) -> ScoreOptions {
@@ -139,6 +228,7 @@ mod tests {
             seed: Some(42),
             judge_samples: Some(3),
             tokenizer: None,
+            capture_dir: None,
         };
         let options = build_options(&args, "test-model", adept::Tokenizer::default());
         assert_eq!(options.model, "test-model");

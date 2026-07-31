@@ -1,11 +1,18 @@
 //! `adept fix`.
 
+use std::sync::Arc;
+
 use adept::{Skill, SkillSet};
 use adept_fix::{fix_skill, write_all_transactionally, FixOptions, FixReport, DEFAULT_MAX_ROUNDS};
+use adept_score::{
+    CaptureSink, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ENV_BASE_URL, ENV_MODEL,
+};
 
 use crate::cli::{FixArgs, OutputFormat};
 use crate::commands::check::apply_select_ignore;
-use crate::config::{build_runtime, resolve_llm_client, AdeptConfig};
+use crate::config::{
+    build_runtime, resolve_capture_dir, resolve_llm_client, value_source, AdeptConfig,
+};
 
 /// Exit code contract: 0 = clean/no pending changes, 1 = changes pending
 /// (`--check`), 2 = usage/I/O error.
@@ -60,13 +67,58 @@ pub fn run(args: &FixArgs, config: &AdeptConfig, quiet: bool) -> i32 {
         return EXIT_USAGE_ERROR;
     }
 
+    // Capture is opt-in and requested explicitly, so a failure to create
+    // the directory is a usage error rather than a silent skip.
+    let mut client = client;
+    let sink = match resolve_capture_dir(
+        args.capture_dir.as_deref(),
+        config.fix.capture_dir.as_deref(),
+        config.origin_dir.as_deref(),
+    ) {
+        Some((dir, source)) => {
+            let metadata = capture_metadata(args, config, &resolved, tokenizer, &options, source);
+            match CaptureSink::new(&dir, metadata) {
+                Ok(sink) => {
+                    let sink = Arc::new(sink);
+                    client = client.with_capture(Arc::clone(&sink));
+                    Some(sink)
+                }
+                Err(err) => {
+                    eprintln!(
+                        "adept: error: failed to create capture directory {}: {err}",
+                        dir.display()
+                    );
+                    return EXIT_USAGE_ERROR;
+                }
+            }
+        }
+        None => None,
+    };
+
+    let exit_code = execute(args, quiet, &client, &skills, &options);
+    if let Some(sink) = &sink {
+        sink.finalize(exit_code);
+    }
+    exit_code
+}
+
+/// The fix rounds themselves plus report rendering and writing, split out
+/// of [`run`] so the capture sink can be finalised with the actual exit
+/// code.
+fn execute(
+    args: &FixArgs,
+    quiet: bool,
+    client: &OpenAiCompatClient,
+    skills: &[Skill],
+    options: &FixOptions,
+) -> i32 {
     let Some(runtime) = build_runtime() else {
         return EXIT_USAGE_ERROR;
     };
 
     let mut reports: Vec<FixReport> = Vec::new();
-    for skill in &skills {
-        let report = runtime.block_on(fix_skill(&client, skill, &options));
+    for skill in skills {
+        let report = runtime.block_on(fix_skill(client, skill, options));
         match report {
             Ok(report) => reports.push(report),
             Err(err) => {
@@ -172,6 +224,50 @@ impl Mode {
     }
 }
 
+/// Describe the run for `run_metadata.json`: the resolved options plus,
+/// under `sources`, which layer supplied each of them. The API key is only
+/// ever reported as a boolean — its value is never read here.
+fn capture_metadata(
+    args: &FixArgs,
+    config: &AdeptConfig,
+    resolved: &ResolvedLlmConfig,
+    tokenizer: adept::Tokenizer,
+    options: &FixOptions,
+    capture_dir_source: &str,
+) -> RunMetadata {
+    let mut metadata = RunMetadata::new("fix");
+    metadata.model = Some(resolved.model.clone());
+    metadata.base_url = Some(resolved.base_url.clone());
+    metadata.tokenizer = Some(tokenizer.to_string());
+    metadata.api_key_present = resolved.api_key.is_some();
+    metadata.max_rounds = Some(options.max_rounds);
+    metadata.target_path = Some(
+        args.paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
+
+    let sources = serde_json::json!({
+        "model": value_source(args.model.is_some(), config.fix.model.is_some(), ENV_MODEL),
+        "base_url": value_source(
+            args.base_url.is_some(),
+            config.fix.base_url.is_some(),
+            ENV_BASE_URL,
+        ),
+        "tokenizer": value_source(args.tokenizer.is_some(), config.fix.tokenizer.is_some(), ""),
+        "max_rounds": value_source(
+            args.max_rounds.is_some(),
+            config.fix.max_rounds.is_some(),
+            "",
+        ),
+        "capture_dir": capture_dir_source,
+    });
+    metadata.extra.insert("sources".to_string(), sources);
+    metadata
+}
+
 fn build_options(
     args: &FixArgs,
     config: &AdeptConfig,
@@ -240,6 +336,7 @@ mod tests {
             max_rounds: None,
             tokenizer: None,
             format: OutputFormat::Human,
+            capture_dir: None,
         }
     }
 

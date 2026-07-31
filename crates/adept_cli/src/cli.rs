@@ -17,8 +17,17 @@ pub struct Cli {
     pub no_color: bool,
 
     /// Suppress non-essential output (summary lines, progress).
+    ///
+    /// Independent of `-v`: `--quiet` only trims *stdout* results, while
+    /// `-v` only adds *stderr* diagnostics, so `-q -vv` is meaningful.
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Increase logging verbosity on stderr (`-v` info, `-vv` debug,
+    /// `-vvv` trace). Off by default; `ADEPT_LOG` overrides this with
+    /// `EnvFilter` directive syntax.
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
 
     #[command(subcommand)]
     pub command: Command,
@@ -153,6 +162,13 @@ pub struct ScoreArgs {
     /// tokenizer`).
     #[arg(long, value_enum)]
     pub tokenizer: Option<TokenizerArg>,
+
+    /// Write verbatim request/response artifacts for every LLM call into a
+    /// new timestamped subfolder of this directory. Overrides the config
+    /// file's `[score] capture_dir`; a relative path resolves against the
+    /// current working directory.
+    #[arg(long, value_name = "DIR")]
+    pub capture_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -203,4 +219,11 @@ pub struct FixArgs {
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     pub format: OutputFormat,
+
+    /// Write verbatim request/response artifacts for every LLM call into a
+    /// new timestamped subfolder of this directory. Overrides the config
+    /// file's `[fix] capture_dir`; a relative path resolves against the
+    /// current working directory.
+    #[arg(long, value_name = "DIR")]
+    pub capture_dir: Option<PathBuf>,
 }

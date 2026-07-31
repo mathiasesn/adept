@@ -7,6 +7,7 @@
 mod cli;
 mod commands;
 mod config;
+mod logging;
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -18,6 +19,9 @@ use config::AdeptConfig;
 
 fn main() {
     let cli = Cli::parse();
+    // Before dispatch, and for every subcommand including `mcp` — the
+    // subscriber writes to stderr, so it cannot disturb MCP's stdout.
+    logging::init(cli.verbose);
     let exit_code = run(&cli);
     std::process::exit(exit_code);
 }
