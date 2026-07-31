@@ -396,36 +396,82 @@ produces one that did not exist. This reverses the "skill generation is not
 worth taking" conclusion recorded above; that paragraph is annotated
 accordingly.
 
-**Source of the authoring rules.** The intended model is a
-"writing-great-skills"-style authoring guide — the same body of guidance as
-the local `write-a-skill` skill. The specific file named when this item was
-requested (`skills/productivity/writing-great-skills/SKILL.md`) was not
-resolvable on this machine, so the rules below are drawn from that local
-equivalent and must be re-checked against the intended source before
-implementation. The substantive requirements it states:
+**Source of the authoring rules.** `mattpocock/skills`,
+`skills/productivity/writing-great-skills/SKILL.md` (read 2026-07-31; it is
+itself user-invoked, `disable-model-invocation: true`, and discloses its
+definitions to a sibling `GLOSSARY.md`). Its thesis: a skill exists to
+wrangle determinism out of a stochastic system, and **predictability** —
+the agent taking the same *process* every run, not producing the same
+output — is the root virtue every other lever serves. The levers:
 
-- Frontmatter is `name` + `description`; the description is the only thing
-  the agent sees when choosing a skill. Third person, ≤1024 chars, first
-  sentence what it does, second sentence "Use when [specific triggers]".
-- `SKILL.md` stays under ~100 lines; split into `REFERENCE.md` /
-  `EXAMPLES.md` when it grows past that, when content spans distinct
-  domains, or when advanced material is rarely needed. References stay one
-  level deep.
-- Bundle utility scripts when the operation is deterministic, would
-  otherwise be regenerated every time, or needs explicit error handling.
-- No time-sensitive information; consistent terminology; concrete examples.
+- **Invocation is a two-way choice with a cost on each side.** A
+  model-invoked skill keeps a trigger-bearing `description` and pays
+  *context load* (the description sits in the window every turn); a
+  user-invoked skill sets `disable-model-invocation: true`, pays zero
+  context load, and spends *cognitive load* instead — the human becomes the
+  index. Model-invocation is warranted only when the agent or another skill
+  must reach the skill unaided.
+- **The description carries triggers, not identity.** Front-load the
+  leading word; one trigger per **branch**; synonyms renaming a single
+  branch are duplication; cut anything the body already says.
+- **Information hierarchy**, a three-rung ladder: in-skill *step* (ordered
+  action, ending on a **completion criterion** that must be checkable and
+  often exhaustive), in-skill *reference* (consulted on demand; a flat
+  peer-set is legitimate, not a smell), and *external reference* pushed
+  behind a **context pointer** whose wording — not its target — decides how
+  reliably the agent reaches it. Branching is the disclosure test: inline
+  what every branch needs, disclose what only some reach.
+- **Split only when the cut earns it**, by invocation (a distinct leading
+  word deserving its own trigger) or by sequence (hiding post-completion
+  steps that tempt the agent to rush the current one).
+- **Pruning**: single source of truth, relevance, and a sentence-by-sentence
+  **no-op** test — delete the whole sentence rather than trim it.
+- **Leading words**: compact concepts already in pretraining (*tight*,
+  *red*, *fog of war*) that collapse a restated triad into one token and
+  anchor behaviour by recruiting priors the model already holds.
+- **Failure modes** to diagnose against: premature completion, duplication,
+  sediment, sprawl, no-op, and **negation** (steering by prohibition
+  backfires — prompt the positive).
 
-**Why this fits adept specifically.** Every one of those requirements is
-already a rule adept enforces or could enforce — description shape is the
-`SL2xx` family, body size is `SL3xx`, structure and broken references are
-`SL1xx`. That is the argument for adept owning generation rather than
-ceding it: adept is the only tool in this space that can *lint its own
-output before emitting it*. `create` should therefore not be a prompt that
-returns markdown. It should be a generate → `check` → repair loop that
-refuses to emit a skill its own linter rejects, reusing the accept/reject
-machinery `adept_fix` already has. A generator that guarantees a clean
-`adept check` is a materially different product from a generator that
-merely tends to produce good output.
+**Correcting the earlier draft.** This item previously stood in for the
+above with the local `write-a-skill` skill, and claimed every requirement
+was already an adept rule or could be. Against the real source that claim
+is **wrong**, and the difference matters enough to state plainly. The
+substituted guide was a mechanical checklist (≤100 lines, ≤1024-char
+description, "Use when…" phrasing, when to bundle scripts) — none of which
+appears in the real skill, which is instead almost entirely *editorial
+judgment*: is this sentence a no-op, is this the right rung of the ladder,
+is this word doing pretraining work. Judgment is precisely what a
+deterministic linter cannot check, so the honest split is:
+
+- **Already covered by existing rules.** Sprawl is `SL3xx` (token budget);
+  broken context pointers are `SL104`; cross-skill duplication is
+  `SL402`/`SL403`.
+- **New, and genuinely lintable.** An *invocation-mode coherence* rule is
+  the strongest candidate: `disable-model-invocation: true` alongside a
+  description written with model-facing trigger phrasing ("Use when…") is a
+  flat contradiction the skill names explicitly, and it is mechanically
+  detectable. `disable-model-invocation` already parses — unknown
+  frontmatter keys land in `Skill::extra` (`parser.rs:156`), so the field is
+  readable today without a parser change. Negation is a plausible Info-level
+  heuristic ("don't"/"never" in imperative position). Intra-skill
+  duplication is a weaker but real candidate; adept only compares *across*
+  skills today.
+- **Not lintable, and should not be faked.** No-ops, leading-word strength,
+  ladder placement, completion-criterion sharpness. These belong to the LLM
+  surfaces — and this is the actual argument for `create`: the most valuable
+  half of skill-authoring guidance is judgment adept can only apply while
+  *writing*, not while checking.
+
+**Why this fits adept specifically.** adept is the only tool in this space
+that can lint its own output before emitting it. `create` should therefore
+not be a prompt that returns markdown; it should be a generate → `check` →
+repair loop that refuses to emit a skill its own linter rejects, reusing
+the accept/reject machinery `adept_fix` already has. Note the honest bound
+from the split above: a clean `adept check` proves the mechanical tier
+only, and the guide's own emphasis lies mostly outside it. `create` is
+worth building because the generation prompt can carry the judgment the
+linter cannot — not because the linter validates it.
 
 **Placement.** `adept_fix` is already the designated top-of-stack crate that
 may compose `adept_score` and `adept_fmt`; `create` needs the same three
