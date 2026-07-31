@@ -134,8 +134,9 @@ flags:
 | `ADEPT_API_KEY`     | *(none)*      | Bearer token, if the endpoint needs one.  |
 
 Also: `--num-prompts`, `--seed`, `--judge-samples`, `--format human|json`,
-and `--tokenizer o200k-base|cl100k-base` (default `o200k-base`; overrides
-the config file's `[score] tokenizer`) for the token-bloat analysis.
+`--tokenizer o200k-base|cl100k-base` (default `o200k-base`; overrides
+the config file's `[score] tokenizer`) for the token-bloat analysis, and
+`--capture-dir <DIR>` (see [Logging and capture](#logging-and-capture)).
 
 If no model can be resolved, `adept score` exits `2` with an actionable
 message instead of making a network call:
@@ -174,6 +175,7 @@ accepted
 | `--select` / `--ignore` | Restrict which rule codes/names are attempted, same as `check`. |
 | `--max-rounds <n>` | Bound the fix/re-lint retry loop (default `2`).          |
 | `--model <M>` / `--base-url <U>` | LLM overrides, resolved against `[fix]`, not `[score]`. |
+| `--capture-dir <DIR>` | Save the raw request/response of every LLM call (see below). |
 
 Uses the same `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY`
 environment variables and `--model`/`--base-url` flags as `adept score`,
@@ -244,18 +246,58 @@ line-width = 100
 model = "gpt-4o-mini"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
+capture_dir = ".adept-capture"   # off by default; gitignore it
 
 [fix]
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"  # or "cl100k_base"
 max_rounds = 2             # falls back to adept_fix::DEFAULT_MAX_ROUNDS
+capture_dir = ".adept-capture"   # independent of [score] capture_dir
 ```
 
 `[fix]` is fully independent of `[score]` — set both if you want `fix` and
 `score` to use different models.
 
 Precedence: CLI flag > config file value > built-in default.
+
+A relative `capture_dir` in `adept.toml` resolves against the directory
+containing that `adept.toml`; a relative `--capture-dir` resolves against
+your current directory.
+
+## Logging and capture
+
+`-v` turns on diagnostic logging, which always goes to **stderr** — stdout
+stays reserved for results (and, under `adept mcp`, for JSON-RPC only):
+
+```console
+$ adept fix path/to/skill/SKILL.md --diff -vv 2> run.log
+```
+
+`-v` is info, `-vv` debug (full request and response bodies for every LLM
+call), `-vvv` trace. It is a global flag, accepted by every subcommand.
+`ADEPT_LOG` overrides it with
+[`EnvFilter`](https://docs.rs/tracing-subscriber) directive syntax, e.g.
+`ADEPT_LOG=adept_score::client=trace`. With no `-v` and no `ADEPT_LOG`,
+nothing is logged at all.
+
+For anything you need to keep, use `--capture-dir` on `score` or `fix`
+instead of scraping the log. Each invocation writes a timestamped folder
+holding the verbatim request and response of every LLM call, plus enough
+metadata (model, base URL, prompt version, adept version, resolved
+options, exit code) to identify the run later:
+
+```console
+$ adept fix path/to/skill/SKILL.md --diff --capture-dir ./cap
+$ ls cap/2026_07_31_14_22_07/
+run_metadata.json  call_0001/  call_0002/
+```
+
+Bodies are written on receipt and never truncated, so malformed and
+non-2xx responses are captured too. Runs only ever append — a previous
+capture is never overwritten. Your API key appears in neither layer.
+Captures contain full prompts and model output, so point `capture_dir` at
+a gitignored path.
 
 ## Rules
 

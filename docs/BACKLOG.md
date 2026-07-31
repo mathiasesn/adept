@@ -311,3 +311,26 @@ rediscovered as bugs:
   responses shaped by hand — a real model's JSON (fenced, truncated, or
   ignoring the companion-edit contract) is the untested input class. Run it
   with the default preview mode first, not `--write`.
+
+## Tracing & capture follow-ups
+
+Recorded 2026-07-31, from `specs/cli-tracing.md`.
+
+- **`crates/adept` insta snapshots bake an absolute path.** The rule snapshots
+  embed `/home/mathias/code/adept/...` as the diagnostic path, so all 21
+  rule-snapshot tests fail in any git worktree (and would fail on any other
+  machine or in CI under a different checkout root). The fix is an insta
+  path filter (`insta::with_settings!` + a `filters` entry rewriting the
+  checkout prefix) or emitting fixture-relative paths in the snapshot
+  harness. **Do not "fix" this by running `cargo insta accept` from a
+  worktree** — that bakes the worktree path in and breaks the main checkout
+  instead. Until then, treat those 21 failures as environmental when working
+  outside the primary clone.
+- **`CapturedCall::step` is always `None`.** The field exists to record which
+  logical step issued a call (prompt generation vs. judge vs. fix round N),
+  which is what makes a capture directory readable without the shell history.
+  `OpenAiCompatClient` cannot fill it in: it sees only a request body, and the
+  step context lives up in `adept_score::triggering` / `adept_fix`. Threading
+  it down — a span, an explicit argument on the client call, or a
+  `tracing::Span` field the sink reads — is a follow-up. Until it lands, a
+  reader must infer the step from the call ordering and the prompt content.

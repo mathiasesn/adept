@@ -15,9 +15,9 @@ It is **not** a substitute for three documents that already exist and stay autho
 | `docs/RULES.md` | The per-rule reference (`SL001`–`SL403`): what each rule flags and how to fix it. Machine-checked against the registry. |
 | `docs/BACKLOG.md` | Known gaps and deliberate deferrals. Check here before "discovering" a bug. |
 
-Sections 2–7 are universal; 8–10 cover the CLI and library surfaces; 11–14 cover the rule engine, MCP contract, testing conventions, and known divergences. Section 15 is the short list of things not to violate.
+Sections 2–7 are universal; 8–10 cover the CLI and library surfaces; 11–14 cover the rule engine, MCP contract, testing conventions, and known divergences; 15 covers observability and secret handling. Section 16 is the short list of things not to violate.
 
-**Update this file when**: a crate is added or a crate boundary moves, a new dependency with architectural weight lands, the rule-registration or config-precedence mechanism changes, or a hard invariant in section 15 changes.
+**Update this file when**: a crate is added or a crate boundary moves, a new dependency with architectural weight lands, the rule-registration or config-precedence mechanism changes, or a hard invariant in section 16 changes.
 
 ## 2. Overview
 
@@ -33,7 +33,7 @@ The shape is modelled on ruff: stable rule codes, `path:line:col: CODE message` 
 - **`adept fix`** — LLM-assisted lint autofix for `FixKind::Llm` diagnostics (`SL206`, `SL301`, `SL302`). Preview-by-default; `--write` applies.
 - **`adept mcp`** — a JSON-RPC 2.0 stdio MCP server exposing `check_skill`, `format_skill`, and (conditionally) `score_skill`.
 
-Architecturally it is a **cargo virtual workspace of four libraries and one binary**, with a strict dependency direction: everything depends on the core crate, nothing depends on the CLI, and `adept_fix` sits at the top of the stack, composing its siblings (see the amended rule in §15).
+Architecturally it is a **cargo virtual workspace of four libraries and one binary**, with a strict dependency direction: everything depends on the core crate, nothing depends on the CLI, and `adept_fix` sits at the top of the stack, composing its siblings (see the amended rule in §16).
 
 ```
 adept_cli  (bin: `adept`)
@@ -44,7 +44,7 @@ adept_cli  (bin: `adept`)
   └── adept ◄──────────────────────┘   (core: data model, parser, diagnostics, rule engine, tokenizer)
 ```
 
-`adept_fmt` and `adept_score` do not know about each other. `adept_fix` deliberately depends on both (reusing `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather than duplicating them — see §15). Only `adept_cli` composes all of them into the binary.
+`adept_fmt` and `adept_score` do not know about each other. `adept_fix` deliberately depends on both (reusing `adept_score`'s `LlmClient` stack and `adept_fmt`'s canonicalization rather than duplicating them — see §16). Only `adept_cli` composes all of them into the binary.
 
 ## 3. Technology Stack
 
@@ -66,6 +66,9 @@ Versions are declared once in the root `[workspace.dependencies]` and referenced
 | `async-trait` | 0.1 | `LlmClient` trait object |
 | `owo-colors` | 4 | Terminal color in diagnostic rendering |
 | `similar` | 2 | Unified diff for `fmt --check` / `--diff` |
+| `tracing` | 0.1 | Diagnostic events. In `adept_score` (the `send_once` funnel) — libraries emit, never subscribe |
+| `tracing-subscriber` | 0.3 (env-filter) | **`adept_cli` only.** The one global subscriber, installed in `main` — see §16 |
+| `jiff` | 0.2 | RFC 3339 timestamps and the timestamped capture folder name (`adept_score` capture) |
 | `insta` / `criterion` / `proptest` / `assert_cmd` / `predicates` / `tempfile` | dev-only | Snapshots, benchmarks, property tests, CLI integration tests |
 
 Notably **absent by design**: no `rmcp` MCP SDK (the JSON-RPC transport is hand-rolled — see §12), and no `rayon` (parallelism is a recorded deferral, see §14).
@@ -126,7 +129,7 @@ crates/adept_score/        LLM SCORING — depends on adept; async throughout
 
 crates/adept_fix/          LLM-ASSISTED LINT AUTOFIX — depends on adept, adept_score (LlmClient),
                             and adept_fmt (canonicalization); the one crate allowed to depend on
-                            both siblings — see the amended dependency rule in §15
+                            both siblings — see the amended dependency rule in §16
   src/
     lib.rs                 FixOptions, FixError, FixReport, `fix_skill` (the single entry point)
     candidate.rs            FixCandidate, FixResponse (model JSON), companion-path sandboxing
@@ -214,23 +217,35 @@ line-width = 100
 model = "gpt-4o-mini"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"
+capture_dir = ".adept-capture"  # off by default; gitignore it
 
 [fix]                         # FixFileConfig, CLI-local; fully independent of [score]
 model = "gpt-4o"
 base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"
 max_rounds = 2                 # falls back to adept_fix::DEFAULT_MAX_ROUNDS
+capture_dir = ".adept-capture"  # independent of [score] capture_dir
 ```
 
-`[lint]` uses `snake_case` keys (serde default on `LintConfig`); `[fmt]` uses `kebab-case` (`#[serde(rename_all = "kebab-case")]`). `[score]` and `[fix]` (`ScoreFileConfig`/`FixFileConfig`) have **no** `rename_all` attribute, so despite what an earlier revision of this table showed, their keys are plain Rust field names (`base_url`, not `base-url`) — verify against the struct, not this table, before trusting either. This inconsistency is real — match the existing casing of the table you are editing. `[fix]` never falls back to `[score]` or vice versa; the only shared fallback between them is the `ADEPT_*` environment variables below.
+`[lint]` uses `snake_case` keys (serde default on `LintConfig`); `[fmt]` uses `kebab-case` (`#[serde(rename_all = "kebab-case")]`). `[score]` and `[fix]` (`ScoreFileConfig`/`FixFileConfig`) have **no** `rename_all` attribute, so despite what an earlier revision of this table showed, their keys are plain Rust field names (`base_url`, not `base-url`) — verify against the struct, not this table, before trusting either. This inconsistency is real — match the existing casing of the table you are editing. `[fix]` never falls back to `[score]` or vice versa; the only shared fallback between them is the `ADEPT_*` environment variables below. **`capture_dir` follows this same independence** — a `[score] capture_dir` never applies to `adept fix`, and vice versa (pinned by `config.rs::capture_dir_sections_do_not_cross_fall_back`).
 
-**Environment variables** (LLM-backed commands only — `score` and `fix` — resolved in `adept_score::LlmConfig::resolve`):
+**Capture directory resolution** (`config.rs::resolve_capture_dir`, used by `score` and `fix`). Precedence is the standard **`--capture-dir` flag > `adept.toml` `capture_dir` > built-in default (off)**, but the two layers anchor a *relative* path differently:
+
+| Source | Relative path resolves against |
+|---|---|
+| `--capture-dir` | the process CWD (passed through untouched; the OS resolves it) |
+| `[score]`/`[fix]` `capture_dir` | the directory containing the `adept.toml` that supplied it |
+
+The config anchor comes from `AdeptConfig::origin_dir`, which is `#[serde(skip)]` — it is stamped by the loader, never deserialized, so a hostile `adept.toml` cannot redirect writes by declaring `origin_dir` itself. With no value from either layer, capture is off and nothing is written.
+
+**Environment variables** (`ADEPT_LOG` applies to every subcommand; the rest are LLM-backed commands only — `score` and `fix` — resolved in `adept_score::LlmConfig::resolve`):
 
 | Var | Flag | Purpose |
 |---|---|---|
 | `ADEPT_MODEL` | `--model` | Model identifier. Required — without it `score`/`fix` exits 2 and the MCP `score_skill` tool is not advertised. |
 | `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1` |
-| `ADEPT_API_KEY` | *(none)* | Bearer token, if the endpoint requires one. Never accepted as a flag. |
+| `ADEPT_API_KEY` | *(none)* | Bearer token, if the endpoint requires one. Never accepted as a flag. Held as a `RedactedString` — see §16. |
+| `ADEPT_LOG` | `-v`/`-vv`/`-vvv` | `EnvFilter` directive syntax (e.g. `adept_score::client=trace`). Overrides the `-v` count wholesale rather than raising it. Adept's own namespace, not `RUST_LOG`. |
 
 There are no compile-time feature flags. `LintConfig`'s numeric thresholds each carry a doc comment justifying the specific number — **keep that rationale attached if you change a default.**
 
@@ -238,7 +253,7 @@ There are no compile-time feature flags. `LintConfig`'s numeric thresholds each 
 
 `main.rs` parses with clap, resolves config from the *first* target path, dispatches to `commands::<name>::run`, and calls `std::process::exit` with the returned code. Command functions return `i32` — they never exit or panic themselves.
 
-Global flags: `--config <PATH>`, `--no-color`, `-q/--quiet`. Color is enabled only when `!no_color && stdout().is_terminal()`, computed once in `run()` and threaded down.
+Global flags: `--config <PATH>`, `--no-color`, `-q/--quiet`, `-v/--verbose` (repeatable; see §15). `--quiet` and `-v` are independent — `--quiet` trims *stdout* results, `-v` adds *stderr* diagnostics, so `-q -vv` is meaningful. Color is enabled only when `!no_color && stdout().is_terminal()`, computed once in `run()` and threaded down.
 
 **Exit code contract** — this is a public API, do not change it:
 
@@ -254,6 +269,7 @@ Each command module re-declares its own `EXIT_*` consts. Conventions per command
 - **`fmt`**: `--check` (diff + exit 1), `--diff` (diff, exit 0), `--line-width`. Writes are **atomic**: temp file `.{name}.adept-tmp` in the same directory, `sync_all`, then `rename`. A failed format never clobbers the original.
 - **`score`**: builds its own `tokio::runtime::Runtime` and calls `block_on`. `adept_score` never creates a runtime.
 - **`fix`**: LLM-assisted autofix for `FixKind::Llm` diagnostics. **Preview by default** — computes and prints a `FixReport` (rendered summary or unified diff via `--diff`) without touching disk; `--write` applies pending files via `adept_fix::write_all_transactionally`, `--check` exits `1` if any skill has pending changes, printing the same diff `--diff` would (matching `fmt --check`). `--select`/`--ignore` restrict which diagnostics are attempted; `--max-rounds` bounds the fix/re-lint loop (default `adept_fix::DEFAULT_MAX_ROUNDS = 2`). Also builds its own `tokio::runtime::Runtime`, same as `score`.
+- **`score` and `fix` additionally take `--capture-dir`** (§15), resolved before any request is issued so a bad directory is exit 2, not a silent skip.
 - **`mcp`**: no flags; reads stdin until EOF.
 
 **Output**: diagnostics and reports go to stdout; every error message goes to stderr prefixed `adept: error: `. The `--quiet` flag suppresses only summary/progress lines, never diagnostics.
@@ -356,7 +372,9 @@ Other contract points:
 
 **No test may perform network I/O.** `adept_score` tests use `MockLlmClient` (`with_texts` seeds a FIFO queue of scripted responses); the module doc states this as a rule. `adept_cli`'s scoring test drives `run_with_client`, which exists solely as a `#[cfg(test)]` seam taking `&dyn LlmClient`.
 
-**CLI tests** use `assert_cmd` + `predicates` against `tests/fixtures/{clean-skill,defective-skill}`.
+**CLI tests** use `assert_cmd` + `predicates` against `tests/fixtures/{clean-skill,defective-skill}`. `tests/tracing.rs` is the guard for §15: it drives the real binary under `-vvv` and `ADEPT_LOG=trace` and asserts MCP stdout stays pure JSON-RPC and byte-identical, that `check`/`fmt --check` output is unaffected by the logging layer (and writes nothing to stderr by default), and that an uncreatable `--capture-dir` exits 2. It resolves the capture sink before any request is issued, so it needs no network.
+
+**Known environmental failure**: the `crates/adept` rule snapshots embed the absolute checkout path, so all 21 fail when run from a git worktree. Do not `cargo insta accept` from a worktree — see `docs/BACKLOG.md`.
 
 **`docs_test.rs`** asserts every registered rule code appears in `docs/RULES.md`. If you add a rule and skip the docs, CI fails.
 
@@ -374,13 +392,43 @@ Read `docs/BACKLOG.md` for the full list. The three worth knowing before you wri
 
 **Performance work is deliberately not done**, since `check` runs ~20ms against a 1s target: skill discovery and the per-skill lint loop are sequential and embarrassingly parallel (`rayon` would cut wall time by roughly Ncores); `SL402`/`SL403` are each O(n²) pairwise Jaccard, fine at 100 skills but 500k pairs at 1000; hashing words to `u64` would remove the per-word `String` allocation; `Skill` retaining both `source` and `body` costs ~2× file bytes. Do not treat any of these as bugs.
 
-## 15. Summary & Key Architectural Decisions
+## 15. Observability, Capture & Secret Handling
+
+Two independent layers, added by `specs/cli-tracing.md`. Both exist to make an LLM run reproducible after the fact; neither is on by default, and neither changes a byte of output when off.
+
+### Layer 1 — `tracing` to stderr
+
+`crates/adept_cli/src/logging.rs::init` installs the **one** global subscriber, from `main`, before subcommand dispatch — every subcommand including `mcp`. Level comes from the global `-v` count (`ArgAction::Count`: `0` off, `1` info, `2` debug, `3+` trace), scoped to adept's own crate targets so `-vvv` does not drown the user in `hyper`/`reqwest` internals. `ADEPT_LOG` replaces that filter wholesale with `EnvFilter` directive syntax.
+
+**The writer is `std::io::stderr`, explicitly, with `.with_ansi(false)`.** This is the load-bearing line in the file: `tracing_subscriber::fmt()` defaults to **stdout**, and `adept mcp` speaks JSON-RPC on stdout, so a subscriber that lands there breaks every MCP client silently — no error, no diagnostic, just a client that stops parsing. Do not drop `.with_writer`, and do not add a second subscriber anywhere. `crates/adept_cli/tests/tracing.rs` drives the real binary under `-vvv` and `ADEPT_LOG=trace` and asserts MCP stdout is unchanged byte-for-byte and every line still parses as JSON-RPC.
+
+**Libraries emit, they never subscribe.** `adept_score::client::send_once` — the single funnel for both `score` and `fix` — emits the serialized request body and the raw response text at `DEBUG`/`TRACE`, before parsing, so a body that fails `parse_chat_response` is still on the wire in the log. No library crate calls `try_init`.
+
+Default level is `off`, so with no `-v` and no `ADEPT_LOG`, stdout *and* stderr are identical to a build with no logging at all — also pinned by test.
+
+### Layer 2 — `--capture-dir`
+
+`adept_score::CaptureSink` writes verbatim per-call artifacts, in the shape `<capture-dir>/<timestamp>/{run_metadata.json, call_NNNN/{request.json, response.json, call_metadata.json}}`. Bodies are written **at the moment of receipt, before parsing, never truncated**, and non-2xx responses are captured too — an error body is exactly the evidence a live-endpoint validation needs. Each invocation gets its own timestamped folder, so a capture dir is only ever appended to; re-running never overwrites a previous run.
+
+The sink is opt-in via `OpenAiCompatClient::with_capture(Arc<CaptureSink>)`. `score`/`fix` resolve it **before** any request is issued, so a directory that cannot be created is a usage error (exit 2, `adept: error: failed to create capture directory ...`) rather than a silent skip. `run_metadata.json` is self-describing by design: adept version, `PROMPT_VERSION`, subcommand, resolved options, the *source* of each resolved value (flag / `adept.toml` / env / default), timestamps, target path, and the process exit code stamped by `finalize`.
+
+**Capture is CLI-only and never reachable from MCP.** `--capture-dir` / `capture_dir` exist on `score` and `fix` alone; the MCP `score_skill` tool never captures and the MCP tool schema is unchanged. MCP gets stderr tracing only. This keeps capture off the public JSON-RPC contract. Capture artifacts contain full prompts and full model output — steer users to a gitignored path.
+
+### Secret handling
+
+The API key is wrapped in `adept_score::RedactedString` and that newtype is **adopted at the `ResolvedLlmConfig::api_key` field**, not merely defined. Its `Debug` *and* `Display` impls both render `****`, so `{:?}` on a config — the realistic leak, since a tracing event or a panic message will happily format a whole struct — cannot expose it. Never add a field, accessor, or log line that renders the key by another route, and never derive `Serialize` onto a struct holding one.
+
+Two rules follow from that and are not negotiable: the `Authorization` header is **omitted entirely** from captured request metadata (not masked, not present), and `run_metadata.json` records only `api_key_present: bool`. A unit test asserts a configured key appears in no emitted record and no capture artifact.
+
+## 16. Summary & Key Architectural Decisions
 
 The things not to violate:
 
 - **Dependency direction is one-way, with one documented exception.** `adept_fmt` and `adept_score` depend on `adept` and never on each other; shared behaviour between *those two* moves *down* into `adept`, never sideways. `adept_fix` is a top-of-stack composing crate: it deliberately depends on both `adept_score` (reuses its `LlmClient`/`OpenAiCompatClient` stack rather than re-implementing an LLM transport) and `adept_fmt` (reuses `format_skill` to canonicalize every candidate before re-linting/diffing it), per `specs/adept-fix-command.md`. The invariant this preserves is narrower than "one-way": **nothing may depend on `adept_fix`**, and `adept_fmt`/`adept_score` still never depend on each other or on `adept_fix`. Do not use `adept_fix` as precedent for adding a sideways dependency between `adept_fmt` and `adept_score` themselves.
 - **`check` and `fmt` never touch the network.** Only `score` (and the MCP `score_skill` tool) does.
 - **MCP stdout carries only JSON-RPC.** All logging goes to stderr; `handle_message` stays I/O-pure.
+- **The tracing writer is stderr, never stdout.** `tracing_subscriber::fmt()` defaults to stdout; `logging.rs` overrides that with an explicit `.with_writer(std::io::stderr)`. A subscriber that lands on stdout breaks every MCP client silently. Only `main` installs one — libraries emit events and never subscribe. See §15.
+- **The API key never leaves `RedactedString`.** `Debug` and `Display` both render `****`, and the newtype is adopted at `ResolvedLlmConfig::api_key`. `Authorization` is omitted entirely from captured metadata; `run_metadata.json` carries only `api_key_present: bool`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O error.
 - **Rule codes are permanent and never reused.** Retired codes stay retired and documented.
 - **Every registered rule must appear in `docs/RULES.md`** — `docs_test.rs` enforces it.
