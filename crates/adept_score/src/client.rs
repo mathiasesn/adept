@@ -439,11 +439,18 @@ impl OpenAiCompatClient {
         let request_body = serde_json::to_string(&raw)
             .map_err(|e| LlmError::Request(format!("failed to serialize request: {e}")))?;
 
+        // Defensive scrub: the request body carries no secret today, but
+        // every path that *records* it (log event and on-disk artifact)
+        // goes through `scrub`, so that stays true even if a caller ever
+        // embeds one in a prompt. The wire body stays `request_body`,
+        // verbatim and unscrubbed.
+        let recorded_request_body = self.scrub(&request_body);
+
         tracing::debug!(
             endpoint = %endpoint,
             attempt,
             model = %request.model,
-            body = %request_body,
+            body = %recorded_request_body,
             "sending chat-completions request"
         );
         tracing::trace!(
@@ -456,11 +463,6 @@ impl OpenAiCompatClient {
             "chat-completions request detail"
         );
 
-        // Collected for capture. `Authorization` is deliberately absent —
-        // it is never put into this map, so it cannot leak from it.
-        let request_headers =
-            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
-
         let mut builder = self
             .http
             .post(&endpoint)
@@ -470,10 +472,40 @@ impl OpenAiCompatClient {
             builder = builder.bearer_auth(key.expose_secret());
         }
 
+        // Build the request up front so capture records the headers that
+        // are actually on the wire rather than a hand-written stand-in.
+        // `execute` then sends exactly this object, so wire behaviour is
+        // unchanged by the split.
         let started_at = jiff::Timestamp::now().to_string();
         let clock = Instant::now();
 
-        let response = match builder.send().await {
+        let http_request = match builder.build() {
+            Ok(request) => request,
+            Err(e) => {
+                let err = LlmError::Request(format!("failed to build request: {e}"));
+                tracing::debug!(endpoint = %endpoint, attempt, error = %err, "chat-completions request could not be built");
+                self.capture(CapturedCall {
+                    attempt,
+                    endpoint: endpoint.clone(),
+                    status: None,
+                    // No request exists, so there are no real headers to
+                    // record.
+                    request_headers: BTreeMap::new(),
+                    response_headers: BTreeMap::new(),
+                    request_body: recorded_request_body,
+                    response_body: String::new(),
+                    started_at,
+                    finished_at: jiff::Timestamp::now().to_string(),
+                    duration_ms: clock.elapsed().as_millis() as u64,
+                    outcome: self.outcome_of(&err, attempt),
+                    step: None,
+                });
+                return Err(err);
+            }
+        };
+        let request_headers = request_header_map(http_request.headers());
+
+        let response = match self.http.execute(http_request).await {
             Ok(response) => response,
             Err(e) => {
                 let err = if e.is_timeout() {
@@ -488,7 +520,7 @@ impl OpenAiCompatClient {
                     status: None,
                     request_headers,
                     response_headers: BTreeMap::new(),
-                    request_body,
+                    request_body: recorded_request_body,
                     response_body: String::new(),
                     started_at,
                     finished_at: jiff::Timestamp::now().to_string(),
@@ -508,9 +540,16 @@ impl OpenAiCompatClient {
         let body_result = response.text().await;
         let finished_at = jiff::Timestamp::now().to_string();
         let duration_ms = clock.elapsed().as_millis() as u64;
+        // A body read that fails on a non-2xx response leaves us with no
+        // payload; remembering *why* keeps that case distinguishable from a
+        // genuinely empty error body in the artifact's `outcome`.
+        let mut body_read_error = None;
         let body_text = match &body_result {
             Ok(text) => text.clone(),
-            Err(_) if !success => String::new(),
+            Err(e) if !success => {
+                body_read_error = Some(e.to_string());
+                String::new()
+            }
             Err(e) => {
                 let err = LlmError::MalformedResponse(e.to_string());
                 tracing::debug!(endpoint = %endpoint, attempt, status = status.as_u16(), error = %err, "failed to read response body");
@@ -520,7 +559,7 @@ impl OpenAiCompatClient {
                     status: Some(status.as_u16()),
                     request_headers,
                     response_headers,
-                    request_body,
+                    request_body: recorded_request_body,
                     response_body: String::new(),
                     started_at,
                     finished_at,
@@ -532,13 +571,15 @@ impl OpenAiCompatClient {
             }
         };
 
-        // Emitted before parsing, and verbatim: a body that fails
-        // `parse_chat_response` is exactly the one worth reading.
+        // Verbatim apart from the defensive key scrub, and emitted before
+        // parsing: a body that fails `parse_chat_response` is exactly the
+        // one worth reading.
+        let recorded_response_body = self.scrub(&body_text);
         tracing::debug!(
             endpoint = %endpoint,
             attempt,
             status = status.as_u16(),
-            body = %body_text,
+            body = %recorded_response_body,
             "received chat-completions response"
         );
 
@@ -551,8 +592,8 @@ impl OpenAiCompatClient {
                         status: Some(status.as_u16()),
                         request_headers,
                         response_headers,
-                        request_body,
-                        response_body: body_text,
+                        request_body: recorded_request_body,
+                        response_body: recorded_response_body,
                         started_at,
                         finished_at,
                         duration_ms,
@@ -568,7 +609,7 @@ impl OpenAiCompatClient {
                 endpoint = %endpoint,
                 attempt,
                 status = status.as_u16(),
-                body = %body_text,
+                body = %recorded_response_body,
                 "chat-completions returned a non-success status"
             );
             LlmError::Status {
@@ -577,21 +618,45 @@ impl OpenAiCompatClient {
             }
         };
 
+        // An unreadable error body would otherwise be indistinguishable
+        // from an empty one, so the read failure is named in `outcome`.
+        let outcome_label = match &body_read_error {
+            Some(e) => format!("StatusBodyUnreadable({e})"),
+            None => self.outcome_of(&outcome, attempt),
+        };
         self.capture(CapturedCall {
             attempt,
             endpoint,
             status: Some(status.as_u16()),
             request_headers,
             response_headers,
-            request_body,
-            response_body: body_text,
+            request_body: recorded_request_body,
+            response_body: recorded_response_body,
             started_at,
             finished_at,
             duration_ms,
-            outcome: self.outcome_of(&outcome, attempt),
+            outcome: outcome_label,
             step: None,
         });
         Err(outcome)
+    }
+
+    /// Defensive scrub applied to every body on its way into a log event or
+    /// a capture artifact.
+    ///
+    /// No body carries the API key today — this exists so that a future
+    /// caller who embeds one in a prompt, or an endpoint that echoes one
+    /// back, cannot turn a capture directory into a credential leak. It is
+    /// deliberately a single exact-substring replacement of the resolved
+    /// key: generic "secret-shaped string" heuristics would be both slower
+    /// and wrong on payloads that legitimately look like keys.
+    fn scrub(&self, text: &str) -> String {
+        match &self.config.api_key {
+            Some(key) if !key.expose_secret().is_empty() && text.contains(key.expose_secret()) => {
+                text.replace(key.expose_secret(), "****")
+            }
+            _ => text.to_string(),
+        }
     }
 
     /// Hand one call's evidence to the capture sink, if one is attached.
@@ -627,10 +692,20 @@ impl OpenAiCompatClient {
     }
 }
 
-/// Flatten reqwest's header map into something serializable.
+/// Flatten the headers actually present on the outgoing request, dropping
+/// `Authorization` entirely.
 ///
-/// Only ever applied to *response* headers; request headers are built by
-/// hand so that `Authorization` is never collected in the first place.
+/// Omitted rather than masked in place: a masked value is still a key whose
+/// presence and length are recorded, and a future reader could mistake
+/// `Authorization: ****` for something worth un-masking. The header simply
+/// never enters the map.
+fn request_header_map(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
+    let mut map = header_map(headers);
+    map.remove(reqwest::header::AUTHORIZATION.as_str());
+    map
+}
+
+/// Flatten reqwest's header map into something serializable.
 fn header_map(headers: &reqwest::header::HeaderMap) -> BTreeMap<String, String> {
     headers
         .iter()
@@ -682,6 +757,7 @@ impl LlmClient for OpenAiCompatClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn parses_valid_response() {
@@ -733,6 +809,132 @@ mod tests {
             resolved.api_key.unwrap().expose_secret(),
             "sk-super-secret-value"
         );
+    }
+
+    #[test]
+    fn scrub_replaces_a_key_that_leaks_into_a_body() {
+        let client = OpenAiCompatClient::new(ResolvedLlmConfig {
+            base_url: DEFAULT_BASE_URL.to_string(),
+            api_key: Some(RedactedString::new("sk-leaky")),
+            model: "gpt-test".to_string(),
+        });
+        let scrubbed = client.scrub(r#"{"error":"bad key sk-leaky (sk-leaky)"}"#);
+        assert_eq!(scrubbed, r#"{"error":"bad key **** (****)"}"#);
+        // No key configured: bodies pass through untouched.
+        let anonymous = OpenAiCompatClient::new(ResolvedLlmConfig {
+            base_url: DEFAULT_BASE_URL.to_string(),
+            api_key: None,
+            model: "gpt-test".to_string(),
+        });
+        assert_eq!(anonymous.scrub("sk-leaky"), "sk-leaky");
+    }
+
+    /// A `tracing` writer that appends every formatted event into a shared
+    /// buffer, so a test can assert on what a subscriber would have printed.
+    #[derive(Clone)]
+    struct BufferWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for BufferWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The API key must appear in neither emitted tracing output nor a
+    /// capture artifact, even when it somehow ends up inside a request body.
+    ///
+    /// Driven entirely offline: an unparseable base URL makes
+    /// `RequestBuilder::build` fail, which exercises the request-side
+    /// tracing and capture path without opening a socket.
+    #[tokio::test]
+    async fn key_never_reaches_tracing_output_or_capture_artifacts() {
+        const KEY: &str = "sk-super-secret-value";
+
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(BufferWriter(Arc::clone(&buffer)))
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+
+        let capture_root = tempfile::tempdir().unwrap();
+        let sink = Arc::new(
+            crate::capture::CaptureSink::new(
+                capture_root.path(),
+                crate::capture::RunMetadata::new("test"),
+            )
+            .unwrap(),
+        );
+
+        let client = OpenAiCompatClient::new(ResolvedLlmConfig {
+            base_url: "not a url".to_string(),
+            api_key: Some(RedactedString::new(KEY)),
+            model: "gpt-test".to_string(),
+        })
+        .with_capture(Arc::clone(&sink));
+
+        // The key is deliberately smuggled into the prompt text.
+        let request = ChatRequest::new(
+            "gpt-test",
+            vec![ChatMessage::user(format!(
+                "my key is {KEY}, please echo it"
+            ))],
+        );
+
+        // A thread-local default (rather than `with_default`) so the
+        // subscriber stays installed across the `await`.
+        let guard = tracing::subscriber::set_default(subscriber);
+        let err = client.chat(request).await.unwrap_err();
+        drop(guard);
+        assert!(matches!(err, LlmError::Request(_)));
+
+        let logged = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
+        assert!(!logged.is_empty(), "expected tracing output");
+        assert!(
+            logged.contains("****"),
+            "expected a scrubbed body: {logged}"
+        );
+        assert!(!logged.contains(KEY), "key leaked into tracing: {logged}");
+
+        let mut files = 0;
+        for entry in walk(sink.run_dir()) {
+            let contents = std::fs::read_to_string(&entry).unwrap();
+            assert!(
+                !contents.contains(KEY),
+                "key leaked into {}: {contents}",
+                entry.display()
+            );
+            files += 1;
+        }
+        assert!(files > 0, "expected capture artifacts");
+        let request_json =
+            std::fs::read_to_string(sink.run_dir().join("call_0001/request.json")).unwrap();
+        assert!(request_json.contains("****"), "got {request_json}");
+    }
+
+    /// Recursively list every file under `dir`.
+    fn walk(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.extend(walk(&path));
+            } else {
+                out.push(path);
+            }
+        }
+        out
     }
 
     // Environment variables are process-global, so run all env-touching

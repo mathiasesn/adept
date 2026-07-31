@@ -334,3 +334,14 @@ Recorded 2026-07-31, from `specs/cli-tracing.md`.
   it down — a span, an explicit argument on the client call, or a
   `tracing::Span` field the sink reads — is a follow-up. Until it lands, a
   reader must infer the step from the call ordering and the prompt content.
+
+### `LlmError::Status` carries an unscrubbed response body
+
+The defensive scrub added with the capture layer covers every body on its way
+into a tracing event or a capture artifact, but `LlmError::Status { body }`
+still holds the response text verbatim. If a backend ever echoed the API key
+back inside an error body, that key would reach stderr through the error's
+`Display`. Scrubbing there means changing the contents of a returned error, so
+it was left alone deliberately rather than folded into the capture work. The
+exposure requires a misbehaving endpoint, but the fix is cheap if we decide the
+error type should carry scrubbed text.

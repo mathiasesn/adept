@@ -11,7 +11,7 @@
 //! (`#[tokio::main]` or `Runtime::block_on`) — this crate does not spin up
 //! its own runtime.
 
-pub mod capture;
+mod capture;
 mod client;
 mod mock;
 mod overlap;

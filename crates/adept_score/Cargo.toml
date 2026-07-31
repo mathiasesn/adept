@@ -21,3 +21,9 @@ jiff = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true, features = ["json"] }
 tempfile = { workspace = true }
+# Dev-only: the library dependency rule ("tracing-subscriber belongs to
+# adept_cli, libraries emit but never subscribe") is about what ships. A
+# dev-dependency is not linked into the library, so this cannot pull a
+# subscriber into a downstream build; it exists so the secret-redaction
+# tests can assert against real emitted tracing output rather than a proxy.
+tracing-subscriber = { workspace = true }

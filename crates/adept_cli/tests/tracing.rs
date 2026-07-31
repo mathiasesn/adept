@@ -163,6 +163,49 @@ fn mcp_stdout_is_identical_with_and_without_logging() {
 }
 
 #[test]
+fn mcp_score_skill_schema_never_exposes_capture() {
+    // Spec §12: capture is CLI-only and unreachable from MCP, so the
+    // `score_skill` tool's public JSON-RPC contract must be unchanged by
+    // the capture layer. Driven over real stdio, against the real schema.
+    //
+    // `score_skill` is only advertised once an LLM backend resolves, so
+    // `ADEPT_MODEL` is set — the tool is listed, never called, so this
+    // performs no network I/O.
+    let (stdout, _stderr) = run_mcp(&[("ADEPT_MODEL", "gpt-test")], &[]);
+    let list: serde_json::Value = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|message| message["id"] == 2)
+        .expect("a tools/list response");
+
+    let tool = list["result"]["tools"]
+        .as_array()
+        .expect("tools array")
+        .iter()
+        .find(|tool| tool["name"] == "score_skill")
+        .expect("a score_skill tool");
+
+    let schema = &tool["inputSchema"];
+    let properties = schema["properties"]
+        .as_object()
+        .expect("score_skill input schema properties");
+    for name in properties.keys() {
+        assert!(
+            !name.to_ascii_lowercase().contains("capture"),
+            "capture reached the MCP tool schema via property `{name}`"
+        );
+    }
+    // Belt and braces: nothing anywhere in the serialized schema mentions
+    // it either (descriptions, nested objects, required lists).
+    let rendered = serde_json::to_string(schema).unwrap().to_ascii_lowercase();
+    assert!(
+        !rendered.contains("capture"),
+        "capture reached the score_skill schema: {rendered}"
+    );
+}
+
+#[test]
 fn check_default_output_is_unchanged_by_the_logging_layer() {
     let quiet = adept()
         .arg("check")

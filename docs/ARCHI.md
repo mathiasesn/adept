@@ -120,6 +120,7 @@ crates/adept_score/        LLM SCORING — depends on adept; async throughout
   src/
     lib.rs                 ScoreOptions, ScoreError, `score_skill` (the single entry point)
     client.rs              LlmClient trait, OpenAiCompatClient, LlmConfig/ResolvedLlmConfig
+    capture.rs             CaptureSink, RunMetadata, CapturedCall — on-disk payload artifacts
     mock.rs                MockLlmClient — the only client tests may use
     prompts.rs             All prompt templates + PROMPT_VERSION
     triggering.rs          Prompt generation, judging, precision/recall/F1
@@ -143,6 +144,7 @@ crates/adept_cli/          BINARY `adept` — composes all four libraries
     main.rs                Dispatch; owns process exit codes
     cli.rs                 clap derive structs; TokenizerArg mirror enum
     config.rs              adept.toml discovery (walk up) + parsing
+    logging.rs             The one global tracing subscriber — stderr-only, ADEPT_LOG / -v
     commands/{check,fmt,score,fix,mcp}.rs
   tests/{cli.rs, fixtures/}
 ```
@@ -364,7 +366,7 @@ Other contract points:
 
 ## 13. Testing & Snapshot Conventions
 
-148 tests across 14 suites, ~3.5s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
+237 tests across 15 suites, ~8s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
 
 **Rule tests are snapshot tests.** Each rule gets a fixture directory under `crates/adept/tests/fixtures/rules/<sl_code>_<slug>/` containing a `SKILL.md` that triggers exactly that rule, plus an `insta` snapshot under `crates/adept/tests/snapshots/rules__snapshot_<name>.snap`. There is also a `cross_clean` fixture asserting a well-formed pair produces nothing. Review snapshot diffs — an accepted snapshot is an accepted behaviour change.
 
@@ -416,9 +418,11 @@ The sink is opt-in via `OpenAiCompatClient::with_capture(Arc<CaptureSink>)`. `sc
 
 ### Secret handling
 
-The API key is wrapped in `adept_score::RedactedString` and that newtype is **adopted at the `ResolvedLlmConfig::api_key` field**, not merely defined. Its `Debug` *and* `Display` impls both render `****`, so `{:?}` on a config — the realistic leak, since a tracing event or a panic message will happily format a whole struct — cannot expose it. Never add a field, accessor, or log line that renders the key by another route, and never derive `Serialize` onto a struct holding one.
+The API key is wrapped in `adept_score::RedactedString` and that newtype is **adopted at the `ResolvedLlmConfig::api_key` field**, not merely defined. Its `Debug` *and* `Display` impls both render `****`, so `{:?}` on a resolved config — the realistic leak, since a tracing event or a panic message will happily format a whole struct — cannot expose it. Never add a field, accessor, or log line that renders the key by another route, and never derive `Serialize` onto a struct holding one.
 
-Two rules follow from that and are not negotiable: the `Authorization` header is **omitted entirely** from captured request metadata (not masked, not present), and `run_metadata.json` records only `api_key_present: bool`. A unit test asserts a configured key appears in no emitted record and no capture artifact.
+The precise invariant is therefore: **once configuration is resolved, the key exists only inside a `RedactedString`, and `expose_secret()` is the sole way back out.** The deliberate carve-out is the *input* side — `LlmConfig::api_key` is a plain `String` in a `#[derive(Debug)]` struct, because it is assembled from CLI flags and config files before anything can be redacted. `LlmConfig::resolve` is the single place the wrap happens; that keeps the unredacted type confined to pre-resolution config plumbing, which is never logged or captured. Do not widen that carve-out by logging or serializing an unresolved `LlmConfig`.
+
+Three rules follow and are not negotiable: the `Authorization` header is **omitted entirely** from captured request metadata (not masked, not present — `request_header_map` strips it from the real outgoing headers); `run_metadata.json` records only `api_key_present: bool`; and every request and response body passes through `OpenAiCompatClient::scrub` before it is logged or written, replacing any verbatim occurrence of the resolved key with `****`. The scrub is a defensive backstop, not the primary defence — no body carries the key today — and is deliberately an exact-substring match rather than a secret-shaped-string heuristic. Unit tests assert a configured key appears in no emitted tracing output and no capture artifact, including when smuggled into a prompt body.
 
 ## 16. Summary & Key Architectural Decisions
 

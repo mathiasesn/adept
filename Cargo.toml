@@ -39,4 +39,4 @@ similar = "2"
 tempfile = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-jiff = { version = "0.2", features = ["serde"] }
+jiff = "0.2"
