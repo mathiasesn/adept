@@ -521,7 +521,8 @@ worth building because the generation prompt can carry the judgment the
 linter cannot — not because the linter validates it.
 
 **Placement.** `adept_agent` is already the designated top-of-stack crate that
-may compose `adept_score` and `adept_fmt`; `create` needs the same three
+may compose `adept` and `adept_fmt` (and, before the merge, `adept_score` —
+its LLM transport now lives in `adept_agent::llm`); `create` needs the same three
 things (LLM transport, linting, canonicalization) plus a writer. Two
 options, and this is the open design question: a new `adept_create` crate
 alongside `adept_agent` at the top of the stack, or a module within
