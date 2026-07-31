@@ -79,8 +79,12 @@ impl SkillSet {
 /// directory itself. Falls back to `.` when a file path has no parent.
 ///
 /// The file-or-directory half of [`sibling_root`]; kept as its own function
-/// so that rule reads as "the parent of the skill's own directory".
-fn skill_directory(path: &Path) -> PathBuf {
+/// so that rule reads as "the parent of the skill's own directory". Public
+/// so callers that need the skill's own directory directly (e.g.
+/// `evals/evals.jsonl` discovery) share this definition rather than
+/// re-deriving it, which is what kept `adept_cli`'s copy and `sibling_root`
+/// from silently diverging.
+pub fn skill_directory(path: &Path) -> PathBuf {
     if path.is_dir() {
         path.to_path_buf()
     } else {

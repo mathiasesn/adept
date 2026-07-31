@@ -5,7 +5,7 @@
 //! that talks to a model goes through a `&dyn LlmClient`, so callers can
 //! pass [`crate::llm::OpenAiCompatClient`] for real evaluation or
 //! [`crate::llm::MockLlmClient`] for offline tests. All public entry points
-//! here (`triggering::score_triggering`, `tokens::analyze_token_bloat`,
+//! here (`triggering::eval_triggering`, `tokens::analyze_token_bloat`,
 //! `overlap::detect_overlaps`, and [`eval_skill`]) are `async fn`; callers
 //! (e.g. `adept_cli`) are expected to drive them from a `tokio` runtime
 //! (`#[tokio::main]` or `Runtime::block_on`) — this crate does not spin up
@@ -29,7 +29,7 @@ pub use prompts::{
 pub use report::EvalReport;
 pub use tokens::{analyze_token_bloat, discover_companion_files, TokenBloatReport};
 pub use triggering::{
-    precision_recall_f1, score_triggering, CandidatePrompt, Metrics, PromptJudgement, PromptLabel,
+    eval_triggering, precision_recall_f1, CandidatePrompt, Metrics, PromptJudgement, PromptLabel,
     TriggeringOptions, DEFAULT_NUM_PROMPTS,
 };
 
@@ -131,7 +131,7 @@ pub async fn eval_skill(
         if trigger_options.model.is_empty() {
             trigger_options.model = options.model.clone();
         }
-        report.triggering = Some(score_triggering(client, skill, &trigger_options).await?);
+        report.triggering = Some(eval_triggering(client, skill, &trigger_options).await?);
     }
 
     if options.token_bloat {

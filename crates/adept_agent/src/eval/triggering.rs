@@ -214,7 +214,7 @@ struct RawJudgement {
 /// # Errors
 /// Returns [`EvalError`] if the LLM client errors, or if a response cannot
 /// be parsed as the expected JSON shape.
-pub async fn score_triggering(
+pub async fn eval_triggering(
     client: &dyn LlmClient,
     skill: &Skill,
     options: &TriggeringOptions,

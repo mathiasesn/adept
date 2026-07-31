@@ -43,7 +43,7 @@ pub use rules::{
     SkillRule,
 };
 pub use skill::Skill;
-pub use skillset::{sibling_root, SkillSet};
+pub use skillset::{sibling_root, skill_directory, SkillSet};
 pub use token::{TokenCounter, Tokenizer};
 
 use std::path::Path;

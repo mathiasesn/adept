@@ -57,12 +57,20 @@ pub fn run(args: &EvalArgs, config: &AdeptConfig) -> i32 {
         }
     };
 
-    let (skill, skillset) = match load_skill_and_set(&args.path) {
-        Ok(pair) => pair,
+    let skill = match load_skill(&args.path) {
+        Ok(skill) => skill,
         Err(message) => {
             eprintln!("adept: error: {message}");
             return EXIT_USAGE_ERROR;
         }
+    };
+    // Sibling discovery is a tree walk plus a full read+parse of every
+    // sibling skill; only pay for it when `overlap` is actually selected
+    // (e.g. an offline `--select evals` run never needs it).
+    let skillset = if selection.contains("overlap") {
+        discover_siblings(&args.path)
+    } else {
+        Vec::new()
     };
 
     let tokenizer = args
@@ -71,23 +79,16 @@ pub fn run(args: &EvalArgs, config: &AdeptConfig) -> i32 {
         .or(config.eval.tokenizer)
         .unwrap_or_default();
 
-    let needs_llm = selection.contains("triggering")
-        || selection.contains("token-bloat")
-        || selection.contains("overlap");
-
     let mut report = EvalReport::new(skill.frontmatter.name.clone());
     let mut sink: Option<Arc<CaptureSink>> = None;
 
-    if needs_llm {
+    if needs_llm(&selection) {
         let Some((client, resolved)) = resolve_llm_client("eval", base_url, model) else {
             return EXIT_USAGE_ERROR;
         };
 
         let mut options = build_options(args, &resolved.model, tokenizer);
-        if !selection.contains("triggering") {
-            options.triggering = None;
-        }
-        options.token_bloat = selection.contains("token-bloat");
+        narrow_options(&mut options, &selection);
 
         let (client, capture_sink) = match attach_capture(
             client,
@@ -106,18 +107,8 @@ pub fn run(args: &EvalArgs, config: &AdeptConfig) -> i32 {
             return EXIT_USAGE_ERROR;
         };
 
-        let empty_skillset: Vec<Skill> = Vec::new();
-        let llm_skillset: &[Skill] = if selection.contains("overlap") {
-            &skillset
-        } else {
-            &empty_skillset
-        };
-
         match runtime.block_on(adept_agent::eval_skill(
-            &client,
-            &skill,
-            llm_skillset,
-            &options,
+            &client, &skill, &skillset, &options,
         )) {
             Ok(llm_report) => {
                 report.prompt_version = llm_report.prompt_version;
@@ -223,26 +214,31 @@ pub(crate) fn resolve_analyses(
     model_available: bool,
     results_available: bool,
 ) -> Result<std::collections::BTreeSet<&'static str>, String> {
-    for name in select.iter().chain(ignore.iter()) {
-        if canonical_analysis(name).is_none() {
-            return Err(format!(
-                "unknown analysis '{name}': expected one of triggering, token-bloat, overlap, evals"
-            ));
-        }
-    }
-
-    let precondition_met = |name: &str| -> bool {
-        if name == "evals" {
-            results_available
-        } else {
-            model_available
-        }
+    let canonicalize = |name: &str| -> Result<&'static str, String> {
+        canonical_analysis(name).ok_or_else(|| {
+            format!("unknown analysis '{name}': expected one of triggering, token-bloat, overlap, evals")
+        })
     };
-    let missing_reason = |name: &str| -> &'static str {
+    let select: Vec<&'static str> = select
+        .iter()
+        .map(|n| canonicalize(n))
+        .collect::<Result<_, _>>()?;
+    let ignore: Vec<&'static str> = ignore
+        .iter()
+        .map(|n| canonicalize(n))
+        .collect::<Result<_, _>>()?;
+
+    let precondition = |name: &str| -> Result<(), &'static str> {
         if name == "evals" {
-            "no --results supplied"
+            if results_available {
+                Ok(())
+            } else {
+                Err("no --results supplied")
+            }
+        } else if model_available {
+            Ok(())
         } else {
-            "no model configured (set --model, ADEPT_MODEL, or `[eval] model` in adept.toml)"
+            Err("no model configured (set --model, ADEPT_MODEL, or `[eval] model` in adept.toml)")
         }
     };
 
@@ -250,14 +246,13 @@ pub(crate) fn resolve_analyses(
         ANALYSES
             .iter()
             .copied()
-            .filter(|name| precondition_met(name))
+            .filter(|name| precondition(name).is_ok())
             .collect()
     } else {
         let mut set = std::collections::BTreeSet::new();
         for name in select {
-            let name = canonical_analysis(name).expect("validated above");
-            if !precondition_met(name) {
-                return Err(format!("--select {name} requires {}", missing_reason(name)));
+            if let Err(reason) = precondition(name) {
+                return Err(format!("--select {name} requires {reason}"));
             }
             set.insert(name);
         }
@@ -265,7 +260,6 @@ pub(crate) fn resolve_analyses(
     };
 
     for name in ignore {
-        let name = canonical_analysis(name).expect("validated above");
         selection.remove(name);
     }
 
@@ -277,6 +271,30 @@ pub(crate) fn resolve_analyses(
     }
 
     Ok(selection)
+}
+
+/// Whether `selection` includes any LLM-backed analysis (`triggering`,
+/// `token-bloat`, or `overlap`) — the load-bearing check that keeps an
+/// `evals`-only selection from ever touching the network. Shared by the CLI
+/// (`run`) and the MCP `eval_skill` tool so the two surfaces can't
+/// independently drift on this rule.
+pub(crate) fn needs_llm(selection: &std::collections::BTreeSet<&'static str>) -> bool {
+    selection.contains("triggering")
+        || selection.contains("token-bloat")
+        || selection.contains("overlap")
+}
+
+/// Narrow `options` down to what `selection` actually asked for: drop
+/// triggering unless selected, and only run token-bloat when selected.
+/// Shared by the CLI (`run`) and the MCP `eval_skill` tool.
+pub(crate) fn narrow_options(
+    options: &mut EvalOptions,
+    selection: &std::collections::BTreeSet<&'static str>,
+) {
+    if !selection.contains("triggering") {
+        options.triggering = None;
+    }
+    options.token_bloat = selection.contains("token-bloat");
 }
 
 /// Describe the run for `run_metadata.json`: the resolved options plus,
@@ -344,21 +362,23 @@ fn build_options(args: &EvalArgs, model: &str, tokenizer: adept::Tokenizer) -> E
     options
 }
 
-fn load_skill_and_set(path: &Path) -> Result<(Skill, Vec<Skill>), String> {
+fn load_skill(path: &Path) -> Result<Skill, String> {
     if !path.exists() {
         return Err(format!("path not found: {}", path.display()));
     }
     let skill_file = resolve_skill_file(path)?;
-    let skill = adept::parse_skill(&skill_file).map_err(|err| err.to_string())?;
+    adept::parse_skill(&skill_file).map_err(|err| err.to_string())
+}
 
-    // Discover sibling skills for overlap detection: walk the parent of the
-    // skill's own directory, where siblings live.
+/// Discover sibling skills for overlap detection: walk the parent of the
+/// skill's own directory, where siblings live. Only called when `overlap`
+/// is actually selected — this is a tree walk plus a full read+parse of
+/// every sibling skill, wasted work for an offline `--select evals` run.
+fn discover_siblings(path: &Path) -> Vec<Skill> {
     let search_root = adept::sibling_root(path);
-    let skillset = SkillSet::discover(&search_root)
+    SkillSet::discover(&search_root)
         .map(|set| set.skills)
-        .unwrap_or_default();
-
-    Ok((skill, skillset))
+        .unwrap_or_default()
 }
 
 /// Resolve `path` (as accepted by `adept eval`) to the `SKILL.md` file to
@@ -378,28 +398,14 @@ fn resolve_skill_file(path: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// The skill's own directory, given a path to its `SKILL.md` file or the
-/// skill's own directory: `path` itself if it's a directory, else its
-/// parent (falling back to `.`). Mirrors `adept::skillset`'s private
-/// `skill_directory` helper (not exported), which `evals/evals.jsonl`
-/// discovery is relative to. Shared with the MCP `eval_skill` tool
-/// (`commands::mcp`) so the two surfaces can't drift on this resolution.
-pub(crate) fn skill_directory(path: &Path) -> PathBuf {
-    if path.is_dir() {
-        path.to_path_buf()
-    } else {
-        path.parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."))
-    }
-}
-
 /// Resolve the eval dataset path: `evals_override` if given, else
-/// `evals/evals.jsonl` relative to `skill_path`'s skill directory. Shared by
-/// the CLI (`--evals`) and the MCP `eval_skill` tool (`evals` argument).
+/// `evals/evals.jsonl` relative to `skill_path`'s skill directory
+/// (`adept::skill_directory`, the same resolution `sibling_root` builds on).
+/// Shared by the CLI (`--evals`) and the MCP `eval_skill` tool (`evals`
+/// argument).
 pub(crate) fn resolve_dataset_path(evals_override: Option<PathBuf>, skill_path: &Path) -> PathBuf {
     evals_override.unwrap_or_else(|| {
-        skill_directory(skill_path)
+        adept::skill_directory(skill_path)
             .join("evals")
             .join("evals.jsonl")
     })
@@ -421,14 +427,8 @@ pub(crate) fn grade_results(
             dataset_path.display()
         )
     })?;
-    adept::evals::validate(&dataset_text)
+    let cases = adept::evals::parse_and_validate(&dataset_text)
         .map_err(|err| format!("invalid eval dataset {}: {err}", dataset_path.display()))?;
-    let cases = adept::evals::parse_jsonl(&dataset_text).map_err(|err| {
-        format!(
-            "failed to parse eval dataset {}: {err}",
-            dataset_path.display()
-        )
-    })?;
 
     Ok(adept::evals::grade(&cases, results))
 }
@@ -594,10 +594,10 @@ mod tests {
     fn evals_only_selection_needs_no_llm() {
         let selection = resolve_analyses(&["evals".to_string()], &[], false, true).unwrap();
         assert_eq!(selection, std::collections::BTreeSet::from(["evals"]));
-        let needs_llm = selection.contains("triggering")
-            || selection.contains("token-bloat")
-            || selection.contains("overlap");
-        assert!(!needs_llm, "an evals-only selection must not need an LLM");
+        assert!(
+            !needs_llm(&selection),
+            "an evals-only selection must not need an LLM"
+        );
     }
 
     /// Pins that grading is fully offline: `grade_from_args` never reads

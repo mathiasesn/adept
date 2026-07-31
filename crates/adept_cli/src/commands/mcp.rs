@@ -23,7 +23,7 @@ use adept_agent::{EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatCli
 use adept_fmt::{format_str, FmtConfig};
 use serde_json::{json, Value};
 
-use crate::commands::eval::resolve_analyses;
+use crate::commands::eval::{narrow_options, needs_llm, resolve_analyses};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "adept";
@@ -68,10 +68,10 @@ fn bounded_u64_argument(
 }
 
 /// How long `eval_skill` will wait for the LLM backend before giving up.
-const SCORE_TIMEOUT: Duration = Duration::from_secs(30);
+const EVAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long `create_skill` will wait for the LLM backend before giving up.
-/// Longer than [`SCORE_TIMEOUT`]: `create` may make several authoring/repair
+/// Longer than [`EVAL_TIMEOUT`]: `create` may make several authoring/repair
 /// rounds plus one eval-generation call, all before returning.
 const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -495,8 +495,8 @@ fn parse_inline_results(
 
     let mut results = Vec::with_capacity(items.len());
     for (idx, item) in items.iter().enumerate() {
-        let mut result: adept::evals::CaseResult =
-            serde_json::from_value(item.clone()).map_err(|err| format!("results[{idx}]: {err}"))?;
+        let mut result: adept::evals::CaseResult = serde::Deserialize::deserialize(item)
+            .map_err(|err| format!("results[{idx}]: {err}"))?;
         if content_mode {
             result.cwd = None;
         }
@@ -571,13 +571,9 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
         Err(message) => return (json!({ "error": message }).to_string(), true),
     };
 
-    let needs_llm = selection.contains("triggering")
-        || selection.contains("token-bloat")
-        || selection.contains("overlap");
-
     let mut report = EvalReport::new(skill.frontmatter.name.clone());
 
-    if needs_llm {
+    if needs_llm(&selection) {
         let resolved = match llm_config.resolve() {
             Ok(resolved) => resolved,
             Err(err) => {
@@ -595,10 +591,7 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
 
         let client = OpenAiCompatClient::new(resolved.clone());
         let mut options = EvalOptions::for_model(&resolved.model, adept::Tokenizer::default());
-        if !selection.contains("triggering") {
-            options.triggering = None;
-        }
-        options.token_bloat = selection.contains("token-bloat");
+        narrow_options(&mut options, &selection);
 
         let skillset = if selection.contains("overlap") {
             overlap_skillset(arguments, &path, &skill)
@@ -606,36 +599,18 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
             Vec::new()
         };
 
-        let runtime = match tokio::runtime::Runtime::new() {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                return (
-                    format!("failed to start async runtime for eval_skill: {err}"),
-                    true,
-                );
-            }
-        };
-
-        let outcome = runtime.block_on(tokio::time::timeout(
-            SCORE_TIMEOUT,
+        match run_with_timeout(
+            "eval_skill",
+            EVAL_TIMEOUT,
             adept_agent::eval_skill(&client, &skill, &skillset, &options),
-        ));
-
-        match outcome {
-            Ok(Ok(llm_report)) => {
+        ) {
+            Ok(llm_report) => {
                 report.prompt_version = llm_report.prompt_version;
                 report.triggering = llm_report.triggering;
                 report.token_bloat = llm_report.token_bloat;
                 report.overlaps = llm_report.overlaps;
             }
-            Ok(Err(err)) => return (json!({ "error": err.to_string() }).to_string(), true),
-            Err(_elapsed) => {
-                return (
-                    json!({ "error": format!("eval_skill timed out after {SCORE_TIMEOUT:?}") })
-                        .to_string(),
-                    true,
-                )
-            }
+            Err(failure) => return failure,
         }
     }
 
@@ -653,18 +628,20 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
 }
 
 /// Run `future` to completion on a fresh single-use `tokio` runtime, bounded
-/// by `timeout`. Shared by `create_skill_tool`/`generate_evals_tool` — the
-/// two MCP tools added alongside this helper — so a runtime-start failure or
-/// a timeout is reported identically for both rather than as two
-/// independently hand-rolled error strings. `score_skill_tool` predates this
-/// helper and keeps its own copy of the same idiom; left untouched here.
-fn run_with_timeout<F, T>(
+/// by `timeout`. Shared by `create_skill_tool`, `generate_evals_tool`, and
+/// `eval_skill_tool` so a runtime-start failure or a timeout is reported
+/// identically across all three rather than as independently hand-rolled
+/// error strings. Generic over the future's error type (`E: Display`) since
+/// `create_skill`/`generate_evals` fail with `adept_agent::CreateError` while
+/// `eval_skill` fails with `adept_agent::EvalError`.
+fn run_with_timeout<F, T, E>(
     tool_name: &str,
     timeout: Duration,
     future: F,
 ) -> Result<T, (String, bool)>
 where
-    F: std::future::Future<Output = Result<T, adept_agent::CreateError>>,
+    F: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
 {
     let runtime = tokio::runtime::Runtime::new().map_err(|err| {
         (

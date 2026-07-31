@@ -45,7 +45,7 @@ adept_cli  (bin: `adept`)
 
 `adept_agent` is a rename of the crate formerly named `adept_fix`: it now houses `fix` (the original `adept fix` implementation) as a submodule, with `candidate`, `diff`, `prompts`, `writer`, and `gate` promoted to crate-level shared machinery reused by `create` (a sibling module implementing `adept create`). The rename kept every public item's name (`fix_skill`, `write_all_transactionally`, `FixKind`, `FixRegion`); only the crate and its module layout moved. `FixKind`/`FixRegion` still live in `adept`, untouched.
 
-The former `adept_score` crate no longer exists: its LLM transport (`LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`) moved to `adept_agent::llm` and its three analyses (`triggering`, `tokens`, `overlap`, `report`) moved to `adept_agent::eval`, both re-exported at `adept_agent`'s root. `adept_fmt` depends only on `adept` and knows nothing about `adept_agent`. `adept_agent` is the top-of-stack composing crate: it depends on `adept` (rules, tokens, the `evals` grader) and on `adept_fmt` (canonicalization), and owns its own LLM transport rather than depending on a sibling for it. Nothing in the library stack may depend on `adept_agent`; only `adept_cli` does.
+The former `adept_score` crate no longer exists: its LLM transport (`LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`) moved to `adept_agent::llm` and its four eval modules (`triggering`, `tokens`, `overlap`, `report`) moved to `adept_agent::eval`, both re-exported at `adept_agent`'s root. `adept_fmt` depends only on `adept` and knows nothing about `adept_agent`. `adept_agent` is the top-of-stack composing crate: it depends on `adept` (rules, tokens, the `evals` grader) and on `adept_fmt` (canonicalization), and owns its own LLM transport rather than depending on a sibling for it. Nothing in the library stack may depend on `adept_agent`; only `adept_cli` does.
 
 ## 3. Technology Stack
 
@@ -151,11 +151,7 @@ crates/adept_agent/        LLM-ASSISTED AGENT CAPABILITIES — depends on adept 
       relocate.rs             The SL302 token-conservation guard (`conserves_content`)
     create/                `adept create`'s own implementation: generate -> screen -> repair -> generate-evals
       mod.rs                 CreateError, CreateOutcome, `create_skill` (the single entry point);
-                             computes only, never writes. Inserts the candidate into a SkillSet
-                             with the siblings at `adept::sibling_root`, lints the whole set
-                             (SkillRule + SetRule), gates on zero Error/zero Warning on the
-                             candidate with Info passing; exhausted `max_rounds` still emits the
-                             best candidate (`CreateOutcome::BestEffort`)
+                             computes only, never writes — see §8 for the gate and round semantics
       candidate.rs            GenerateResponse / EvalGenerationResponse (model JSON)
       options.rs              CreateOptions, DEFAULT_MAX_ROUNDS, DEFAULT_EVAL_CASES
 
@@ -241,23 +237,15 @@ base_url = "https://api.openai.com/v1"
 tokenizer = "o200k_base"
 capture_dir = ".adept-capture"  # off by default; gitignore it
 
-[fix]                         # FixFileConfig, CLI-local; fully independent of [eval]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-tokenizer = "o200k_base"
-max_rounds = 2                 # falls back to adept_agent::DEFAULT_MAX_ROUNDS
-capture_dir = ".adept-capture"  # independent of [eval] capture_dir
-
-[create]                      # CreateFileConfig, CLI-local; fully independent of [eval]/[fix]
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-tokenizer = "o200k_base"
-max_rounds = 2                 # falls back to adept_agent::DEFAULT_MAX_ROUNDS
-eval_cases = 10                 # falls back to adept_agent::create::DEFAULT_EVAL_CASES; no CLI flag
-capture_dir = ".adept-capture"  # independent of [eval]/[fix] capture_dir
+# [fix] (FixFileConfig) and [create] (CreateFileConfig) take those same four keys,
+# plus:
+#   max_rounds = 2    both; falls back to adept_agent::DEFAULT_MAX_ROUNDS
+#   eval_cases = 10   [create] only; falls back to create::DEFAULT_EVAL_CASES, no CLI flag
 ```
 
-`[lint]` uses `snake_case` keys (serde default on `LintConfig`); `[fmt]` uses `kebab-case` (`#[serde(rename_all = "kebab-case")]`). `[eval]`, `[fix]` and `[create]` (`EvalFileConfig`/`FixFileConfig`/`CreateFileConfig`) have **no** `rename_all` attribute, so despite what an earlier revision of this table showed, their keys are plain Rust field names (`base_url`, not `base-url`) — verify against the struct, not this table, before trusting either. This inconsistency is real — match the existing casing of the table you are editing. These three sections never fall back to one another; the only shared fallback between them is the `ADEPT_*` environment variables below. **`capture_dir` follows this same independence** — a `capture_dir` set in one of `[eval]`/`[fix]`/`[create]` never applies to another (pinned by `config.rs::capture_dir_sections_do_not_cross_fall_back`). `[eval]` and `[fix]` are structurally near-identical to `[create]` (model/base_url/tokenizer/capture_dir, `fix`/`create` add `max_rounds`); `docs/BACKLOG.md` records that three such sections is the condition it named for revisiting a `#[serde(flatten)]`ed shared `LlmFileConfig` — deliberately not done here.
+**Key casing is inconsistent across sections — verify against the struct, not this table.** `[lint]` uses `snake_case` (serde default on `LintConfig`); `[fmt]` uses `kebab-case` (`#[serde(rename_all = "kebab-case")]`); `[eval]`/`[fix]`/`[create]` (`EvalFileConfig`/`FixFileConfig`/`CreateFileConfig`) carry **no** `rename_all`, so their keys are plain Rust field names (`base_url`, not `base-url`).
+
+Those three sections **never fall back to one another** — the only thing they share is the `ADEPT_*` environment variables below, and `capture_dir` follows the same independence (pinned by `config.rs::capture_dir_sections_do_not_cross_fall_back`). They are structurally near-identical; `docs/BACKLOG.md` records that a third such section was the condition it named for revisiting a `#[serde(flatten)]`ed shared `LlmFileConfig` — deliberately not done here.
 
 **A config file with a stale `[score]` section (the pre-rename name) is a hard error**, not a silently-ignored table: `config.rs::contains_legacy_score_section` checks for it explicitly (rather than relying only on `deny_unknown_fields`, which the config structs deliberately don't have — see `docs/BACKLOG.md`) and fails with exit `2` naming the fix ("`[score]` is no longer read; rename it to `[eval]`"), because silently ignoring it would otherwise quietly drop the user's `model`/`capture_dir`/etc.
 
@@ -274,7 +262,7 @@ The config anchor comes from `AdeptConfig::origin_dir`, which is `#[serde(skip)]
 
 | Var | Flag | Purpose |
 |---|---|---|
-| `ADEPT_MODEL` | `--model` | Model identifier. Required for the `triggering`/`token-bloat`/`overlap` analyses — without it those exit 2 (grading alone, via `--select evals`, needs no model) and the MCP `eval_skill` tool's LLM analyses fail per-call rather than gating advertisement (`eval_skill` is always advertised; see §12). |
+| `ADEPT_MODEL` | `--model` | Model identifier. Required by the `triggering`/`token-bloat`/`overlap` analyses, which exit 2 without it; grading alone (`--select evals`) needs no model. Over MCP its absence fails those analyses per-call rather than hiding the tool — see §12. |
 | `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1` |
 | `ADEPT_API_KEY` | *(none)* | Bearer token, if the endpoint requires one. Never accepted as a flag. Held as a `RedactedString` — see §16. |
 | `ADEPT_LOG` | `-v`/`-vv`/`-vvv` | `EnvFilter` directive syntax (e.g. `adept_agent::llm::client=trace`). Overrides the `-v` count wholesale rather than raising it. Adept's own namespace, not `RUST_LOG`. |
@@ -327,7 +315,7 @@ Everything public is re-exported from `lib.rs`; there are no public submodules e
 
 **`adept::evals`** is the published eval-dataset schema *and offline grader*: `Assertion` (`contains`/`file_exists`/`file_contains`/`command`, `#[serde(tag = "kind")]`), a versioned case object (`schema_version`, independent of any `PROMPT_VERSION`), `validate` (every line parses, `schema_version` is understood, non-empty), plus `parse_results_jsonl` (parses a harness-produced `results.jsonl`) and `grade(cases, results) -> EvalBenchmarkReport` — adept's reference grader for the dataset it defines. The schema half is documented as a contract in `docs/EVALS.md`, machine-checked against the code by a docs test the same way `docs/RULES.md` is checked against the rule registry. `grade` is purely offline and deterministic (substring match, filesystem reads under a harness-supplied `cwd`, a lookup into a harness-supplied exit-code map) — it never spawns a subprocess itself, so **adept still never *executes* an eval dataset**: it grades results a harness already produced. See `docs/EVALS.md` for the full division of labour and the `results.jsonl` sidecar format.
 
-**`adept::companion::is_eval_dataset(skill_dir, path)`** matches by directory name only, and only the first path component beneath `skill_dir` (`<skill>/evals/...`) — not any deeper or unrelated `evals` component — applied at `SL303` and in `adept_agent::eval`'s token-bloat view so a generated dataset is not counted as skill content. It is currently **dormant**: `discover_companion_files` is non-recursive, so a nested `evals/evals.jsonl` is never discovered as a companion file at all, and the predicate can never fire against real output today. It is kept as defence-in-depth for if discovery ever becomes recursive.
+**`adept::companion::is_eval_dataset(skill_dir, path)`** matches by directory name only, and only the first path component beneath `skill_dir` (`<skill>/evals/...`) — never a deeper or unrelated `evals` component. Applied at `SL303` and in `adept_agent::eval`'s token-bloat view so a generated dataset is not counted as skill content. Currently **dormant**: `discover_companion_files` is non-recursive, so a nested `evals/evals.jsonl` is never discovered as a companion at all and the predicate cannot fire against real output today. Kept as defence-in-depth should discovery ever become recursive.
 
 ## 10. Formatter and Evaluation Surfaces
 
@@ -392,23 +380,23 @@ Then add a fixture under `crates/adept/tests/fixtures/rules/` and an insta snaps
 
 `crates/adept_cli/src/commands/mcp.rs`. Hand-rolled JSON-RPC 2.0 over newline-delimited stdio, protocol version `2024-11-05`. The `rmcp` SDK was deliberately not used: a direct implementation keeps both the dependency footprint and the risk of an SDK writing to stdout on our behalf at zero.
 
-Five tools are advertised (three unconditionally — `check_skill`, `format_skill`, `eval_skill` — two conditionally): `check_skill`, `format_skill`, `eval_skill`, `create_skill`, `generate_evals`. **`create_skill` and `generate_evals` are preview-only and never touch the filesystem** — they return the generated skill/dataset as data, mirroring why capture is CLI-only (§15): an MCP client must not be able to make the server write to arbitrary paths. Writing stays a CLI capability (`adept create --write`). **`eval_skill` is read-only** (it grades and reports; nothing it does writes to the skill directory) but not preview-only in the same sense — there is no "real" write it is previewing.
+Five tools: `check_skill`, `format_skill` and `eval_skill` are advertised unconditionally; `create_skill` and `generate_evals` only when a model resolves. **The latter two are preview-only and never touch the filesystem** — they return the generated skill/dataset as data, mirroring why capture is CLI-only (§15): an MCP client must not be able to make the server write to arbitrary paths. Writing stays a CLI capability (`adept create --write`). **`eval_skill` is read-only** (it grades and reports; nothing it does writes to the skill directory) but not preview-only in the same sense — there is no "real" write it is previewing.
 
 **The hard invariant: stdout carries only JSON-RPC response messages. Everything else goes to stderr.** `serve()` is the only function that writes to stdout. `handle_message` is pure with respect to I/O — it never touches stdin, stdout, or stderr — which is what lets tests drive it directly without spawning the binary. Any `println!` added below `serve` breaks every MCP client silently. Use `eprintln!`.
 
 Other contract points:
 
 - The `Linter` is built once into a `static OnceLock<Result<Linter, String>>`. `Linter::new` loads the tiktoken BPE tables, which costs far more than the lint itself; rebuilding it per tool call is not acceptable.
-- `eval_skill` is **always advertised**, unlike `create_skill`/`generate_evals`: grading (`evals`) needs no model at all, so gating advertisement on `LlmConfig::default().resolve().is_ok()` — the check the other two still use, and that `eval_skill` deliberately opts out of while sharing the same resolution call — would hide a tool that works with no `ADEPT_MODEL` set. Its description states which of its four analyses need a model. Preconditions are enforced per-analysis, the same as the CLI's `--select`/`--ignore`: an explicitly selected analysis with a missing precondition (no model, or no `results`) is a structured tool error naming what's missing, not a silent skip. `eval_skill` takes `results` as an inline JSON array (not a file path, since an MCP client may not share a filesystem with the server) plus optional `evals`/`select`/`ignore`; passing `results` alongside raw `content` (no `path`) grades `contains` only and reports `file_exists`/`file_contains` as skipped, naming the missing directory — not an error. LLM-backed analyses remain bounded by `SCORE_TIMEOUT` (30s); grading needs no timeout since it makes no network call.
+- `eval_skill` **opts out of the advertisement gate** the other two LLM tools apply (`LlmConfig::default().resolve().is_ok()`), because grading needs no model — gating it would hide a tool that works with no `ADEPT_MODEL` set. Preconditions are instead enforced per-analysis, exactly as the CLI's `--select`/`--ignore`: an explicitly selected analysis with a missing precondition (no model, or no `results`) is a structured tool error naming what's missing, never a silent skip. It takes `results` as an inline JSON array — not a path, since an MCP client may not share a filesystem with the server — plus optional `evals`/`select`/`ignore`. `results` alongside raw `content` (no `path`) grades `contains` only and reports `file_exists`/`file_contains` as *skipped*, naming the missing directory; that is not an error. LLM-backed analyses are bounded by a 30s timeout; grading needs none, making no network call.
 - `format_skill`'s `line_width` argument is validated to `MIN_LINE_WIDTH..=MAX_LINE_WIDTH` (20..=500); out-of-range or zero values return a structured tool error instead of producing degenerate one-word-per-line output.
 - `create_skill`'s `max_rounds` (1..=10) and both tools' `eval_cases` (1..=50) are bounded the same way: out-of-range values are rejected with a structured tool error, never clamped — an MCP client talks to this server over public JSON-RPC with no other gate on LLM spend, so every numeric argument driving LLM calls needs an explicit bound.
 - Notifications (messages with no `id`, e.g. `notifications/initialized`) return `None` and produce no output line.
 
-**Formerly a known gap, now fixed**: `eval_skill` (like the `score_skill` it replaced) used to pass `[skill]` as the skillset, making overlap detection over MCP inert. `overlap_skillset` in `mcp.rs` now discovers siblings via an optional `directory` argument, or `adept::sibling_root(path)` when a real on-disk `path` is given, mirroring the `adept eval` CLI.
+**Overlap detection over MCP uses real siblings.** `overlap_skillset` in `mcp.rs` discovers them via an optional `directory` argument, or `adept::sibling_root(path)` when a real on-disk `path` is given, mirroring the `adept eval` CLI. Passing just `[skill]` as the skillset makes the analysis inert — it can only find overlaps against skills it can see.
 
 ## 13. Testing & Snapshot Conventions
 
-295 tests across 22 suites, ~7-8s for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
+336 tests across 19 suites (16 unit/integration + 3 doc-test suites), a few seconds for the full workspace run. Tests live beside the code (`#[cfg(test)] mod tests`) for unit-level behaviour and in `tests/` for integration.
 
 **Rule tests are snapshot tests.** Each rule gets a fixture directory under `crates/adept/tests/fixtures/rules/<sl_code>_<slug>/` containing a `SKILL.md` that triggers exactly that rule, plus an `insta` snapshot under `crates/adept/tests/snapshots/rules__snapshot_<name>.snap`. There is also a `cross_clean` fixture asserting a well-formed pair produces nothing. Review snapshot diffs — an accepted snapshot is an accepted behaviour change.
 
@@ -426,11 +414,9 @@ Not covered: no fixture exercises a real skills corpus. The "runs clean-ish on a
 
 ## 14. Known Divergences & Deferrals
 
-Read `docs/BACKLOG.md` for the full list. The three worth knowing before you write code:
+Read `docs/BACKLOG.md` for the full list. The two worth knowing before you write code:
 
 **`SL104`'s heuristic filters are not lexing.** The URL-scheme, glob, `~`, `@scope/name` and template-placeholder filters in `rules/structure.rs` are genuine domain judgements about what a repo-relative path looks like, with one consumer. They sit *above* the shared lexer (§9) and should stay hand-written — do not try to push them into `adept::markdown`.
-
-~~**Stale comment in `adept_score/src/overlap.rs`.**~~ Fixed as part of the crate merge: the module header at `adept_agent/src/eval/overlap.rs` now says what the function bodies actually do (calls `adept::text::word_bag` / `adept::text::jaccard`, thresholds deliberately divergent from `SL402` — see §10), instead of the stale "implemented locally and deliberately separate" claim.
 
 **Performance work is deliberately not done**, since `check` runs ~20ms against a 1s target: skill discovery and the per-skill lint loop are sequential and embarrassingly parallel (`rayon` would cut wall time by roughly Ncores); `SL402`/`SL403` are each O(n²) pairwise Jaccard, fine at 100 skills but 500k pairs at 1000; hashing words to `u64` would remove the per-word `String` allocation; `Skill` retaining both `source` and `body` costs ~2× file bytes. Do not treat any of these as bugs.
 

@@ -29,6 +29,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path, PathBuf};
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// The eval-dataset schema version this build of adept understands.
@@ -172,18 +173,28 @@ pub fn parse_jsonl(text: &str) -> Result<Vec<EvalCase>, EvalError> {
 /// Used internally by [`validate`] so a `schema_version` error can point at
 /// the real line rather than the case's position in the parsed `Vec`.
 fn parse_jsonl_with_lines(text: &str) -> Result<Vec<(usize, EvalCase)>, EvalError> {
-    let mut cases = Vec::new();
+    parse_jsonl_lines(text)
+}
+
+/// Parse a JSONL document of `T`s from `text`, one value per line, pairing
+/// each with its 1-indexed source line number. Blank lines are skipped. The
+/// shared core behind both [`parse_jsonl_with_lines`] (over [`EvalCase`])
+/// and [`parse_results_jsonl`] (over [`CaseResult`]), so the blank-line-skip
+/// behaviour and the 1-indexed [`EvalError::Parse`] contract live in exactly
+/// one place.
+fn parse_jsonl_lines<T: DeserializeOwned>(text: &str) -> Result<Vec<(usize, T)>, EvalError> {
+    let mut values = Vec::new();
     for (idx, line) in text.lines().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        let case: EvalCase = serde_json::from_str(line).map_err(|source| EvalError::Parse {
+        let value: T = serde_json::from_str(line).map_err(|source| EvalError::Parse {
             line: idx + 1,
             source,
         })?;
-        cases.push((idx + 1, case));
+        values.push((idx + 1, value));
     }
-    Ok(cases)
+    Ok(values)
 }
 
 /// Serialize `cases` back to JSONL: one compact JSON object per line,
@@ -222,6 +233,22 @@ pub fn to_jsonl(cases: &[EvalCase]) -> String {
 pub fn validate(text: &str) -> Result<(), EvalError> {
     let cases = parse_jsonl_with_lines(text)?;
     validate_parsed(&cases)
+}
+
+/// Parse `text` once and validate the result, returning the parsed cases.
+///
+/// Equivalent to calling [`validate`] then [`parse_jsonl`], but without the
+/// double parse/allocation that pair would otherwise cause — every line is
+/// deserialized exactly once. `schema_version` errors still name the real
+/// 1-indexed source line, same as [`validate`].
+///
+/// # Errors
+/// Returns the first [`EvalError`] encountered (a parse failure, an
+/// unsupported `schema_version`, or an empty dataset).
+pub fn parse_and_validate(text: &str) -> Result<Vec<EvalCase>, EvalError> {
+    let numbered = parse_jsonl_with_lines(text)?;
+    validate_parsed(&numbered)?;
+    Ok(numbered.into_iter().map(|(_, case)| case).collect())
 }
 
 /// Validate already-parsed `cases` in memory, without serializing them to
@@ -336,18 +363,10 @@ pub struct CaseResult {
 /// Returns [`EvalError::Parse`] naming the 1-indexed line number of the
 /// first non-blank line that fails to parse as a [`CaseResult`].
 pub fn parse_results_jsonl(text: &str) -> Result<Vec<CaseResult>, EvalError> {
-    let mut results = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let result: CaseResult = serde_json::from_str(line).map_err(|source| EvalError::Parse {
-            line: idx + 1,
-            source,
-        })?;
-        results.push(result);
-    }
-    Ok(results)
+    Ok(parse_jsonl_lines(text)?
+        .into_iter()
+        .map(|(_, result)| result)
+        .collect())
 }
 
 /// The outcome of grading a single assertion against a [`CaseResult`].
