@@ -2,13 +2,13 @@
 source: crates/adept/tests/rules.rs
 expression: "lint_fixture(\"sl205_restates_name\")"
 ---
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:2:1: SL004 frontmatter `name` ("pdf-extractor") does not match the containing directory name ("sl205_restates_name")
+crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:2:1: SL004 frontmatter `name` ("pdf-extractor") does not match the containing directory name ("sl205_restates_name")
   fix: rename the `name` field to "sl205_restates_name", or rename the directory to "pdf-extractor"
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL201 description is only 2 tokens, below the minimum of 6
+crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL201 description is only 2 tokens, below the minimum of 6
   fix: expand the description to state both what the skill does and when to use it
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL203 description does not state when the skill should be used
+crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL203 description does not state when the skill should be used
   fix: add trigger phrasing, e.g. "Use when the user asks to..."
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL205 description is little more than the skill name reworded
+crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL205 description is little more than the skill name reworded
   fix: describe what the skill does and when to use it, not just its name
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+crates/adept/tests/fixtures/rules/sl205_restates_name/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
   fix: consider adding "Do not use for..." guidance to reduce over-triggering

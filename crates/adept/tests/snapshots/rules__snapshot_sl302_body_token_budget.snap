@@ -2,9 +2,9 @@
 source: crates/adept/tests/rules.rs
 expression: "lint_fixture(\"sl302_body_budget\")"
 ---
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl302_body_budget/SKILL.md:2:1: SL004 frontmatter `name` ("sl302-body-budget") does not match the containing directory name ("sl302_body_budget")
+crates/adept/tests/fixtures/rules/sl302_body_budget/SKILL.md:2:1: SL004 frontmatter `name` ("sl302-body-budget") does not match the containing directory name ("sl302_body_budget")
   fix: rename the `name` field to "sl302_body_budget", or rename the directory to "sl302-body-budget"
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl302_body_budget/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+crates/adept/tests/fixtures/rules/sl302_body_budget/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
   fix: consider adding "Do not use for..." guidance to reduce over-triggering
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/sl302_body_budget/SKILL.md:5:1: SL302 SKILL.md body is 9606 tokens, over the budget of 1500
+crates/adept/tests/fixtures/rules/sl302_body_budget/SKILL.md:5:1: SL302 SKILL.md body is 9606 tokens, over the budget of 1500
   fix: move detailed reference material into companion files loaded on demand

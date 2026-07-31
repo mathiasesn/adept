@@ -1,25 +1,24 @@
 ---
 source: crates/adept/tests/rules.rs
-assertion_line: 203
 expression: "lint_set_fixture(\"cross_sl401\")"
 ---
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:2:1: SL004 frontmatter `name` ("duplicate-name") does not match the containing directory name ("skill_a")
+crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:2:1: SL004 frontmatter `name` ("duplicate-name") does not match the containing directory name ("skill_a")
   fix: rename the `name` field to "skill_a", or rename the directory to "duplicate-name"
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:2:1: SL401 skill name "duplicate-name" is also used by: /home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md
+crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:2:1: SL401 skill name "duplicate-name" is also used by: crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md
   fix: give each skill a unique `name`
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
   fix: consider adding "Do not use for..." guidance to reduce over-triggering
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:3:1: SL402 description is 93% similar to "duplicate-name" (/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md)
+crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:3:1: SL402 description is 93% similar to "duplicate-name" (crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md)
   fix: differentiate the descriptions so agents can tell the skills apart
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:3:1: SL403 trigger phrasing overlaps 73% with "duplicate-name" (/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md)
+crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md:3:1: SL403 trigger phrasing overlaps 73% with "duplicate-name" (crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md)
   fix: narrow the trigger conditions so the skills don't compete for the same requests
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:2:1: SL004 frontmatter `name` ("duplicate-name") does not match the containing directory name ("skill_b")
+crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:2:1: SL004 frontmatter `name` ("duplicate-name") does not match the containing directory name ("skill_b")
   fix: rename the `name` field to "skill_b", or rename the directory to "duplicate-name"
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:2:1: SL401 skill name "duplicate-name" is also used by: /home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md
+crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:2:1: SL401 skill name "duplicate-name" is also used by: crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md
   fix: give each skill a unique `name`
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
+crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
   fix: consider adding "Do not use for..." guidance to reduce over-triggering
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:3:1: SL402 description is 93% similar to "duplicate-name" (/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md)
+crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:3:1: SL402 description is 93% similar to "duplicate-name" (crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md)
   fix: differentiate the descriptions so agents can tell the skills apart
-/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:3:1: SL403 trigger phrasing overlaps 73% with "duplicate-name" (/home/mathias/code/adept/crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md)
+crates/adept/tests/fixtures/rules/cross_sl401/skill_b/SKILL.md:3:1: SL403 trigger phrasing overlaps 73% with "duplicate-name" (crates/adept/tests/fixtures/rules/cross_sl401/skill_a/SKILL.md)
   fix: narrow the trigger conditions so the skills don't compete for the same requests

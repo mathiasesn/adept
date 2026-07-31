@@ -12,15 +12,38 @@ fn fixture_dir(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The repository root, derived from `CARGO_MANIFEST_DIR` (which is
+/// `<root>/crates/adept`), so snapshots don't embed this machine's
+/// absolute checkout path.
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("CARGO_MANIFEST_DIR should be <root>/crates/adept")
+        .to_path_buf()
+}
+
+/// Strips the repository-root prefix from rendered diagnostic output, so
+/// snapshots contain repo-relative paths (e.g.
+/// `crates/adept/tests/fixtures/...`) rather than this machine's absolute
+/// checkout path. `render_human_colored` embeds `Diagnostic::path` verbatim
+/// via `Path::display`, and fixture paths are built from
+/// `CARGO_MANIFEST_DIR`, so without this the snapshot would be
+/// machine-dependent.
+fn strip_repo_root(rendered: String) -> String {
+    let prefix = format!("{}/", repo_root().display());
+    rendered.replace(&prefix, "")
+}
+
 fn lint_fixture(name: &str) -> String {
-    render_human_colored(&diagnostics_for(name), false)
+    strip_repo_root(render_human_colored(&diagnostics_for(name), false))
 }
 
 fn lint_set_fixture(name: &str) -> String {
     let set = SkillSet::discover(fixture_dir(name)).expect("fixture set should discover");
     let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
     let diagnostics = linter.lint_set(&set);
-    render_human_colored(&diagnostics, false)
+    strip_repo_root(render_human_colored(&diagnostics, false))
 }
 
 /// The raw diagnostics for a fixture, so tests can assert on line numbers
@@ -340,7 +363,10 @@ fn snapshot_sl003_malformed_frontmatter() {
     )
     .expect("should discover");
     let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
-    insta::assert_snapshot!(render_human_colored(&linter.lint_set(&set), false));
+    insta::assert_snapshot!(strip_repo_root(render_human_colored(
+        &linter.lint_set(&set),
+        false
+    )));
 }
 
 #[test]
