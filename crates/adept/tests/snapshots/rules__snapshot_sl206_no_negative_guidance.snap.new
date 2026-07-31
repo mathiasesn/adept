@@ -1,9 +1,0 @@
----
-source: crates/adept/tests/rules.rs
-assertion_line: 403
-expression: "lint_fixture(\"sl206_no_negative\")"
----
-/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl206_no_negative/SKILL.md:2:1: SL004 frontmatter `name` ("sl206-no-negative") does not match the containing directory name ("sl206_no_negative")
-  fix: rename the `name` field to "sl206_no_negative", or rename the directory to "sl206-no-negative"
-/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl206_no_negative/SKILL.md:3:1: SL206 description gives no guidance on when not to use the skill
-  fix: consider adding "Do not use for..." guidance to reduce over-triggering

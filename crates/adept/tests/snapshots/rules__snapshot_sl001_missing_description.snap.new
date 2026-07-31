@@ -1,9 +1,0 @@
----
-source: crates/adept/tests/rules.rs
-assertion_line: 328
-expression: "lint_fixture(\"sl001_empty_description\")"
----
-/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl001_empty_description/SKILL.md:2:1: SL004 frontmatter `name` ("sl001-empty-description") does not match the containing directory name ("sl001_empty_description")
-  fix: rename the `name` field to "sl001_empty_description", or rename the directory to "sl001-empty-description"
-/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/rules/sl001_empty_description/SKILL.md:3:1: SL001 the `description` frontmatter field is empty
-  fix: write a description stating what the skill does and when to use it

@@ -1,7 +1,0 @@
----
-source: crates/adept/tests/rules.rs
-assertion_line: 343
-expression: "render_human_colored(&linter.lint_set(&set), false)"
----
-/home/mathias/code/adept/.claude/worktrees/cli-tracing-spec/crates/adept/tests/fixtures/missing_frontmatter/SKILL.md:1:1: SL003 SKILL.md must start with a line containing only '---' to open the YAML frontmatter block
-  fix: add an opening `---` line as the first line of the file
