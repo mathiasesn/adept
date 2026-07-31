@@ -61,6 +61,14 @@ fn run(cli: &Cli) -> i32 {
             };
             commands::fix::run(args, &config, cli.quiet)
         }
+        Command::Create(args) => {
+            let target = args.out.clone().unwrap_or_else(|| PathBuf::from("."));
+            let config = match load_config(cli.config.as_deref(), &target) {
+                Ok(config) => config,
+                Err(code) => return code,
+            };
+            commands::create::run(args, &config, cli.quiet)
+        }
         Command::Mcp => commands::mcp::serve(),
     }
 }

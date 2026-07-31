@@ -43,6 +43,8 @@ pub enum Command {
     Score(ScoreArgs),
     /// Fix LLM-fixable lint diagnostics in one or more SKILL.md files using an LLM.
     Fix(FixArgs),
+    /// Generate a new skill (plus a synthetic eval dataset) from a brief, using an LLM.
+    Create(CreateArgs),
     /// Run adept as an MCP server over stdio.
     Mcp,
 }
@@ -223,6 +225,62 @@ pub struct FixArgs {
     /// Write verbatim request/response artifacts for every LLM call into a
     /// new timestamped subfolder of this directory. Overrides the config
     /// file's `[fix] capture_dir`; a relative path resolves against the
+    /// current working directory.
+    #[arg(long, value_name = "DIR")]
+    pub capture_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Parser)]
+pub struct CreateArgs {
+    /// Read the task brief from a file instead of stdin/the interactive
+    /// prompt. Takes precedence over stdin and the interactive prompt.
+    #[arg(long, value_name = "PATH")]
+    pub from_file: Option<PathBuf>,
+
+    /// Destination directory for the new skill (defaults to the current
+    /// directory).
+    #[arg(long, value_name = "DIR")]
+    pub out: Option<PathBuf>,
+
+    /// Override the skill name the model derives from the brief.
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Write the generated skill and eval dataset to disk. Preview (compute
+    /// and print, write nothing) is the default.
+    #[arg(short, long)]
+    pub write: bool,
+
+    /// Allow writing into an existing skill directory (one already
+    /// containing a `SKILL.md`). Without this, `create` refuses to clobber
+    /// it and exits 2.
+    #[arg(long)]
+    pub overwrite: bool,
+
+    /// The model to use for generation (falls back to `ADEPT_MODEL`).
+    #[arg(long)]
+    pub model: Option<String>,
+
+    /// The OpenAI-compatible base URL (falls back to `ADEPT_BASE_URL`).
+    #[arg(long)]
+    pub base_url: Option<String>,
+
+    /// Which `tiktoken-rs` BPE encoding to count tokens with (default
+    /// `o200k-base`; overrides the config file's `[create] tokenizer`).
+    #[arg(long, value_enum)]
+    pub tokenizer: Option<TokenizerArg>,
+
+    /// The maximum number of authoring rounds to attempt before giving up.
+    #[arg(long)]
+    pub max_rounds: Option<usize>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    pub format: OutputFormat,
+
+    /// Write verbatim request/response artifacts for every LLM call into a
+    /// new timestamped subfolder of this directory. Overrides the config
+    /// file's `[create] capture_dir`; a relative path resolves against the
     /// current working directory.
     #[arg(long, value_name = "DIR")]
     pub capture_dir: Option<PathBuf>,

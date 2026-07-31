@@ -42,6 +42,15 @@ pub struct CreateOptions {
     /// The formatter configuration used to canonicalize the candidate's
     /// SKILL.md source before it is linted, diffed, or emitted.
     pub fmt_config: FmtConfig,
+    /// An explicit skill name overriding whatever the model derives from the
+    /// brief (the CLI's `--name`). Applied to every round's response
+    /// *before* screening — not patched onto the final candidate — so the
+    /// name the caller asked for is what the gate actually lints and the
+    /// repair loop actually repairs against (a directory-name mismatch,
+    /// `SL004`, or a sibling collision, `SL401`/`SL402`, is caught and
+    /// repaired like any other diagnostic instead of being emitted
+    /// unchecked).
+    pub name_override: Option<String>,
 }
 
 impl CreateOptions {
@@ -59,6 +68,7 @@ impl CreateOptions {
                 ..LintConfig::default()
             },
             fmt_config: FmtConfig::default(),
+            name_override: None,
         }
     }
 }

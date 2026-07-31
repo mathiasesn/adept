@@ -240,6 +240,38 @@ pub struct FixFileConfig {
     pub capture_dir: Option<PathBuf>,
 }
 
+/// LLM-related settings for `adept create`, layered under CLI flags and
+/// `ADEPT_*` environment variables by [`adept_score::LlmConfig::resolve`].
+/// Kept fully independent of [`ScoreFileConfig`]/[`FixFileConfig`]: `[create]`
+/// never falls back to `[score]` or `[fix]` or vice versa — the only shared
+/// fallback is the `ADEPT_*` environment variables.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CreateFileConfig {
+    /// The model identifier to request for both the authoring and
+    /// eval-generation calls, e.g. `"gpt-4o"`. `None` falls back to
+    /// `--model` or `ADEPT_MODEL`; with none of those set, `adept create`
+    /// exits 2.
+    pub model: Option<String>,
+    /// The base URL of the OpenAI-compatible endpoint to call. `None` falls
+    /// back to `--base-url`, `ADEPT_BASE_URL`, or the OpenAI default.
+    pub base_url: Option<String>,
+    /// Which `tiktoken-rs` BPE encoding to use for token counting. `None`
+    /// falls back to [`adept::Tokenizer::default`] (`o200k_base`).
+    pub tokenizer: Option<adept::Tokenizer>,
+    /// The maximum number of authoring rounds to attempt before giving up.
+    /// `None` falls back to [`adept_agent::DEFAULT_MAX_ROUNDS`].
+    pub max_rounds: Option<usize>,
+    /// How many synthetic eval cases to generate. `None` falls back to
+    /// [`adept_agent::create::DEFAULT_EVAL_CASES`]. No CLI flag.
+    pub eval_cases: Option<usize>,
+    /// Directory to write verbatim LLM call artifacts into. `None` (the
+    /// default) disables capture. Overridden by `--capture-dir`; a relative
+    /// path resolves against the directory holding this `adept.toml` — see
+    /// [`resolve_capture_dir`]. Independent of `[score]`/`[fix] capture_dir`.
+    pub capture_dir: Option<PathBuf>,
+}
+
 /// The full deserialized shape of an `adept.toml` config file.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -248,6 +280,7 @@ pub struct AdeptConfig {
     pub fmt: FmtConfig,
     pub score: ScoreFileConfig,
     pub fix: FixFileConfig,
+    pub create: CreateFileConfig,
     /// The directory containing the `adept.toml` this config was loaded
     /// from, or `None` when no file was found (built-in defaults).
     ///

@@ -157,6 +157,19 @@ fn diag_key(d: &Diagnostic) -> (PathBuf, &'static str, String) {
     (d.path.clone(), d.code, d.message.clone())
 }
 
+/// Overwrite `response.name` with `name_override`, if set, before the
+/// response is screened. Applied at candidate-construction time (every
+/// round, not just once at the end) so a caller-supplied name is what the
+/// gate lints and the repair loop repairs against, rather than a post-hoc
+/// patch on an already-accepted candidate that could silently reintroduce a
+/// directory-name mismatch (`SL004`) or a sibling collision
+/// (`SL401`/`SL402`).
+fn apply_name_override(response: &mut GenerateResponse, name_override: Option<&str>) {
+    if let Some(name) = name_override {
+        response.name = name.to_string();
+    }
+}
+
 /// Build a candidate [`Skill`] and its companion files from a
 /// [`GenerateResponse`], canonicalizing the SKILL.md source via `adept_fmt`
 /// and re-parsing it so line numbers are correct.
@@ -451,6 +464,7 @@ pub async fn create_skill(
     let mut best: Option<RoundResult> = None;
     let mut rounds_used = 0;
     let mut response = request_generate(client, brief, &siblings, &options.model).await?;
+    apply_name_override(&mut response, options.name_override.as_deref());
 
     loop {
         rounds_used += 1;
@@ -487,6 +501,7 @@ pub async fn create_skill(
             &options.model,
         )
         .await?;
+        apply_name_override(&mut response, options.name_override.as_deref());
     }
 
     let best = best.expect("the loop always runs at least one round");
@@ -763,5 +778,91 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, CreateError::InvalidEvalDataset(_)));
+    }
+
+    /// Regression test for the `--name` fix: overriding the name to collide
+    /// with a sibling must be caught by the gate every round (the override
+    /// is re-applied before each round's screening, so the model can never
+    /// escape the collision by choosing a different name) and therefore must
+    /// never be silently reported clean.
+    #[tokio::test]
+    async fn name_override_colliding_with_sibling_is_never_silently_clean() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let sibling_dir = root.join("existing-skill");
+        write_sibling(
+            &sibling_dir,
+            "existing-skill",
+            "Handles the existing task. Use when asked about the existing thing.",
+        );
+        let out_dir = root.join("new-skill");
+
+        // Every round: the model proposes a distinct name, but the override
+        // forces it back to the sibling's name every time, so the collision
+        // (SL401) can never actually be cleared by repair.
+        let candidate = valid_generate_json(
+            "new-skill",
+            "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs.",
+            clean_body(),
+        );
+        let eval = valid_eval_json(10);
+        let mock = MockLlmClient::with_texts(vec![candidate.clone(), candidate, eval]);
+
+        let mut options = base_options();
+        options.name_override = Some("existing-skill".to_string());
+        let report = create_skill(&mock, "Extract PDF form data", &out_dir, &options)
+            .await
+            .unwrap();
+
+        assert!(
+            !report.is_clean(),
+            "a forced sibling-name collision must never be reported clean: {report:?}"
+        );
+        assert_eq!(report.outcome, CreateOutcome::BestEffort);
+        let all_diagnostics: Vec<_> = report
+            .candidate_diagnostics
+            .iter()
+            .chain(report.new_sibling_diagnostics.iter())
+            .collect();
+        assert!(
+            all_diagnostics.iter().any(|d| d.code == "SL401"),
+            "expected SL401 duplicate-skill-name to be reported: {all_diagnostics:?}"
+        );
+        assert_eq!(report.skill_name, "existing-skill");
+    }
+
+    /// Regression test for the `--name` fix: when the override is applied
+    /// *before* screening (at candidate-construction time, every round)
+    /// rather than patched onto the finished report, a name matching the
+    /// output directory produces no `SL004` name-mismatch finding — proving
+    /// the override actually participates in the gate the loop already runs,
+    /// rather than being invisible to it.
+    #[tokio::test]
+    async fn name_override_matching_out_dir_produces_no_sl004() {
+        let tmp = tempfile::tempdir().unwrap();
+        // The model's own candidate name would be "demo-skill", not
+        // matching this directory; only the override does.
+        let out_dir = tmp.path().join("custom-skill-name");
+
+        let candidate = valid_generate_json(
+            "demo-skill",
+            "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs.",
+            clean_body(),
+        );
+        let eval = valid_eval_json(10);
+        let mock = MockLlmClient::with_texts(vec![candidate, eval]);
+
+        let mut options = base_options();
+        options.name_override = Some("custom-skill-name".to_string());
+        let report = create_skill(&mock, "Extract PDF form data", &out_dir, &options)
+            .await
+            .unwrap();
+
+        assert!(report.is_clean(), "{report:?}");
+        assert!(!report
+            .candidate_diagnostics
+            .iter()
+            .any(|d| d.code == "SL004"));
+        assert_eq!(report.skill_name, "custom-skill-name");
     }
 }
