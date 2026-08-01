@@ -1,10 +1,27 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents working with code in this repository. `AGENTS.md` is the tool-agnostic convention read natively by Claude Code, Codex CLI, GitHub Copilot, Cursor, Zed and others; `CLAUDE.md` is a symlink to this file, kept so Claude Code's native path still resolves.
+Guidance for AI coding agents working in this repository. `AGENTS.md` is the tool-agnostic convention read natively by Claude Code, Codex CLI, GitHub Copilot, Cursor, Zed and others; `CLAUDE.md` is a symlink to this file, kept so Claude Code's native path still resolves.
+
+## What adept is
+
+A linter, formatter, and LLM-assisted authoring tool for agent skills (`SKILL.md` files). One binary, six subcommands:
+
+| Command | Does | Network |
+|---|---|---|
+| `check` | Lints skills against the `SL*` rule registry | never |
+| `fmt` | Rewrites skills into canonical form, in place | never |
+| `eval` | Scores triggering, token bloat, overlap, and eval datasets | yes, except `--select evals` |
+| `fix` | Rewrites skills to clear `FixKind::Llm` diagnostics | yes |
+| `create` | Generates a new skill + synthetic eval dataset from a brief | yes |
+| `mcp` | Serves the above over MCP on stdio | depends on tool |
 
 ## Required reading
 
-`docs/ARCHI.md` is the architecture source of truth — read it before any non-trivial change, and update it when a crate boundary, dependency, config mechanism, or hard invariant moves. It defers to two other docs in their own domains: `docs/RULES.md` (per-rule reference `SL001`–`SL403`, machine-checked against the registry), `docs/BACKLOG.md` (known gaps and deliberate deferrals — check here before "discovering" a bug).
+`docs/ARCHI.md` is the architecture source of truth — read it before any non-trivial change, and update it when a crate boundary, dependency, config mechanism, or hard invariant moves. It defers to three docs in their own domains:
+
+- `docs/RULES.md` — per-rule reference `SL001`–`SL403`, machine-checked against the registry.
+- `docs/EVALS.md` — eval-dataset schema (`evals.jsonl` / `results.jsonl`) and grading semantics.
+- `docs/BACKLOG.md` — known gaps and deliberate deferrals. Check here before "discovering" a bug.
 
 ## Commands
 
@@ -30,10 +47,16 @@ Virtual cargo workspace, four crates, one binary (`adept`):
 
 - `adept` — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, `markdown` (the shared pulldown-cmark lexer), and `evals` (the eval-dataset schema plus the offline `grade` function).
 - `adept_fmt` — formatter: canonical frontmatter + Markdown reflow. Idempotent, atomic writes.
-- `adept_agent` — LLM-assisted agent capabilities; top-of-stack, composes `adept` and `adept_fmt` (canonicalization). Houses its own LLM transport at `adept_agent::llm` (`LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`) and the four `adept eval` analyses at `adept_agent::eval` (`triggering`, `tokens`, `overlap`, `report`), both re-exported at the crate root. `fix` (autofix for `FixKind::Llm` diagnostics) is its own submodule; `candidate`/`diff`/`prompts`/`writer`/`gate` are crate-level machinery shared with `create` (generate → screen → repair → generate-evals skill authoring).
+- `adept_agent` — everything LLM-assisted. Submodules:
+  - `llm` — the transport: `LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`.
+  - `eval` — the four `adept eval` analyses: `triggering`, `tokens`, `overlap`, `report`.
+  - `fix` — autofix for `FixKind::Llm` diagnostics.
+  - `create` — skill authoring: generate → screen → repair → generate-evals.
+
+  `llm` and `eval` are re-exported at the crate root. `candidate`/`diff`/`prompts`/`writer`/`gate` sit at crate level because `fix` and `create` share them.
 - `adept_cli` — clap CLI + `adept.toml` config + hand-rolled MCP stdio server.
 
-Dependency direction: `adept_fmt` depends only on `adept`. `adept_agent` is top-of-stack and may compose `adept` and `adept_fmt`. Nothing in the library stack may depend on `adept_agent`; only `adept_cli` does.
+Dependency direction is strictly layered: `adept` ← `adept_fmt` ← `adept_agent` ← `adept_cli`. `adept_agent` may compose `adept` and `adept_fmt`; nothing in the library stack may depend on `adept_agent`, only `adept_cli` does.
 
 Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml` is discovered by walking up from the target path. `[fix]`, `[eval]` and `[create]` are three independent sections (no fallback between any of them); the `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY` env vars are the only thing they share. A config file containing a stale `[score]` section (the pre-rename name) is a hard error naming `[eval]`, not a silently-ignored table.
 
@@ -49,9 +72,9 @@ Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml
 - **`fmt` writes atomically** (temp file + rename) and is idempotent; both are tested.
 - `Diagnostic` = something wrong with a parseable skill; `AdeptError` = I/O/parse failure. Discovery never aborts — errors become `SL001`/`SL002`/`SL003` diagnostics.
 - Sort output via `adept::sort_diagnostics` — never re-implement the `(path, line, column, code)` comparator.
-- Construct `EvalOptions` via `EvalOptions::for_model`, and bump `PROMPT_VERSION` in `adept_agent::eval::prompts` when template wording could shift scores.
+- Build the options structs via their `for_model` constructors (`EvalOptions`, `CreateOptions`, `FixOptions`) rather than struct literals, so defaults stay in one place. Bump `PROMPT_VERSION` in `adept_agent::eval::prompts` whenever template wording could shift scores.
 
-## Adding a rule (all four steps required)
+## Adding a rule (all five steps required)
 
 1. Add the unit struct + `check` impl to the taxonomy file matching its code: `SL00x` → `rules/frontmatter.rs`, `SL1xx` → `structure.rs`, `SL2xx` → `description.rs`, `SL3xx` → `tokens.rs`, `SL4xx` → `cross.rs`.
 2. `impl_rule!(MyRule, "SL107", "my-rule", Warning);` on one line next to the struct — never hand-write the `impl Rule` block. The optional trailing argument sets `fix_kind`, which defaults to `FixKind::None`:
@@ -61,12 +84,16 @@ Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml
    This is metadata only: `adept_agent` hard-codes no rule list, and a unit test pins the tagged set.
 3. Register it in `Registry::new`, in the matching `vec![]`, in code order.
 4. Document it in `docs/RULES.md` — `crates/adept/tests/docs_test.rs` fails the build otherwise.
+5. Add a fixture under `crates/adept/tests/fixtures/rules/<sl_code>_<slug>/` and an insta snapshot.
 
-Then add a fixture under `crates/adept/tests/fixtures/rules/<sl_code>_<slug>/` and an insta snapshot. Severity and enablement are applied by the `Linter`, never by the rule.
+The rule itself decides nothing about severity or enablement — the `Linter` applies both.
 
 ## Testing conventions
 
-Rule tests and formatter tests are fixture-in / insta-snapshot-out; an accepted snapshot is an accepted behaviour change, so read the diff. Formatter fixtures are one file per construct family, plus `proptest_idempotency.rs`. Note prose reflow is the least-covered high-risk path — the broad idempotency loop is gated on `reflow_prose: false`. CLI tests use `assert_cmd`/`predicates` against `crates/adept_cli/tests/fixtures/{clean,defective}-skill`.
+- Rule and formatter tests are fixture-in / insta-snapshot-out. **An accepted snapshot is an accepted behaviour change** — read the diff before `cargo insta review` accepts it.
+- Formatter fixtures are one file per construct family, plus `proptest_idempotency.rs`. Prose reflow is the least-covered high-risk path: the broad idempotency loop is gated on `reflow_prose: false`, so changes there need their own targeted tests.
+- CLI tests use `assert_cmd`/`predicates` against `crates/adept_cli/tests/fixtures/{clean,defective}-skill`.
+- No test may perform network I/O — use `adept_agent::MockLlmClient`.
 
 Dependency versions live once in the root `[workspace.dependencies]`; members reference them with `{ workspace = true }`.
 
