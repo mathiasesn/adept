@@ -1,6 +1,8 @@
-//! Asserts `docs/RULES.md` documents every rule in the registry, and that
-//! `docs/EVALS.md` documents every eval-dataset assertion kind, so neither
-//! doc can silently drift from the code it describes.
+//! Asserts `docs/RULES.md` documents every rule in the registry, that
+//! `docs/EVALS.md` documents every eval-dataset assertion kind, and that
+//! `docs/BACKLOG.md` follows its own formatting conventions (80-column
+//! wrap, parenthesized `#N` issue citations), so none of these docs can
+//! silently drift from the code or convention they describe.
 
 use std::path::Path;
 
@@ -107,5 +109,66 @@ fn every_assertion_kind_is_documented_in_evals_md() {
         );
         serde_json::from_str::<adept::evals::Assertion>(json)
             .unwrap_or_else(|e| panic!("sample for `{kind}` should deserialize: {e}"));
+    }
+}
+
+/// `docs/BACKLOG.md` wraps prose at 80 columns. Counted in characters, not
+/// bytes: the file uses multi-byte characters (`—`, `≤`, `²`, `×`) whose
+/// UTF-8 byte length would over-count relative to what a reader (or an
+/// 80-column terminal) actually sees.
+#[test]
+fn backlog_lines_fit_eighty_columns() {
+    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/BACKLOG.md")
+        .canonicalize()
+        .expect("docs/BACKLOG.md should exist");
+    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/BACKLOG.md");
+
+    for (idx, line) in docs.lines().enumerate() {
+        let len = line.chars().count();
+        assert!(
+            len <= 80,
+            "docs/BACKLOG.md:{} is {} characters (max 80): {:?}",
+            idx + 1,
+            len,
+            line
+        );
+    }
+}
+
+/// `docs/BACKLOG.md` cites GitHub issues as `(#N)`. This only checks the
+/// mechanical form — that every `#<digits>` run is immediately preceded by
+/// `(` — which is all a text scan can verify. It does NOT check that the
+/// referenced issue exists, is open, or is the correct issue; it rejects
+/// bare `#28` or `**#7**` forms while accepting both item citations and
+/// ordinary parenthesized cross-references, which are indistinguishable
+/// mechanically.
+#[test]
+fn backlog_citations_use_canonical_form() {
+    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/BACKLOG.md")
+        .canonicalize()
+        .expect("docs/BACKLOG.md should exist");
+    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/BACKLOG.md");
+
+    for (idx, line) in docs.lines().enumerate() {
+        let bytes = line.as_bytes();
+        for (i, &b) in bytes.iter().enumerate() {
+            if b != b'#' {
+                continue;
+            }
+            // Only consider `#` runs followed by at least one ASCII digit;
+            // other `#`s (headings, anchors) aren't issue citations.
+            if !bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
+                continue;
+            }
+            let preceded_by_paren = i > 0 && bytes[i - 1] == b'(';
+            assert!(
+                preceded_by_paren,
+                "docs/BACKLOG.md:{} has a `#<digits>` citation not preceded by `(`: {:?}",
+                idx + 1,
+                line
+            );
+        }
     }
 }

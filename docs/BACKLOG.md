@@ -72,18 +72,18 @@ Deliberately not done — `check` is far under the 1s target
 runner hardware, not a regression). Compare like for like before reading
 either number as movement.
 
-- **#7** — Discovery/parsing and the per-skill lint loop are sequential and
-  embarrassingly parallel (`rayon` would cut wall time ~Ncores).
-- **#10 — `SL1xx` parses each body five times** (`markdown::headings` in
+- **Discovery/parsing and the per-skill lint loop run sequentially (#7).**
+  They are embarrassingly parallel; `rayon` would cut wall time ~Ncores.
+- **`SL1xx` parses each body five times (#10).** `markdown::headings` in
   `SL102`, `SL103`, `SL105`; `link_destinations` + `inline_code_spans` in
-  `SL104`). Measured, not assumed: costs nothing detectable, because token
+  `SL104`. Measured, not assumed: costs nothing detectable, because token
   counting dominates. Do not "fix" without a benchmark. If rule dispatch ever
   grows a per-skill context object, parsing once belongs there.
-- **#8** — `SL402`/`SL403` are each O(n²) pairwise Jaccard. Fine at 100 skills;
-  at 1000 it's 500k pairs and will dominate. Hashing words to `u64` would remove
-  the per-word `String` allocation.
-- **#9** — `Skill` retains both `source` and `body`, ~2× file bytes per skill.
-  `source` plus a body offset would halve it.
+- **`SL402`/`SL403` are each O(n²) pairwise Jaccard (#8).** Fine at 100
+  skills; at 1000 it's 500k pairs and will dominate. Hashing words to `u64`
+  would remove the per-word `String` allocation.
+- **`Skill` retains both `source` and `body`, ~2× file bytes per skill
+  (#9).** `source` plus a body offset would halve it.
 
 **`adept fix` per-skill LLM calls run sequentially (#6).** `commands/fix.rs`
 `block_on`s one `fix_skill` at a time, so N skills cost N × rounds × latency
@@ -122,11 +122,11 @@ with the concurrency cap sourced from `[fix]` config.
 `crates/adept/tests/fixtures/corpus/` at upstream
 `1f630fdf9259cec4a14913127dfd7c3b69ef72eb`; `tests/corpus.rs` snapshots the
 linter over them (24 diagnostics). The manual clone-build-diff ritual is
-retired. `anthropics/skills` is not uniformly licensed — `docx`, `pdf`, `pptx`,
-`xlsx` are source-available and cannot be vendored (their SL104 residuals are
-handled by `is_archive_internal_path` instead); `canvas-design`,
-`theme-factory`, `web-artifacts-builder` are excluded for binary assets. Do not
-"helpfully" refresh the pin; see the corpus README.
+retired. `anthropics/skills` is not uniformly licensed — `docx`, `pdf`,
+`pptx`, `xlsx` are source-available and cannot be vendored (their SL104
+residuals are handled by `is_archive_internal_path` instead);
+`canvas-design`, `theme-factory`, `web-artifacts-builder` are excluded for
+binary assets. Do not "helpfully" refresh the pin; see the corpus README.
 
 **Resolved, do not reopen:**
 
@@ -150,9 +150,12 @@ handled by `is_archive_internal_path` instead); `canvas-design`,
   `fn file_names(&self) -> &[&str]` would complete the pluggability seam.
 - **Deliberate similarity divergence.** `adept_agent::eval`'s overlap shortlist
   uses name+description at 0.25; SL402 uses description-only at 0.6. Both call
-  `adept::text::jaccard`. Documented — but `check` and `eval` can still reach
-  different conclusions about the same pair.
-- **`--statistics` prints counts in addition to diagnostics** (#17), not
+  `adept::text::jaccard`. The thresholds differ because the jobs do: 0.25
+  casts a wide net for a shortlist an LLM pass then judges, while 0.6 must
+  flag near-duplicates on its own with no LLM to filter it. `check` and
+  `eval` can therefore reach different conclusions about the same pair —
+  accepted, not a defect to reconcile.
+- **`--statistics` prints counts in addition to diagnostics (#17).** Not
   instead of. One line in `check.rs` if instead-of is wanted.
 - **`FixFileConfig` / `EvalFileConfig` / `CreateFileConfig` are near-identical,
   and this item's trigger has fired (#18).** All three carry `model`,
@@ -187,31 +190,33 @@ handled by `is_archive_internal_path` instead); `canvas-design`,
   `~` arm is live. A deeper factoring would give line-start escaping the full
   positional set and leave `escape_text` the context-free escapes. Moves
   observable output, so deferred.
-- **`marker_like` hand-rolls CommonMark block-start detection (#22)** in the
-  printer (`#`-count ≤6, digit-count ≤9, tilde-run ≥3, setext/thematic rules)
-  despite the crate already parsing via `adept::markdown`. Its invariant —
-  re-parsing the emitted line yields the same block structure — is in principle
-  checkable against the real parser. Deferred: the oracle is a larger
-  rearchitecture with a per-word parse cost on the format path.
+- **`marker_like` hand-rolls CommonMark block-start detection in the
+  printer (#22)** (`#`-count ≤6, digit-count ≤9, tilde-run ≥3,
+  setext/thematic rules), despite the crate already parsing via
+  `adept::markdown`. Its invariant — re-parsing the emitted line yields the
+  same block structure — is in principle checkable against the real parser.
+  Deferred: the oracle is a larger rearchitecture with a per-word parse cost
+  on the format path.
 - **The formatter's semantic oracle no longer pins its own parser options.**
   `adept_fmt/tests/format_tests.rs` now calls `adept::markdown::parser`, so an
-  `Options` flag added there silently changes the oracle too. Deliberate trade
-  for the single-construction-site invariant.
+  `Options` flag added there silently changes the oracle too. Accepted as the
+  price of the single-construction-site invariant: an oracle with its own
+  `Options` would drift from the parser it is supposed to check.
 
 ## External prior art: `huggingface/upskill`
 
 Recorded so this survey is not repeated. upskill (Python, on fast-agent)
 generates and *empirically evaluates* skills: a teacher model writes a
-`SKILL.md`, a test generator produces cases, and a student model runs with and
-without the skill to measure whether it helped. Pipeline: `generate` →
-`generate_tests` → `eval` → `runs`; prompts are external markdown agent cards;
-graders live in `verifiers.py` / `validators/`.
+`SKILL.md`, a test generator produces cases, and a student model runs with
+and without the skill to measure whether it helped. Pipeline: `generate` →
+`generate_tests` → `eval` → `runs`; prompts are external markdown agent
+cards; graders live in `verifiers.py` / `validators/`.
 
-The projects are **complementary**: adept checks *conformance* and never runs a
-skill; upskill measures *outcomes* and never checks frontmatter or token
-budgets. Items 1–2 below closed the one overlap and are shipped; they supersede
-two of the project's original non-goals — read them alongside "Deferred by
-design" below.
+The projects are **complementary**: adept checks *conformance* and never
+runs a skill; upskill measures *outcomes* and never checks frontmatter or
+token budgets. Items 1–2 below closed the one overlap and are shipped; they
+supersede two of the project's original non-goals — read them alongside
+"Deferred by design" below.
 
 1. ~~**Deterministic verifiers as an `adept fix` accept gate.**~~ **Shipped**,
    but relocated: the four verifiers (`contains`, `file_exists`,
@@ -224,9 +229,10 @@ design" below.
 2. ~~**Baseline / lift.**~~ **Shipped** as skill lift (percentage points,
    `pass_rate - baseline_pass_rate`) from `arm: "skill"`/`"baseline"` results,
    surfaced in `adept eval`'s `evals` analysis. **Not** shipped as
-   lift-*per-token* (#26) — lift and token usage are separate fields; combining
-   them is still open. `triggering` still answers "would this skill trigger" (a
-   prompting proxy); `evals` answers "did it help" (measured).
+   lift-*per-token* (#26) — lift and token usage are separate fields;
+   combining them is still open. `triggering` still answers "would this
+   skill trigger" (a prompting proxy); `evals` answers "did it help"
+   (measured).
 3. **Run persistence and history (#23).** upskill writes `runs/<timestamp>/...`
    plus a batch summary and `results.csv`, queryable via `upskill runs`. `adept
    eval` is fire-and-forget (`--capture-dir` records individual LLM calls, not
@@ -283,8 +289,8 @@ different, still-unimplemented piece of work.
 
 Source: `mattpocock/skills`, `skills/productivity/writing-great-skills/SKILL.md`
 (read 2026-07-31). Thesis: a skill wrangles determinism out of a stochastic
-system, and **predictability** — the agent taking the same *process* every run,
-not producing the same output — is the root virtue. Levers:
+system, and **predictability** — the agent taking the same *process* every
+run, not producing the same output — is the root virtue. Levers:
 
 - **Invocation is a two-way choice with a cost on each side.** Model-invoked
   keeps a trigger-bearing `description` and pays *context load* every turn;
@@ -319,17 +325,17 @@ claimed every requirement was already an adept rule; that was wrong.)
 - **Already covered:** sprawl → `SL3xx`; broken context pointers → `SL104`;
   cross-skill duplication → `SL402`/`SL403`.
 - **New and genuinely lintable:** *invocation-mode coherence* (#27) is the
-  strongest candidate — `disable-model-invocation: true` alongside model-facing
-  trigger phrasing ("Use when…") is a flat contradiction, mechanically
-  detectable, and readable today with no parser change (unknown frontmatter keys
-  land in `Skill::extra`, `parser.rs:156`). Negation is a plausible Info-level
-  heuristic and intra-skill duplication is weaker but real — adept only compares
-  *across* skills today; both are #28.
+  strongest candidate — `disable-model-invocation: true` alongside
+  model-facing trigger phrasing ("Use when…") is a flat contradiction,
+  mechanically detectable, and readable today with no parser change (unknown
+  frontmatter keys land in `Skill::extra`, `parser.rs:156`). Negation is a
+  plausible Info-level heuristic. Intra-skill duplication is weaker but
+  real — adept only compares *across* skills today (#28).
 - **Not lintable, do not fake:** no-ops, leading-word strength, ladder
-  placement, completion-criterion sharpness. These belong to the LLM surfaces —
-  and that is the actual argument for `create`: the most valuable half of
-  authoring guidance is judgment adept can only apply while *writing*. A clean
-  `adept check` proves the mechanical tier only.
+  placement, completion-criterion sharpness. These belong to the LLM
+  surfaces — and that is the actual argument for `create`: the most
+  valuable half of authoring guidance is judgment adept can only apply
+  while *writing*. A clean `adept check` proves the mechanical tier only.
 
 ## Deferred by design
 
@@ -358,7 +364,7 @@ ARCHI §10/§16 describe the shipped shape.
   can make a `case` number silently point at the wrong case, undetectably.
   Content-addressed ids would fix it but need a dataset `schema_version` bump.
   Revisit if a harness author reports this biting.
-- Run-history storage (upskill item 3, #23) was explicitly out of scope there.
+- Run-history storage (#23, upskill item 3) was explicitly out of scope there.
 
 ## Tracing & capture follow-ups
 
@@ -382,21 +388,22 @@ Recorded 2026-07-31.
   §12): capture is CLI-only, so the tool schema stays unchanged and an MCP
   client cannot make the server write to arbitrary paths.
   `crates/adept_cli/tests/tracing.rs` pins the schema half.
-- **`LlmError::Status` carries an unscrubbed response body (#31).** The capture
-  layer's scrub covers every body reaching a tracing event or artifact, but
-  `Status { body }` holds the response verbatim — a backend echoing the API key
-  in an error body would leak it to stderr via `Display`. Left alone
-  deliberately (it changes the contents of a returned error), not folded into
-  the capture work. Requires a misbehaving endpoint; the fix is cheap.
+- **`LlmError::Status` carries an unscrubbed response body (#31).** The
+  capture layer's scrub covers every body reaching a tracing event or
+  artifact, but `Status { body }` holds the response verbatim — a backend
+  echoing the API key in an error body would leak it to stderr via
+  `Display`. Left alone deliberately (it changes the contents of a returned
+  error), not folded into the capture work. Requires a misbehaving endpoint;
+  the fix is cheap.
 
 ## Pre-publish checklist
 
-- **#5** — Decide the reference-link behaviour above; it changes observable
+- **Decide the reference-link behaviour above (#5).** It changes observable
   output, so it is cheaper to settle before there are users.
-- **#32** — `eval`'s LLM analyses and `fix` have never run against a live
-  endpoint. Testing is mock-only by design; one manual run of each against a
-  real OpenAI-compatible endpoint would confirm the request shape. `fix` matters
-  more: it *writes*, and its accept/reject gate has only seen hand-shaped
-  `MockLlmClient` responses — a real model's JSON (fenced, truncated, or
-  ignoring the companion-edit contract) is the untested input class. Run it in
-  the default preview mode first, not `--write`.
+- **`eval`'s LLM analyses and `fix` have never run against a live endpoint
+  (#32).** Testing is mock-only by design; one manual run of each against a
+  real OpenAI-compatible endpoint would confirm the request shape. `fix`
+  matters more: it *writes*, and its accept/reject gate has only seen
+  hand-shaped `MockLlmClient` responses — a real model's JSON (fenced,
+  truncated, or ignoring the companion-edit contract) is the untested input
+  class. Run it in the default preview mode first, not `--write`.
