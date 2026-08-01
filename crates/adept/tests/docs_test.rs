@@ -1,18 +1,27 @@
-//! Asserts `docs/RULES.md` documents every rule in the registry, and that
-//! `docs/EVALS.md` documents every eval-dataset assertion kind, so neither
-//! doc can silently drift from the code it describes.
+//! Asserts `docs/RULES.md` documents every rule in the registry, that
+//! `docs/EVALS.md` documents every eval-dataset assertion kind, and that
+//! `docs/BACKLOG.md` follows its own formatting conventions (80-column
+//! wrap, parenthesized `#N` issue citations), so none of these docs can
+//! silently drift from the code or convention they describe.
 
 use std::path::Path;
 
 use adept::Registry;
 
+/// Reads a file from the workspace's `docs/` directory, resolved relative to
+/// this crate so the tests do not depend on the working directory.
+fn load_doc(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs")
+        .join(name)
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("docs/{name} should exist: {e}"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("should read docs/{name}: {e}"))
+}
+
 #[test]
 fn every_registered_rule_is_documented() {
-    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/RULES.md")
-        .canonicalize()
-        .expect("docs/RULES.md should exist");
-    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/RULES.md");
+    let docs = load_doc("RULES.md");
 
     let registry = Registry::new();
     for meta in registry.all_meta() {
@@ -42,11 +51,7 @@ const ASSERTION_KINDS: &[&str] = &["contains", "file_exists", "file_contains", "
 
 #[test]
 fn every_assertion_kind_is_documented_in_evals_md() {
-    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/EVALS.md")
-        .canonicalize()
-        .expect("docs/EVALS.md should exist");
-    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/EVALS.md");
+    let docs = load_doc("EVALS.md");
 
     for kind in ASSERTION_KINDS {
         let heading = format!("### `{kind}`");
@@ -108,4 +113,64 @@ fn every_assertion_kind_is_documented_in_evals_md() {
         serde_json::from_str::<adept::evals::Assertion>(json)
             .unwrap_or_else(|e| panic!("sample for `{kind}` should deserialize: {e}"));
     }
+}
+
+/// `docs/BACKLOG.md` wraps prose at 80 columns. Counted in characters, not
+/// bytes: the file uses multi-byte characters (`—`, `≤`, `²`, `×`) whose
+/// UTF-8 byte length would over-count relative to what a reader (or an
+/// 80-column terminal) actually sees.
+#[test]
+fn backlog_lines_fit_eighty_columns() {
+    let docs = load_doc("BACKLOG.md");
+
+    // Collected rather than asserted per line: this is a whole-file lint, so
+    // reporting every offender at once beats making the author re-run to
+    // discover the next one.
+    let overlong: Vec<String> = docs
+        .lines()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            let len = line.chars().count();
+            (len > 80).then(|| format!("  docs/BACKLOG.md:{} ({len} chars) {line:?}", idx + 1))
+        })
+        .collect();
+
+    assert!(
+        overlong.is_empty(),
+        "{} line(s) exceed 80 characters:\n{}",
+        overlong.len(),
+        overlong.join("\n")
+    );
+}
+
+/// `docs/BACKLOG.md` cites GitHub issues as `(#N)`. This only checks the
+/// mechanical form — that every `#<digits>` run is immediately preceded by
+/// `(` — which is all a text scan can verify. It does NOT check that the
+/// referenced issue exists, is open, or is the correct issue; it rejects
+/// bare `#28` or `**#7**` forms while accepting both item citations and
+/// ordinary parenthesized cross-references, which are indistinguishable
+/// mechanically.
+#[test]
+fn backlog_citations_use_canonical_form() {
+    let docs = load_doc("BACKLOG.md");
+
+    let bare: Vec<String> = docs
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            line.match_indices('#').any(|(i, _)| {
+                // Only `#` followed by a digit is an issue citation; headings
+                // and anchors are `#` followed by anything else.
+                line[i + 1..].starts_with(|c: char| c.is_ascii_digit()) && !line[..i].ends_with('(')
+            })
+        })
+        .map(|(idx, line)| format!("  docs/BACKLOG.md:{} {line:?}", idx + 1))
+        .collect();
+
+    assert!(
+        bare.is_empty(),
+        "{} line(s) cite an issue without wrapping it in parentheses:\n{}",
+        bare.len(),
+        bare.join("\n")
+    );
 }
