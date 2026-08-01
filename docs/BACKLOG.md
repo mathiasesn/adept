@@ -172,9 +172,6 @@ handled by `is_archive_internal_path` instead); `canvas-design`,
   canonicalization. Recorded in ARCHI as a top-of-stack crate nothing else may
   depend on. The exception is narrower than it was: `adept_score`'s transport
   moved *into* `adept_agent::llm` rather than remaining a second sibling dep.
-- **`SL105`'s fix suggestion reads oddly for hash-prefixed headings.** For
-  `#hashtag\n========` it suggests ``write it as `# #hashtag` `` — correct
-  CommonMark, looks like a typo. Cosmetic.
 - **The formatter has two escaping seams with an unstated ownership split.**
   `escape_text` unconditionally escapes a fixed inline set (`` \`*_[] ``) at
   tokenize time; `escape_line_start`/`marker_like` handle line-start markers at
