@@ -8,13 +8,20 @@ use std::path::Path;
 
 use adept::Registry;
 
+/// Reads a file from the workspace's `docs/` directory, resolved relative to
+/// this crate so the tests do not depend on the working directory.
+fn load_doc(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs")
+        .join(name)
+        .canonicalize()
+        .unwrap_or_else(|e| panic!("docs/{name} should exist: {e}"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("should read docs/{name}: {e}"))
+}
+
 #[test]
 fn every_registered_rule_is_documented() {
-    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/RULES.md")
-        .canonicalize()
-        .expect("docs/RULES.md should exist");
-    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/RULES.md");
+    let docs = load_doc("RULES.md");
 
     let registry = Registry::new();
     for meta in registry.all_meta() {
@@ -44,11 +51,7 @@ const ASSERTION_KINDS: &[&str] = &["contains", "file_exists", "file_contains", "
 
 #[test]
 fn every_assertion_kind_is_documented_in_evals_md() {
-    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/EVALS.md")
-        .canonicalize()
-        .expect("docs/EVALS.md should exist");
-    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/EVALS.md");
+    let docs = load_doc("EVALS.md");
 
     for kind in ASSERTION_KINDS {
         let heading = format!("### `{kind}`");
@@ -118,22 +121,26 @@ fn every_assertion_kind_is_documented_in_evals_md() {
 /// 80-column terminal) actually sees.
 #[test]
 fn backlog_lines_fit_eighty_columns() {
-    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/BACKLOG.md")
-        .canonicalize()
-        .expect("docs/BACKLOG.md should exist");
-    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/BACKLOG.md");
+    let docs = load_doc("BACKLOG.md");
 
-    for (idx, line) in docs.lines().enumerate() {
-        let len = line.chars().count();
-        assert!(
-            len <= 80,
-            "docs/BACKLOG.md:{} is {} characters (max 80): {:?}",
-            idx + 1,
-            len,
-            line
-        );
-    }
+    // Collected rather than asserted per line: this is a whole-file lint, so
+    // reporting every offender at once beats making the author re-run to
+    // discover the next one.
+    let overlong: Vec<String> = docs
+        .lines()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            let len = line.chars().count();
+            (len > 80).then(|| format!("  docs/BACKLOG.md:{} ({len} chars) {line:?}", idx + 1))
+        })
+        .collect();
+
+    assert!(
+        overlong.is_empty(),
+        "{} line(s) exceed 80 characters:\n{}",
+        overlong.len(),
+        overlong.join("\n")
+    );
 }
 
 /// `docs/BACKLOG.md` cites GitHub issues as `(#N)`. This only checks the
@@ -145,30 +152,25 @@ fn backlog_lines_fit_eighty_columns() {
 /// mechanically.
 #[test]
 fn backlog_citations_use_canonical_form() {
-    let docs_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/BACKLOG.md")
-        .canonicalize()
-        .expect("docs/BACKLOG.md should exist");
-    let docs = std::fs::read_to_string(&docs_path).expect("should read docs/BACKLOG.md");
+    let docs = load_doc("BACKLOG.md");
 
-    for (idx, line) in docs.lines().enumerate() {
-        let bytes = line.as_bytes();
-        for (i, &b) in bytes.iter().enumerate() {
-            if b != b'#' {
-                continue;
-            }
-            // Only consider `#` runs followed by at least one ASCII digit;
-            // other `#`s (headings, anchors) aren't issue citations.
-            if !bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
-                continue;
-            }
-            let preceded_by_paren = i > 0 && bytes[i - 1] == b'(';
-            assert!(
-                preceded_by_paren,
-                "docs/BACKLOG.md:{} has a `#<digits>` citation not preceded by `(`: {:?}",
-                idx + 1,
-                line
-            );
-        }
-    }
+    let bare: Vec<String> = docs
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| {
+            line.match_indices('#').any(|(i, _)| {
+                // Only `#` followed by a digit is an issue citation; headings
+                // and anchors are `#` followed by anything else.
+                line[i + 1..].starts_with(|c: char| c.is_ascii_digit()) && !line[..i].ends_with('(')
+            })
+        })
+        .map(|(idx, line)| format!("  docs/BACKLOG.md:{} {line:?}", idx + 1))
+        .collect();
+
+    assert!(
+        bare.is_empty(),
+        "{} line(s) cite an issue without wrapping it in parentheses:\n{}",
+        bare.len(),
+        bare.join("\n")
+    );
 }
