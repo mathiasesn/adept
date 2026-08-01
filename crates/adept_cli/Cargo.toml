@@ -5,7 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "CLI binary (`adept`) for linting, formatting, and scoring Agent Skills. Owned by the CLI agent."
+readme.workspace = true
+description = "Linter, formatter, and LLM-assisted authoring tool for agent skills (SKILL.md). Installs the `adept` binary."
 
 [[bin]]
 name = "adept"

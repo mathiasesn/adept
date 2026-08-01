@@ -5,7 +5,8 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Prettier-style formatter for SKILL.md (Agent Skills). Owned by the formatter agent."
+readme.workspace = true
+description = "Canonical formatter for SKILL.md agent skills: frontmatter ordering and Markdown reflow, idempotent and atomic."
 
 [dependencies]
 adept-core = { workspace = true }
