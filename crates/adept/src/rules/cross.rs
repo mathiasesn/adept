@@ -77,67 +77,25 @@ impl SetRule for SimilarDescription {
         config: &LintConfig,
         _tokens: &TokenCounter,
     ) -> Vec<Diagnostic> {
-        let word_sets: Vec<HashSet<String>> = set
-            .skills
-            .iter()
-            .map(|s| word_bag(&s.frontmatter.description))
-            .collect();
         // Note: this rule's input is the description alone, at
         // `similar_description_threshold` (default 0.6) — distinct from
         // `adept_agent::eval::overlap`'s description_similarity, which uses name+description
         // at its own (lower, shortlisting) threshold. See that function's
         // docs.
-
-        let mut diagnostics = Vec::new();
-        for i in 0..set.skills.len() {
-            for j in (i + 1)..set.skills.len() {
-                if word_sets[i].is_empty() || word_sets[j].is_empty() {
-                    continue;
-                }
-                let sim = jaccard(&word_sets[i], &word_sets[j]);
-                if sim >= config.similar_description_threshold {
-                    let a = &set.skills[i];
-                    let b = &set.skills[j];
-                    diagnostics.push(
-                        Diagnostic::new(
-                            self.code(),
-                            format!(
-                                "description is {:.0}% similar to \"{}\" ({})",
-                                sim * 100.0,
-                                b.frontmatter.name,
-                                b.path.display()
-                            ),
-                            self.default_severity(),
-                            &a.path,
-                            a.frontmatter.description_line,
-                            1,
-                        )
-                        .with_fix_suggestion(
-                            "differentiate the descriptions so agents can tell the skills apart",
-                        ),
-                    );
-                    diagnostics.push(
-                        Diagnostic::new(
-                            self.code(),
-                            format!(
-                                "description is {:.0}% similar to \"{}\" ({})",
-                                sim * 100.0,
-                                a.frontmatter.name,
-                                a.path.display()
-                            ),
-                            self.default_severity(),
-                            &b.path,
-                            b.frontmatter.description_line,
-                            1,
-                        )
-                        .with_fix_suggestion(
-                            "differentiate the descriptions so agents can tell the skills apart",
-                        ),
-                    );
-                }
-            }
-        }
-        diagnostics
+        pairwise_similarity(
+            self,
+            set,
+            |s| word_bag(&s.frontmatter.description),
+            config.similar_description_threshold,
+            |sim, other_name, other_path| {
+                format!(
+                    "description is {:.0}% similar to \"{other_name}\" ({})",
+                    sim * 100.0,
+                    other_path.display()
+                )
+            },
+            "differentiate the descriptions so agents can tell the skills apart",
+        )
     }
 }
 
@@ -160,62 +118,20 @@ impl SetRule for OverlappingTriggerPhrasing {
         config: &LintConfig,
         _tokens: &TokenCounter,
     ) -> Vec<Diagnostic> {
-        let shingle_sets: Vec<HashSet<String>> = set
-            .skills
-            .iter()
-            .map(|s| shingles(&s.frontmatter.description, 2))
-            .collect();
-
-        let mut diagnostics = Vec::new();
-        for i in 0..set.skills.len() {
-            for j in (i + 1)..set.skills.len() {
-                if shingle_sets[i].is_empty() || shingle_sets[j].is_empty() {
-                    continue;
-                }
-                let sim = jaccard(&shingle_sets[i], &shingle_sets[j]);
-                if sim >= config.trigger_overlap_threshold {
-                    let a = &set.skills[i];
-                    let b = &set.skills[j];
-                    diagnostics.push(
-                        Diagnostic::new(
-                            self.code(),
-                            format!(
-                                "trigger phrasing overlaps {:.0}% with \"{}\" ({})",
-                                sim * 100.0,
-                                b.frontmatter.name,
-                                b.path.display()
-                            ),
-                            self.default_severity(),
-                            &a.path,
-                            a.frontmatter.description_line,
-                            1,
-                        )
-                        .with_fix_suggestion(
-                            "narrow the trigger conditions so the skills don't compete for the same requests",
-                        ),
-                    );
-                    diagnostics.push(
-                        Diagnostic::new(
-                            self.code(),
-                            format!(
-                                "trigger phrasing overlaps {:.0}% with \"{}\" ({})",
-                                sim * 100.0,
-                                a.frontmatter.name,
-                                a.path.display()
-                            ),
-                            self.default_severity(),
-                            &b.path,
-                            b.frontmatter.description_line,
-                            1,
-                        )
-                        .with_fix_suggestion(
-                            "narrow the trigger conditions so the skills don't compete for the same requests",
-                        ),
-                    );
-                }
-            }
-        }
-        diagnostics
+        pairwise_similarity(
+            self,
+            set,
+            |s| shingles(&s.frontmatter.description, 2),
+            config.trigger_overlap_threshold,
+            |sim, other_name, other_path| {
+                format!(
+                    "trigger phrasing overlaps {:.0}% with \"{other_name}\" ({})",
+                    sim * 100.0,
+                    other_path.display()
+                )
+            },
+            "narrow the trigger conditions so the skills don't compete for the same requests",
+        )
     }
 }
 
@@ -228,4 +144,68 @@ fn shingles(text: &str, n: usize) -> HashSet<String> {
         .windows(n)
         .map(|w| w.join(" "))
         .collect::<HashSet<_>>()
+}
+
+/// Shared O(n²) upper-triangle pairwise-similarity scan behind both
+/// [`SimilarDescription`] (`SL402`) and [`OverlappingTriggerPhrasing`]
+/// (`SL403`): build one similarity-input set per skill via `set_builder`,
+/// skip any pair where either side's set is empty (nothing to compare), and
+/// report both directions of every pair whose Jaccard similarity meets
+/// `threshold` — one diagnostic on skill A naming skill B and vice versa,
+/// so each skill's own file shows the finding regardless of which one a
+/// reader opens first.
+///
+/// A free function (not a trait method) so it stays independent of `Rule:
+/// Send + Sync` and can be called from either rule's `check`.
+fn pairwise_similarity<R, F, M>(
+    rule: &R,
+    set: &SkillSet,
+    set_builder: F,
+    threshold: f64,
+    message: M,
+    suggestion: &str,
+) -> Vec<Diagnostic>
+where
+    R: Rule,
+    F: Fn(&crate::skill::Skill) -> HashSet<String>,
+    M: Fn(f64, &str, &std::path::Path) -> String,
+{
+    let sets: Vec<HashSet<String>> = set.skills.iter().map(&set_builder).collect();
+
+    let mut diagnostics = Vec::new();
+    for i in 0..set.skills.len() {
+        for j in (i + 1)..set.skills.len() {
+            if sets[i].is_empty() || sets[j].is_empty() {
+                continue;
+            }
+            let sim = jaccard(&sets[i], &sets[j]);
+            if sim >= threshold {
+                let a = &set.skills[i];
+                let b = &set.skills[j];
+                diagnostics.push(
+                    Diagnostic::new(
+                        rule.code(),
+                        message(sim, &b.frontmatter.name, &b.path),
+                        rule.default_severity(),
+                        &a.path,
+                        a.frontmatter.description_line,
+                        1,
+                    )
+                    .with_fix_suggestion(suggestion),
+                );
+                diagnostics.push(
+                    Diagnostic::new(
+                        rule.code(),
+                        message(sim, &a.frontmatter.name, &a.path),
+                        rule.default_severity(),
+                        &b.path,
+                        b.frontmatter.description_line,
+                        1,
+                    )
+                    .with_fix_suggestion(suggestion),
+                );
+            }
+        }
+    }
+    diagnostics
 }

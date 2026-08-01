@@ -2,6 +2,7 @@
 
 use crate::diagnostic::{Diagnostic, Severity};
 use crate::skill::Skill;
+use crate::text::{word_bag, words};
 use crate::token::TokenCounter;
 
 use super::{impl_rule, FixKind, FixRegion, LintConfig, Rule, SkillRule};
@@ -123,6 +124,9 @@ impl SkillRule for FirstPerson {
         _tokens: &TokenCounter,
     ) -> Vec<Diagnostic> {
         let desc = &skill.frontmatter.description;
+        if desc.trim().is_empty() {
+            return Vec::new(); // reported by SL001
+        }
         let lower = desc.to_lowercase();
         let first_person = ["i will", "i can", "i am able to", "i'll", "i'm able to"]
             .iter()
@@ -149,6 +153,23 @@ impl SkillRule for FirstPerson {
     }
 }
 
+/// Minimum description word count `SL205` requires before judging overlap
+/// with the name at all.
+///
+/// Rationale: below two words there's nothing meaningful to compare against
+/// the name, so treating it as "restates the name" would be a false
+/// positive on descriptions that are simply too short (already `SL201`'s
+/// job to flag).
+const RESTATES_NAME_MIN_DESC_WORDS: usize = 2;
+
+/// Fraction (0.0-1.0) of description words that must also appear in the name
+/// for `SL205` to fire.
+///
+/// Rationale: 0.8 tolerates a couple of extra words (e.g. "when", "for")
+/// while still catching descriptions that are little more than the name
+/// reworded.
+const RESTATES_NAME_OVERLAP_RATIO: f64 = 0.8;
+
 /// `SL205` `description-restates-name`: the description is just the name
 /// reworded, with no additional information about behavior or triggering.
 pub struct RestatesName;
@@ -162,24 +183,12 @@ impl SkillRule for RestatesName {
         _config: &LintConfig,
         _tokens: &TokenCounter,
     ) -> Vec<Diagnostic> {
-        let name_words: std::collections::HashSet<String> = skill
-            .frontmatter
-            .name
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| !w.is_empty())
-            .map(|w| w.to_lowercase())
-            .collect();
+        let name_words = word_bag(&skill.frontmatter.name);
         if name_words.is_empty() {
             return Vec::new();
         }
-        let desc_words: Vec<String> = skill
-            .frontmatter
-            .description
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|w| !w.is_empty())
-            .map(|w| w.to_lowercase())
-            .collect();
-        if desc_words.len() < 2 {
+        let desc_words: Vec<String> = words(&skill.frontmatter.description).collect();
+        if desc_words.len() < RESTATES_NAME_MIN_DESC_WORDS {
             return Vec::new();
         }
         let overlap = desc_words
@@ -187,7 +196,7 @@ impl SkillRule for RestatesName {
             .filter(|w| name_words.contains(*w))
             .count();
         let ratio = overlap as f64 / desc_words.len() as f64;
-        if ratio >= 0.8 {
+        if ratio >= RESTATES_NAME_OVERLAP_RATIO {
             vec![Diagnostic::new(
                 self.code(),
                 "description is little more than the skill name reworded",
