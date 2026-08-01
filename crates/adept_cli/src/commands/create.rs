@@ -2,8 +2,7 @@
 //!
 //! Wires `adept_agent::create::create_skill` into the CLI: input collection
 //! (`--from-file` > stdin > interactive prompt), config/flag resolution,
-//! preview-by-default rendering, and the transactional write. See
-//! `specs/adept-create-command.md`.
+//! preview-by-default rendering, and the transactional write.
 
 use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read};

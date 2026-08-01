@@ -1,5 +1,5 @@
-//! Benchmarks linting 100 generated skills. The doc's target
-//! (`docs/MVP.md`) is under 1 second.
+//! Benchmarks linting 100 generated skills. The acceptance criterion is under
+//! 1 second; CI gates at 500ms (see `docs/ARCHI.md` §6).
 
 use std::fs;
 

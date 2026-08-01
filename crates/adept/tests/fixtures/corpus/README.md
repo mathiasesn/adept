@@ -3,8 +3,7 @@
 This directory is a fixed, in-repo snapshot of a subset of real skills from
 [`anthropics/skills`](https://github.com/anthropics/skills), used as a broad-input
 regression fixture (real markdown messiness, not synthetic text) for the corpus
-lint and formatter-idempotency tests in this crate. See
-`specs/vendored-skills-corpus-fixture.md` for why this exists.
+lint and formatter-idempotency tests in this crate.
 
 ## Provenance
 

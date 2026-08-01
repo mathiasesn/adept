@@ -7,7 +7,7 @@ An extremely fast linter and formatter for Agent Skills.
 skills fail to trigger, over-trigger, or bloat an agent's context: vague
 descriptions, malformed frontmatter, token budget overruns, broken file
 references, and conflicting/overlapping skills. It ships as a single Rust
-binary with four surfaces:
+binary with six surfaces:
 
 - `adept check` — static, offline lint with ruff-style diagnostics.
 - `adept fmt` — prettier-style formatting of `SKILL.md` (frontmatter +
@@ -16,10 +16,15 @@ binary with four surfaces:
   triggering accuracy, token bloat, and cross-skill overlap detection,
   plus offline eval-dataset grading (pass rate, assertion success, skill
   lift) against a harness-supplied `results.jsonl`.
+- `adept fix` — LLM-assisted autofix for the diagnostics that need
+  rewriting rather than a mechanical transform.
 - `adept create` — LLM-assisted skill generation from a written brief:
   generate → lint → repair, plus a synthetic eval dataset.
 - `adept mcp` — an MCP server (stdio) so agents can lint/format/evaluate
   skills themselves.
+
+`check`, `fmt`, and eval-dataset grading never touch the network; `eval`'s
+other three analyses, `fix`, and `create` do.
 
 ## Install
 
@@ -104,13 +109,9 @@ file.
 
 ## `adept eval`
 
-One evaluation command, four analyses: how reliably a skill's description
-triggers the right prompts, whether it's token-bloated, whether it
-conflicts or overlaps with sibling skills (all three LLM-assisted,
-network-backed), and — offline, no model required — how it performed
-against its `evals/evals.jsonl` dataset, graded from a harness-supplied
-`results.jsonl`. `path` accepts either a `SKILL.md` file or a skill
-directory.
+Four analyses under one command, named `triggering`, `token-bloat`,
+`overlap`, and `evals` — the first three LLM-assisted, the fourth offline.
+`path` accepts either a `SKILL.md` file or a skill directory.
 
 ```console
 $ adept eval path/to/skill/SKILL.md
@@ -147,11 +148,13 @@ Also: `--num-prompts`, `--seed`, `--judge-samples` (triggering),
 token-bloat analysis, and `--capture-dir <DIR>` (see [Logging and
 capture](#logging-and-capture)).
 
-The fourth analysis, **`evals`**, is offline and needs no model: pass
-`--results <results.jsonl>` (a harness-produced sidecar — see
+The fourth analysis, **`evals`**, needs no model: pass `--results
+<results.jsonl>` (a harness-produced sidecar — see
 [`docs/EVALS.md`](docs/EVALS.md) for its exact fields) and it grades the
 skill's dataset (`evals/evals.jsonl` by default, or `--evals <path>` to
-override), reporting pass rate, assertion success, and skill lift.
+override), reporting pass rate, assertion success, and skill lift. adept
+grades a dataset but never executes it — running the cases is the
+harness's job.
 
 ```console
 $ adept eval path/to/skill --evals evals.jsonl --results results.jsonl --select evals
@@ -163,8 +166,8 @@ assertions: 3/3 met (0 skipped)
 ```
 
 `--select`/`--ignore` (comma-separated or repeated) restrict which of the
-four analyses run, by name (`triggering`, `token-bloat`, `overlap`,
-`evals`). Without them, `adept eval` runs whatever it can: `evals` when
+four analyses run, by the names above. Without them, `adept eval` runs
+whatever it can: `evals` when
 `--results` is supplied, the three LLM analyses when a model is
 configured. `--select evals` with no `--results`, or `--select triggering`
 with no model, is a usage error naming what's missing rather than a silent
@@ -287,13 +290,19 @@ raw `content` (no `path`) grades `contains` only and reports
 `file_exists`/`file_contains` as skipped, naming the missing directory —
 not as passes and not as an error.
 
-Two more tools, `create_skill` and `generate_evals`, are network-backed
+`format_skill`'s `line_width` argument is validated to the range
+`20..=500`; out-of-range or zero values are rejected with a structured
+tool error instead of silently truncating or producing degenerate
+one-word-per-line output.
+
+Two more tools, `create_skill` and `generate_evals`, mirror `adept
+create`'s generation and eval-dataset pipeline. They are network-backed
 and **conditionally advertised** — only when an LLM backend can actually
 be resolved (`ADEPT_MODEL` etc. set, or `model`/`base_url` arguments
 passed):
 
 ```console
-$ ADEPT_MODEL=gpt-4o-mini echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | adept mcp
+$ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | ADEPT_MODEL=gpt-4o-mini adept mcp
 {"jsonrpc":"2.0","id":1,"result":{"tools":[
   {"name":"check_skill", ...},
   {"name":"format_skill", ...},
@@ -303,15 +312,9 @@ $ ADEPT_MODEL=gpt-4o-mini echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 
 ]}}
 ```
 
-`format_skill`'s `line_width` argument is validated to the range
-`20..=500`; out-of-range or zero values are rejected with a structured
-tool error instead of silently truncating or producing degenerate
-one-word-per-line output.
-
-Two more tools, `create_skill` and `generate_evals`, mirror `adept create`'s
-generation and eval-dataset pipeline. **Both are preview-only**: they return
-the generated skill and dataset as data and never write to disk — writing
-stays a CLI-only capability (`adept create --write`).
+**Both are preview-only**: they return the generated skill and dataset as
+data and never write to disk — writing stays a CLI-only capability (`adept
+create --write`). `eval_skill` is read-only for the same reason.
 
 Point any MCP-compatible client at `adept mcp` as a stdio server.
 
@@ -413,8 +416,12 @@ See [`docs/RULES.md`](docs/RULES.md) for the full table of rule codes
 ## Development
 
 ```bash
-cargo build --workspace
+cargo build --workspace --all-targets
 cargo test --workspace
 cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+cargo fmt --all -- --check
 ```
+
+Architecture and design rationale live in
+[`docs/ARCHI.md`](docs/ARCHI.md); known gaps and deliberate deferrals in
+[`docs/BACKLOG.md`](docs/BACKLOG.md).

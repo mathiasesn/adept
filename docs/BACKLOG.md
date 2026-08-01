@@ -204,9 +204,9 @@ graders live in `verifiers.py` / `validators/`.
 
 The projects are **complementary**: adept checks *conformance* and never runs a
 skill; upskill measures *outcomes* and never checks frontmatter or token
-budgets. Items 1–2 below closed the one overlap and are shipped (see
-`specs/unify-adept-eval.md`); they supersede two of the spec's original
-non-goals — read them alongside "Deferred by design" and `docs/MVP.md`.
+budgets. Items 1–2 below closed the one overlap and are shipped; they supersede
+two of the project's original non-goals — read them alongside "Deferred by
+design" below.
 
 1. ~~**Deterministic verifiers as an `adept fix` accept gate.**~~ **Shipped**,
    but relocated: the four verifiers (`contains`, `file_exists`,
@@ -253,8 +253,7 @@ scope: adept has no orchestration story and should not grow one.
 ## Shipped surface: `adept create`
 
 Generates a new skill from a description of the task it should cover — a
-sibling of `eval` and `fix`, not of `check` and `fmt`. Design and rationale:
-`specs/adept-create-command.md` (historical; not updated after landing).
+sibling of `eval` and `fix`, not of `check` and `fmt`.
 
 **Shipped:** `adept_agent::create` (generate → screen → repair →
 generate-evals; computing only, never writes) plus the CLI
@@ -329,7 +328,8 @@ claimed every requirement was already an adept rule; that was wrong.)
 
 ## Deferred by design
 
-From the spec's non-goals, recorded so they aren't rediscovered as bugs:
+The project's original non-goals, recorded here — this list is now their only
+home — so they aren't rediscovered as bugs:
 
 - Hosted registry / marketplace / index.
 - ~~Executing or sandbox-testing skill scripts.~~ **Superseded and shipped**
@@ -341,11 +341,11 @@ From the spec's non-goals, recorded so they aren't rediscovered as bugs:
 - Non-Anthropic skill formats. The parser trait exists; see the filename
   limitation above before building on it.
 
-Both supersessions originate in `docs/MVP.md`'s non-goals, annotated there to
-match; `docs/EVALS.md` and ARCHI §10/§16 describe the shipped shape.
+Both were original project non-goals, struck once shipped; `docs/EVALS.md` and
+ARCHI §10/§16 describe the shipped shape.
 `check`/`fmt` remain offline and side-effect-free throughout.
 
-**Also deferred, per `specs/unify-adept-eval.md`:**
+**Also deferred, from the same unification work:**
 
 - **Dataset cases are referenced by 1-indexed line number, which is brittle.**
   `CaseResult::case` names a case by its position in `evals/evals.jsonl`. A
@@ -357,7 +357,7 @@ match; `docs/EVALS.md` and ARCHI §10/§16 describe the shipped shape.
 
 ## Tracing & capture follow-ups
 
-Recorded 2026-07-31, from `specs/cli-tracing.md`.
+Recorded 2026-07-31.
 
 - **Resolved** (`96dc487`): rule snapshots baked the absolute checkout path
   into diagnostic paths, failing every rule-snapshot test in a git worktree.

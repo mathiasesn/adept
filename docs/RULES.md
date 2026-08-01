@@ -1,8 +1,7 @@
 # adept lint rules
 
-This file documents every rule registered in `adept::Registry`. It must stay
-in sync with the registry — `crates/adept/tests/docs_test.rs` asserts every
-registered rule code appears here.
+Every rule registered in `adept::Registry`.
+`crates/adept/tests/docs_test.rs` asserts every registered code appears here.
 
 ## SL00x — frontmatter / naming
 
@@ -59,42 +58,36 @@ or a backtick-quoted span that is either an explicit relative path (`./x`,
 `../x`) or contains a `/` and ends in a known file extension (e.g.
 `` `scripts/run.py` ``), that does not exist on disk next to SKILL.md.
 
-Deliberately conservative to avoid false positives on things that merely
-look path-like: it skips anything with a URL scheme (`https://...`,
-`mailto:...`), an in-page anchor (`#section`), a `~`-relative or absolute
-(`/...`) path, a glob metacharacter (`*?[]{}`), a template placeholder
-(`{lang}`, `<VAR>`, `$VAR`), a scoped package name (`@scope/name`), or a
-bare filename with no directory component and no markdown-link context
-(e.g. a prose mention of `package.json`) — real companion-file references
-almost always come as a markdown link or an explicit relative path.
+Deliberately conservative — it skips URL schemes (`https://`, `mailto:`),
+anchors (`#section`), `~`-relative and absolute paths, globs (`*?[]{}`),
+template placeholders (`{lang}`, `<VAR>`, `$VAR`), scoped package names
+(`@scope/name`), and bare filenames with no directory component outside a
+markdown link (a prose mention of `package.json`).
 
-It also exempts paths the skill *instructs the reader to create*: if any
-reference to a path sits on a body line phrased as a creation instruction
-(a create/write/save/generate/output/produce/draft word — "Save test cases
-to `evals/evals.json`"), that path is treated as skill-authored and every
-reference to it is skipped, including later read/update mentions ("if
-`evals/evals.json` already exists…"). Modification verbs like *update* are
-deliberately excluded, since they imply the file should already exist.
-Intent is detected per line, so a genuine broken reference sharing a line
-with an unrelated creation instruction is not currently flagged.
+Two further exemptions:
 
-It also exempts OOXML archive-internal part names — a path whose first
-segment is a reserved Open Packaging Conventions root (`word/`, `ppt/`,
-`xl/`, `docProps/`, `_rels/`, `customXml/`) *and* which ends in a part
-extension (`.xml`/`.rels`), e.g. `word/document.xml` or
-`ppt/slides/slideN.xml`. Skills that manipulate Office documents describe
-editing these parts, which are constants fixed by ECMA-376 / ISO/IEC 29500,
-not files bundled next to SKILL.md. The extension gate keeps a genuinely
-broken reference to a non-part file under such a directory (`xl/helper.py`)
-firing.
+- **Paths the skill instructs the reader to create.** If any reference to a
+  path sits on a line phrased as a creation instruction
+  (create/write/save/generate/output/produce/draft — "Save test cases to
+  `evals/evals.json`"), that path is skill-authored and *every* reference to
+  it is skipped, including later reads. Modification verbs like *update* are
+  excluded, since they imply the file already exists. Intent is detected per
+  line, so a genuine broken reference sharing a line with an unrelated
+  creation instruction is missed.
+- **OOXML archive-internal part names** — first segment is a reserved Open
+  Packaging Conventions root (`word/`, `ppt/`, `xl/`, `docProps/`, `_rels/`,
+  `customXml/`) *and* the path ends in `.xml`/`.rels`. These are constants
+  fixed by ECMA-376 / ISO/IEC 29500, not bundled files. The extension gate
+  keeps a broken reference to a non-part file (`xl/helper.py`) firing.
+
 **Fix:** fix the path, or add the missing file next to SKILL.md.
 
 ### SL105 `setext-heading` (Info)
 Flags a heading written in setext form — a `Title` line underlined with
-`===` (h1) or `---` (h2) — rather than ATX (`# Title`). Reported as a style
-issue because `adept fmt` rewrites setext headings to ATX, so leaving one in
-place means the linter and the formatter disagree about style. Informational
-only: the formatter resolves it automatically, so it should not fail CI.
+`===` (h1) or `---` (h2) — rather than ATX (`# Title`). Informational only:
+`adept fmt` rewrites setext to ATX, so leaving one in place means the linter
+and formatter disagree — but the formatter resolves it, so it should not fail
+CI.
 **Fix:** run `adept fmt`, or write the heading as `# Title` / `## Title`.
 
 ## SL2xx — description / triggering heuristics
@@ -106,14 +99,11 @@ and when to use it.
 **Fix:** expand the description.
 
 ### SL202 (retired)
-Originally `description-too-long`, flagging the same condition
-(`description_max_tokens` exceeded) as `SL301` below, at `Warning` instead
-of `Error`, with no other distinct meaning — every over-long description
-fired both codes for one defect. Resolved by retiring `SL202` in favor of
-`SL301`: token-budget breaches are an `SL3xx` concern per the rule taxonomy,
-so `SL301` is the sole rule for this condition now. The code `SL202` is not
-reused, so old configs referencing it fail closed rather than silently
-picking up a new meaning.
+Originally `description-too-long`. It flagged exactly the condition `SL301`
+flags (`description_max_tokens` exceeded), only at `Warning`, so every
+over-long description fired both codes for one defect. Retired in favour of
+`SL301`, token budgets being an `SL3xx` concern. The code is never reused —
+old configs naming it fail closed rather than picking up a new meaning.
 
 ### SL203 `missing-trigger-phrase` (Warning)
 Flags a description with no recognizable trigger phrasing (e.g. "use when",
@@ -154,29 +144,23 @@ demand.
 
 ### SL303 `companion-file-bloat` (Warning)
 Flags any companion file (a file other than SKILL.md in the skill's
-directory) over `companion_file_max_tokens` (default **2000**). Bundled
-license files are exempt — `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT`
-(any extension) and `LICENSE-*`/`LICENCE-*` variants — since their
-boilerplate legal text is not skill content and routinely exceeds any
-reasonable budget. The exemption is scoped to this rule; `adept_agent::eval`'s
-token-bloat view still counts license files.
+directory) over `companion_file_max_tokens` (default **2000**). Two
+exemptions:
 
-Files under a top-level `evals/` directory *within the skill's own
-directory* (e.g. `<skill>/evals/evals.jsonl`, the synthetic eval dataset
-`adept create` writes alongside a generated skill) are also exempt, matched
-by directory name only — no filename pattern, no content sniffing. "Top-level"
-is relative to the skill directory, not to the filesystem root or any other
-ancestor: a file nested more than one level down (`<skill>/sub/evals/x`) is
-not exempt, and a skill that merely happens to live somewhere under a
-directory named `evals` on disk is not exempt either. Unlike the license
-exemption, this one is applied to both
-this rule and `adept_agent::eval`'s token-bloat view, since a generated dataset is
-not skill content either. In practice this exemption is currently dormant:
-companion-file discovery is non-recursive, so a file nested under `evals/`
-is never discovered as a companion file in the first place and could never
-have produced a finding here regardless. It is kept as defence-in-depth for
-if discovery ever becomes recursive. See `docs/EVALS.md` for the dataset
-schema itself.
+- **Bundled license files** — `LICENSE`, `LICENCE`, `COPYING`, `COPYRIGHT`
+  (any extension) and `LICENSE-*`/`LICENCE-*`. Boilerplate legal text is not
+  skill content. Scoped to this rule only; `adept_agent::eval`'s token-bloat
+  view still counts them.
+- **A top-level `evals/` directory inside the skill's own directory** (e.g.
+  `<skill>/evals/evals.jsonl`, what `adept create` writes). Matched by
+  directory name only — no filename pattern, no content sniffing. "Top-level"
+  is relative to the skill directory: `<skill>/sub/evals/x` is not exempt, nor
+  is a skill merely living under an `evals` directory. Unlike the license
+  exemption, this one applies to `adept_agent::eval`'s token-bloat view too.
+  Currently **dormant** — companion discovery is non-recursive, so nothing
+  under `evals/` is ever discovered as a companion. Kept as defence-in-depth.
+  See `docs/EVALS.md`.
+
 **Fix:** split the companion file or trim it down.
 
 ## SL4xx — cross-skill

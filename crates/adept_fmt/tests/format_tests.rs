@@ -241,7 +241,7 @@ fn idempotency_holds_for_every_fixture_with_prose_reflow_disabled() {
 /// Corpus of vendored real-world skills, shared with `crates/adept`'s own
 /// corpus tests. Lives under `crates/adept` (not `adept_fmt`) because the
 /// corpus lint snapshot test also needs it; resolved cross-crate rather than
-/// duplicated. See `specs/vendored-skills-corpus-fixture.md`.
+/// duplicated.
 fn corpus_dir() -> std::path::PathBuf {
     Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),

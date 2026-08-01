@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Required reading
 
-`docs/ARCHI.md` is the architecture source of truth — read it before any non-trivial change, and update it when a crate boundary, dependency, config mechanism, or hard invariant moves. It defers to three other docs in their own domains: `docs/MVP.md` (originating spec, goals/non-goals), `docs/RULES.md` (per-rule reference `SL001`–`SL403`, machine-checked against the registry), `docs/BACKLOG.md` (known gaps and deliberate deferrals — check here before "discovering" a bug).
+`docs/ARCHI.md` is the architecture source of truth — read it before any non-trivial change, and update it when a crate boundary, dependency, config mechanism, or hard invariant moves. It defers to two other docs in their own domains: `docs/RULES.md` (per-rule reference `SL001`–`SL403`, machine-checked against the registry), `docs/BACKLOG.md` (known gaps and deliberate deferrals — check here before "discovering" a bug).
 
 ## Commands
 
@@ -22,7 +22,7 @@ cargo run -q -p adept_cli -- check <path>
 cargo bench -p adept --bench lint_100_skills -- --quick
 ```
 
-CI runs the four workspace commands above, then a perf smoke test that parses the criterion `lint_100_skills` line and fails above **500ms** (observed ~23ms; the 1s figure in MVP.md is the acceptance criterion, 500ms is the gate).
+CI runs the four workspace commands above, then a perf smoke test that parses the criterion `lint_100_skills` line and fails above **500ms** (observed ~23ms; 1s is the acceptance criterion, 500ms is the gate).
 
 ## Architecture
 

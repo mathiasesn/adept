@@ -1,5 +1,4 @@
-//! Integration tests for the tracing / capture surfaces added by
-//! `specs/cli-tracing.md`.
+//! Integration tests for the tracing / capture surfaces.
 //!
 //! Three properties are pinned here:
 //!
