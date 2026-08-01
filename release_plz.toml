@@ -1,0 +1,15 @@
+[[package]]
+name = "adept-core"
+version_group = "adept"
+
+[[package]]
+name = "adept-fmt"
+version_group = "adept"
+
+[[package]]
+name = "adept-agent"
+version_group = "adept"
+
+[[package]]
+name = "adept"
+version_group = "adept"
