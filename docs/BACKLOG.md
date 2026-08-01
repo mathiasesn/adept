@@ -9,6 +9,9 @@ are settled, and are retained with their commit trail so they are not
 rediscovered and re-litigated. Only the pre-publish checklist is gated on a
 release rather than a push.
 
+Every open item carries its GitHub issue (`#N`, in `mathiasesn/adept`). Items
+without one are settled by design and have no issue on purpose.
+
 ## Correctness
 
 ### SL104 false positives — resolved
@@ -34,10 +37,11 @@ Characterized against upstream at the vendored pin, the entire live FP set was
 two references (`word/document.xml`, `ppt/slides/slideN.xml`); `pdf` and
 `xlsx` produced zero. The corpus snapshot went 27 → 24.
 
-### Formatter limitations — open
+### Formatter limitations — open (#4)
 Each is visible to users as an unexpected diff; documented in `adept_fmt`:
 
 - Reference-style link *definitions* are inlined at each use, not re-emitted.
+  Tracked separately as a pre-publish decision (#5).
 - Setext headings are always converted to ATX (`HeadingStyle` has one
   variant). `SL105 setext-heading` (Info) makes this the stated house style,
   so it is no longer silent — but a second variant would mean deciding what
@@ -68,20 +72,20 @@ Deliberately not done — `check` is far under the 1s target
 runner hardware, not a regression). Compare like for like before reading
 either number as movement.
 
-- Discovery/parsing and the per-skill lint loop are sequential and
+- **#7** — Discovery/parsing and the per-skill lint loop are sequential and
   embarrassingly parallel (`rayon` would cut wall time ~Ncores).
-- **`SL1xx` parses each body five times** (`markdown::headings` in `SL102`,
-  `SL103`, `SL105`; `link_destinations` + `inline_code_spans` in `SL104`).
-  Measured, not assumed: costs nothing detectable, because token counting
-  dominates. Do not "fix" without a benchmark. If rule dispatch ever grows a
-  per-skill context object, parsing once belongs there.
-- `SL402`/`SL403` are each O(n²) pairwise Jaccard. Fine at 100 skills; at 1000
-  it's 500k pairs and will dominate. Hashing words to `u64` would remove the
-  per-word `String` allocation.
-- `Skill` retains both `source` and `body`, ~2× file bytes per skill. `source`
-  plus a body offset would halve it.
+- **#10 — `SL1xx` parses each body five times** (`markdown::headings` in
+  `SL102`, `SL103`, `SL105`; `link_destinations` + `inline_code_spans` in
+  `SL104`). Measured, not assumed: costs nothing detectable, because token
+  counting dominates. Do not "fix" without a benchmark. If rule dispatch ever
+  grows a per-skill context object, parsing once belongs there.
+- **#8** — `SL402`/`SL403` are each O(n²) pairwise Jaccard. Fine at 100 skills;
+  at 1000 it's 500k pairs and will dominate. Hashing words to `u64` would remove
+  the per-word `String` allocation.
+- **#9** — `Skill` retains both `source` and `body`, ~2× file bytes per skill.
+  `source` plus a body offset would halve it.
 
-**`adept fix` per-skill LLM calls run sequentially.** `commands/fix.rs`
+**`adept fix` per-skill LLM calls run sequentially (#6).** `commands/fix.rs`
 `block_on`s one `fix_skill` at a time, so N skills cost N × rounds × latency
 despite being independent. Bounded `futures` concurrency is the biggest
 wall-clock win available. Deferred because it is a *behavior* change, not a
@@ -91,26 +95,26 @@ with the concurrency cap sourced from `[fix]` config.
 
 ## Test coverage
 
-- **Prose reflow is partly covered.** The proptest still excludes tables,
+- **Prose reflow is partly covered (#11).** The proptest still excludes tables,
   fences, HTML, and emphasis, and the fixture idempotency loop is still gated
   on `reflow_prose: false` — but the vendored corpus runs at
   `reflow_prose: true`
   (`idempotency_holds_for_corpus_with_prose_reflow_enabled`), and all 10 corpus
   skills pass.
-- **The criterion benchmark asserts nothing.** CI gates perf by parsing
+- **The criterion benchmark asserts nothing (#12).** CI gates perf by parsing
   `--quick` output in a bash step (~23ms vs a 500ms threshold). A native
   assertion would be less brittle.
-- **Setext handling has no real-world coverage.** The corpus contains no setext
-  headings, so `SL105` fires nowhere in it. Evidence is unit/regression tests
-  in `markdown/query.rs` and `tests/rules.rs` only.
-- **Diagnostic rendering has no display-root option.** `reporting.rs` renders
-  `d.path.display()` verbatim (always absolute), so `tests/corpus.rs` mutates
-  each `Diagnostic::path` to be corpus-relative before snapshotting.
+- **Setext handling has no real-world coverage (#13).** The corpus contains no
+  setext headings, so `SL105` fires nowhere in it. Evidence is unit/regression
+  tests in `markdown/query.rs` and `tests/rules.rs` only.
+- **Diagnostic rendering has no display-root option (#14).** `reporting.rs`
+  renders `d.path.display()` verbatim (always absolute), so `tests/corpus.rs`
+  mutates each `Diagnostic::path` to be corpus-relative before snapshotting.
   Relativizing is a renderer concern: a `base: Option<&Path>` parameter on
   `render_human_colored` and the JSON renderer would serve the corpus test and
   any CLI caller wanting reproducible output.
 - **`markdown::build::collect_inlines` never coalesces adjacent `Text`
-  events.** A backslash escape splits one word into several `Inline::Text`
+  events (#15).** A backslash escape splits one word into several `Inline::Text`
   nodes. `adept_fmt` defends locally (`877721f`, `c596f8b`), but the surprise
   remains in the shared AST for any other consumer.
 
@@ -140,30 +144,30 @@ handled by `is_archive_internal_path` instead); `canvas-design`,
 
 ## API and consistency
 
-- **`SkillParser` abstracts contents, not filenames.** `SKILL_FILE_NAME` is a
-  `const` in `skillset.rs`, not part of the trait, so a parser for `skill.yaml`
-  or `AGENT.md` can never be handed a file. A defaulted
+- **`SkillParser` abstracts contents, not filenames (#16).** `SKILL_FILE_NAME`
+  is a `const` in `skillset.rs`, not part of the trait, so a parser for
+  `skill.yaml` or `AGENT.md` can never be handed a file. A defaulted
   `fn file_names(&self) -> &[&str]` would complete the pluggability seam.
 - **Deliberate similarity divergence.** `adept_agent::eval`'s overlap shortlist
   uses name+description at 0.25; SL402 uses description-only at 0.6. Both call
   `adept::text::jaccard`. Documented — but `check` and `eval` can still reach
   different conclusions about the same pair.
-- **`--statistics` prints counts in addition to diagnostics**, not instead of.
-  One line in `check.rs` if instead-of is wanted.
+- **`--statistics` prints counts in addition to diagnostics** (#17), not
+  instead of. One line in `check.rs` if instead-of is wanted.
 - **`FixFileConfig` / `EvalFileConfig` / `CreateFileConfig` are near-identical,
-  and this item's trigger has fired.** All three carry `model`, `base_url`,
-  `tokenizer`, `capture_dir` (`fix`/`create` add `max_rounds`; `create` adds
-  `eval_cases`) and resolve through `resolve_llm_client`. The condition was "a
-  third LLM-backed command" — `adept create` is it. The refactor (a
-  `#[serde(flatten)]`ed common `LlmFileConfig`) was kept out of scope of both
-  `create` and the `score`→`eval` unification because it touches all three.
-  The independence of the `[fix]`/`[eval]`/`[create]` *TOML sections* is a spec
-  requirement and must survive any such refactor.
-- **No blanket `deny_unknown_fields` on config structs.** The stale-`[score]`
-  case is handled precisely (`contains_legacy_score_section`, a hard error
-  naming `[eval]`; ARCHI §7). Making every typo a hard error is a separate,
-  broader decision — a mistyped `[lint]` key would go from silently ignored to
-  usage error.
+  and this item's trigger has fired (#18).** All three carry `model`,
+  `base_url`, `tokenizer`, `capture_dir` (`fix`/`create` add `max_rounds`;
+  `create` adds `eval_cases`) and resolve through `resolve_llm_client`. The
+  condition was "a third LLM-backed command" — `adept create` is it. The
+  refactor (a `#[serde(flatten)]`ed common `LlmFileConfig`) was kept out of
+  scope of both `create` and the `score`→`eval` unification because it touches
+  all three. The independence of the `[fix]`/`[eval]`/`[create]` *TOML sections*
+  is a spec requirement and must survive any such refactor.
+- **No blanket `deny_unknown_fields` on config structs (#19).** The
+  stale-`[score]` case is handled precisely (`contains_legacy_score_section`, a
+  hard error naming `[eval]`; ARCHI §7). Making every typo a hard error is a
+  separate, broader decision — a mistyped `[lint]` key would go from silently
+  ignored to usage error.
 - **`FixKind::Deterministic` has no implementors, deliberately.** It exists so
   the tag's shape need not change when mechanical autofixes land (spec
   non-goal: those belong on a future `check --fix`). Do not delete as dead code.
@@ -172,22 +176,23 @@ handled by `is_archive_internal_path` instead); `canvas-design`,
   canonicalization. Recorded in ARCHI as a top-of-stack crate nothing else may
   depend on. The exception is narrower than it was: `adept_score`'s transport
   moved *into* `adept_agent::llm` rather than remaining a second sibling dep.
-- **`SL105`'s fix suggestion reads oddly for hash-prefixed headings.** For
+- **`SL105`'s fix suggestion reads oddly for hash-prefixed headings (#20).** For
   `#hashtag\n========` it suggests ``write it as `# #hashtag` `` — correct
   CommonMark, looks like a typo. Cosmetic.
-- **The formatter has two escaping seams with an unstated ownership split.**
-  `escape_text` unconditionally escapes a fixed inline set (`` \`*_[] ``) at
-  tokenize time; `escape_line_start`/`marker_like` handle line-start markers at
-  wrap time. The split is character-arbitrary: `marker_like`'s `*`/`_` arms are
-  dead (covered by `escape_text`) while its `~` arm is live. A deeper factoring
-  would give line-start escaping the full positional set and leave
-  `escape_text` the context-free escapes. Moves observable output, so deferred.
-- **`marker_like` hand-rolls CommonMark block-start detection** in the printer
-  (`#`-count ≤6, digit-count ≤9, tilde-run ≥3, setext/thematic rules) despite
-  the crate already parsing via `adept::markdown`. Its invariant — re-parsing
-  the emitted line yields the same block structure — is in principle checkable
-  against the real parser. Deferred: the oracle is a larger rearchitecture with
-  a per-word parse cost on the format path.
+- **The formatter has two escaping seams with an unstated ownership split
+  (#21).** `escape_text` unconditionally escapes a fixed inline set
+  (`` \`*_[] ``) at tokenize time; `escape_line_start`/`marker_like` handle
+  line-start markers at wrap time. The split is character-arbitrary:
+  `marker_like`'s `*`/`_` arms are dead (covered by `escape_text`) while its
+  `~` arm is live. A deeper factoring would give line-start escaping the full
+  positional set and leave `escape_text` the context-free escapes. Moves
+  observable output, so deferred.
+- **`marker_like` hand-rolls CommonMark block-start detection (#22)** in the
+  printer (`#`-count ≤6, digit-count ≤9, tilde-run ≥3, setext/thematic rules)
+  despite the crate already parsing via `adept::markdown`. Its invariant —
+  re-parsing the emitted line yields the same block structure — is in principle
+  checkable against the real parser. Deferred: the oracle is a larger
+  rearchitecture with a per-word parse cost on the format path.
 - **The formatter's semantic oracle no longer pins its own parser options.**
   `adept_fmt/tests/format_tests.rs` now calls `adept::markdown::parser`, so an
   `Options` flag added there silently changes the oracle too. Deliberate trade
@@ -219,26 +224,26 @@ design" below.
 2. ~~**Baseline / lift.**~~ **Shipped** as skill lift (percentage points,
    `pass_rate - baseline_pass_rate`) from `arm: "skill"`/`"baseline"` results,
    surfaced in `adept eval`'s `evals` analysis. **Not** shipped as
-   lift-*per-token* — lift and token usage are separate fields; combining them
-   is still open. `triggering` still answers "would this skill trigger" (a
+   lift-*per-token* (#26) — lift and token usage are separate fields; combining
+   them is still open. `triggering` still answers "would this skill trigger" (a
    prompting proxy); `evals` answers "did it help" (measured).
-3. **Run persistence and history.** upskill writes `runs/<timestamp>/...` plus
-   a batch summary and `results.csv`, queryable via `upskill runs`. `adept
+3. **Run persistence and history (#23).** upskill writes `runs/<timestamp>/...`
+   plus a batch summary and `results.csv`, queryable via `upskill runs`. `adept
    eval` is fire-and-forget (`--capture-dir` records individual LLM calls, not
    runs), so there is no way to tell whether a `fix` improved anything over
    time. `PROMPT_VERSION` exists precisely because scores drift between prompt
    revisions — runs keyed by it would make the versioning useful. Lowest-risk
    item here: new I/O in `adept_cli`, nothing in the library stack.
-4. **Split the generator and judge models.** upskill separates generation, test
-   generation and evaluation into roles with distinct model flags and a
+4. **Split the generator and judge models (#24).** upskill separates generation,
+   test generation and evaluation into roles with distinct model flags and a
    documented fallback chain. `adept fix` uses one model to both rewrite and
    screen; a `[fix] model` / `judge_model` split would let a strong model
    propose while a cheap one screens. Cheap: config surface plus plumbing
    through `resolve_llm_client`. (upskill's *external* prompt files are not
    worth copying — a static binary benefits from compiled-in prompts.)
-5. **Multi-model comparison (`--runs N`, repeated `-m`).** Single-sample LLM
-   eval is noise; `--judge-samples` is the same instinct, but there is no way
-   to compare two models on one skill. `&dyn LlmClient` is already the right
+5. **Multi-model comparison (`--runs N`, repeated `-m`) (#25).** Single-sample
+   LLM eval is noise; `--judge-samples` is the same instinct, but there is no
+   way to compare two models on one skill. `&dyn LlmClient` is already the right
    seam, so this is mostly CLI surface. Only after 1–3.
 
 ~~**Not worth taking: skill generation.**~~ Superseded by `adept create`
@@ -313,13 +318,13 @@ claimed every requirement was already an adept rule; that was wrong.)
 
 - **Already covered:** sprawl → `SL3xx`; broken context pointers → `SL104`;
   cross-skill duplication → `SL402`/`SL403`.
-- **New and genuinely lintable:** *invocation-mode coherence* is the strongest
-  candidate — `disable-model-invocation: true` alongside model-facing trigger
-  phrasing ("Use when…") is a flat contradiction, mechanically detectable, and
-  readable today with no parser change (unknown frontmatter keys land in
-  `Skill::extra`, `parser.rs:156`). Negation is a plausible Info-level
-  heuristic. Intra-skill duplication is weaker but real — adept only compares
-  *across* skills today.
+- **New and genuinely lintable:** *invocation-mode coherence* (#27) is the
+  strongest candidate — `disable-model-invocation: true` alongside model-facing
+  trigger phrasing ("Use when…") is a flat contradiction, mechanically
+  detectable, and readable today with no parser change (unknown frontmatter keys
+  land in `Skill::extra`, `parser.rs:156`). Negation is a plausible Info-level
+  heuristic and intra-skill duplication is weaker but real — adept only compares
+  *across* skills today; both are #28.
 - **Not lintable, do not fake:** no-ops, leading-word strength, ladder
   placement, completion-criterion sharpness. These belong to the LLM surfaces —
   and that is the actual argument for `create`: the most valuable half of
@@ -347,13 +352,13 @@ ARCHI §10/§16 describe the shipped shape.
 
 **Also deferred, from the same unification work:**
 
-- **Dataset cases are referenced by 1-indexed line number, which is brittle.**
-  `CaseResult::case` names a case by its position in `evals/evals.jsonl`. A
-  harness that reorders, filters, or regenerates a subset can make a `case`
-  number silently point at the wrong case, undetectably. Content-addressed ids
-  would fix it but need a dataset `schema_version` bump. Revisit if a harness
-  author reports this biting.
-- Run-history storage (upskill item 3) was explicitly out of scope there.
+- **Dataset cases are referenced by 1-indexed line number, which is brittle
+  (#29).** `CaseResult::case` names a case by its position in
+  `evals/evals.jsonl`. A harness that reorders, filters, or regenerates a subset
+  can make a `case` number silently point at the wrong case, undetectably.
+  Content-addressed ids would fix it but need a dataset `schema_version` bump.
+  Revisit if a harness author reports this biting.
+- Run-history storage (upskill item 3, #23) was explicitly out of scope there.
 
 ## Tracing & capture follow-ups
 
@@ -362,7 +367,7 @@ Recorded 2026-07-31.
 - **Resolved** (`96dc487`): rule snapshots baked the absolute checkout path
   into diagnostic paths, failing every rule-snapshot test in a git worktree.
   `strip_repo_root` in `crates/adept/tests/rules.rs` makes them repo-relative.
-- **Captured calls do not record which logical step issued them.** Knowing
+- **Captured calls do not record which logical step issued them (#30).** Knowing
   whether a call was prompt generation, a judge sample, or fix round N is what
   makes a capture directory readable without shell history. A
   `CapturedCall::step` field shipped and was removed: `OpenAiCompatClient` sees
@@ -377,7 +382,7 @@ Recorded 2026-07-31.
   §12): capture is CLI-only, so the tool schema stays unchanged and an MCP
   client cannot make the server write to arbitrary paths.
   `crates/adept_cli/tests/tracing.rs` pins the schema half.
-- **`LlmError::Status` carries an unscrubbed response body.** The capture
+- **`LlmError::Status` carries an unscrubbed response body (#31).** The capture
   layer's scrub covers every body reaching a tracing event or artifact, but
   `Status { body }` holds the response verbatim — a backend echoing the API key
   in an error body would leak it to stderr via `Display`. Left alone
@@ -386,11 +391,11 @@ Recorded 2026-07-31.
 
 ## Pre-publish checklist
 
-- Decide the reference-link behaviour above — it changes observable output, so
-  it is cheaper to settle before there are users.
-- `eval`'s LLM analyses and `fix` have never run against a live endpoint.
-  Testing is mock-only by design; one manual run of each against a real
-  OpenAI-compatible endpoint would confirm the request shape. `fix` matters
+- **#5** — Decide the reference-link behaviour above; it changes observable
+  output, so it is cheaper to settle before there are users.
+- **#32** — `eval`'s LLM analyses and `fix` have never run against a live
+  endpoint. Testing is mock-only by design; one manual run of each against a
+  real OpenAI-compatible endpoint would confirm the request shape. `fix` matters
   more: it *writes*, and its accept/reject gate has only seen hand-shaped
   `MockLlmClient` responses — a real model's JSON (fenced, truncated, or
   ignoring the companion-edit contract) is the untested input class. Run it in
