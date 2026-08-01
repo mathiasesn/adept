@@ -385,15 +385,12 @@ impl RoundResult {
     /// building it — the round-over-round acceptance comparison only ever
     /// needs the counts.
     fn combined_counts(&self) -> gate::Counts {
-        let mut counts = gate::Counts::default();
-        for d in self
-            .candidate_diagnostics
-            .iter()
-            .chain(self.new_sibling_diagnostics.iter())
-        {
-            counts.add(d.severity);
-        }
-        counts
+        gate::Counts::of_severities(
+            self.candidate_diagnostics
+                .iter()
+                .chain(self.new_sibling_diagnostics.iter())
+                .map(|d| d.severity),
+        )
     }
 
     fn gate_passes(&self) -> bool {

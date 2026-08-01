@@ -157,13 +157,46 @@ pub struct RuleMeta {
 /// dual-registered in both `skill_rules` (empty-field case) and
 /// `parse_error_rules` (missing-field, parse-time case); `SL003` exists only
 /// in `parse_error_rules`, since a skill with malformed frontmatter has no
-/// [`Skill`] to run an ordinary rule against. [`Registry::meta_iter`] dedupes
-/// by code so [`Registry::all_meta`] and the `by_*` lookups stay
+/// [`Skill`] to run an ordinary rule against. `meta` is deduplicated once at
+/// construction so [`Registry::all_meta`] and the `by_*` lookups stay
 /// single-valued despite the dual registration.
 pub struct Registry {
     skill_rules: Vec<Box<dyn SkillRule>>,
     set_rules: Vec<Box<dyn SetRule>>,
     parse_error_rules: Vec<Box<dyn ParseErrorRule>>,
+    /// Metadata for every registered rule, one entry per code, in
+    /// registration order. Built once by [`build_meta`].
+    meta: Vec<RuleMeta>,
+}
+
+/// Collect one [`RuleMeta`] per distinct rule code, in registration order.
+///
+/// A code may legitimately appear twice — `SL001`/`SL002` are dual-registered
+/// as both a [`SkillRule`] and a [`ParseErrorRule`] — but only when both
+/// registrations are the *same* rule, and therefore carry identical metadata.
+/// Two different rules sharing a code would violate the "rule codes are
+/// permanent and never reused" invariant, so that case panics at construction
+/// rather than being silently merged into one arbitrary entry.
+fn build_meta<'a>(rules: impl Iterator<Item = &'a dyn Rule>) -> Vec<RuleMeta> {
+    let mut meta: Vec<RuleMeta> = Vec::new();
+    for r in rules {
+        let candidate = RuleMeta {
+            code: r.code(),
+            name: r.name(),
+            default_severity: r.default_severity(),
+            fix_kind: r.fix_kind(),
+        };
+        match meta.iter().find(|m| m.code == candidate.code) {
+            Some(existing) => assert!(
+                *existing == candidate,
+                "rule code {} is registered twice with differing metadata \
+                 ({existing:?} vs {candidate:?}); codes are permanent and never reused",
+                candidate.code
+            ),
+            None => meta.push(candidate),
+        }
+    }
+    meta
 }
 
 impl Registry {
@@ -203,10 +236,19 @@ impl Registry {
             Box::new(frontmatter::MalformedFrontmatter),
         ];
 
+        let meta = build_meta(
+            skill_rules
+                .iter()
+                .map(|r| r.as_ref() as &dyn Rule)
+                .chain(set_rules.iter().map(|r| r.as_ref() as &dyn Rule))
+                .chain(parse_error_rules.iter().map(|r| r.as_ref() as &dyn Rule)),
+        );
+
         Self {
             skill_rules,
             set_rules,
             parse_error_rules,
+            meta,
         }
     }
 
@@ -233,43 +275,19 @@ impl Registry {
     /// `parse_error_rules`, appear once each), sorted by code.
     #[must_use]
     pub fn all_meta(&self) -> Vec<RuleMeta> {
-        let mut meta: Vec<RuleMeta> = self.meta_iter().collect();
+        let mut meta = self.meta.clone();
         meta.sort_by_key(|m| m.code);
         meta
     }
 
-    /// Metadata for every registered rule, deduplicated by code, in
-    /// registration order.
-    ///
-    /// The unsorted, non-allocating basis for [`Registry::all_meta`] and the
-    /// `by_*` lookups, so a single `--select SL001` doesn't build and sort
-    /// the whole table.
-    fn meta_iter(&self) -> impl Iterator<Item = RuleMeta> + '_ {
-        fn meta(r: &dyn Rule) -> RuleMeta {
-            RuleMeta {
-                code: r.code(),
-                name: r.name(),
-                default_severity: r.default_severity(),
-                fix_kind: r.fix_kind(),
-            }
-        }
-        let mut seen = HashSet::new();
-        self.skill_rules
-            .iter()
-            .map(|r| meta(r.as_ref()))
-            .chain(self.set_rules.iter().map(|r| meta(r.as_ref())))
-            .chain(self.parse_error_rules.iter().map(|r| meta(r.as_ref())))
-            .filter(move |m| seen.insert(m.code))
-    }
-
     /// Look up a rule's metadata by its code (e.g. `"SL001"`).
     pub fn by_code(&self, code: &str) -> Option<RuleMeta> {
-        self.meta_iter().find(|m| m.code == code)
+        self.meta.iter().find(|m| m.code == code).copied()
     }
 
     /// Look up a rule's metadata by its kebab-case name.
     pub fn by_name(&self, name: &str) -> Option<RuleMeta> {
-        self.meta_iter().find(|m| m.name == name)
+        self.meta.iter().find(|m| m.name == name).copied()
     }
 }
 
@@ -525,21 +543,33 @@ mod tests {
 
     /// `SL001`/`SL002` are dual-registered (once as a `SkillRule`, once as a
     /// `ParseErrorRule`) so that both the empty-field and missing-field
-    /// cases are covered; `all_meta` must still yield exactly one entry per
-    /// code despite that.
+    /// cases are covered. `all_meta` must cover every registered rule
+    /// exactly once: no code dropped by the dedup, none duplicated by it.
     #[test]
-    fn all_meta_has_no_duplicate_codes() {
+    fn all_meta_is_the_deduped_union_of_every_registration() {
         let registry = Registry::new();
-        let meta = registry.all_meta();
-        let mut codes: Vec<&str> = meta.iter().map(|m| m.code).collect();
-        let len_before_dedup = codes.len();
-        codes.sort_unstable();
-        codes.dedup();
+
+        let mut registered: Vec<&str> = registry
+            .skill_rules()
+            .iter()
+            .map(|r| r.code())
+            .chain(registry.set_rules().iter().map(|r| r.code()))
+            .chain(registry.parse_error_rules().iter().map(|r| r.code()))
+            .collect();
+        registered.sort_unstable();
+        // SL001/SL002 appear twice before dedup; anything else would be a
+        // code collision between two distinct rules.
         assert_eq!(
-            codes.len(),
-            len_before_dedup,
-            "all_meta should have no duplicate codes, got: {:?}",
-            meta.iter().map(|m| m.code).collect::<Vec<_>>()
+            registered.iter().filter(|c| **c == "SL001").count(),
+            2,
+            "SL001 should be dual-registered"
+        );
+        registered.dedup();
+
+        let from_meta: Vec<&str> = registry.all_meta().iter().map(|m| m.code).collect();
+        assert_eq!(
+            from_meta, registered,
+            "all_meta should be exactly the deduped set of registered codes, sorted"
         );
     }
 }

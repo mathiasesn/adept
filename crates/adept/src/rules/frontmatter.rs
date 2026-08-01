@@ -44,24 +44,50 @@ impl SkillRule for MissingDescription {
     }
 }
 
+/// Build the single diagnostic a [`ParseErrorRule`] reports for a parse
+/// failure, always anchored at 1:1 — a file that failed to parse has no
+/// meaningful line to point at.
+fn parse_error_diagnostic(
+    rule: &dyn Rule,
+    path: &std::path::Path,
+    message: impl Into<String>,
+    suggestion: Option<&str>,
+) -> Vec<Diagnostic> {
+    let diagnostic = Diagnostic::new(rule.code(), message, rule.default_severity(), path, 1, 1);
+    vec![match suggestion {
+        Some(s) => diagnostic.with_fix_suggestion(s),
+        None => diagnostic,
+    }]
+}
+
+/// The parse-time half of `SL001`/`SL002`: the field is absent entirely, so
+/// there is no [`Skill`] for the [`SkillRule`] impl to inspect.
+fn missing_field_diagnostic(
+    rule: &dyn Rule,
+    path: &std::path::Path,
+    err: &AdeptError,
+    expected: &str,
+    message: &str,
+    suggestion: &str,
+) -> Vec<Diagnostic> {
+    match err {
+        AdeptError::MissingField { field, .. } if *field == expected => {
+            parse_error_diagnostic(rule, path, message, Some(suggestion))
+        }
+        _ => Vec::new(),
+    }
+}
+
 impl ParseErrorRule for MissingDescription {
     fn check(&self, path: &std::path::Path, err: &AdeptError) -> Vec<Diagnostic> {
-        match err {
-            AdeptError::MissingField { field, .. } if *field == "description" => {
-                vec![Diagnostic::new(
-                    self.code(),
-                    "SKILL.md is missing the required `description` frontmatter field",
-                    self.default_severity(),
-                    path,
-                    1,
-                    1,
-                )
-                .with_fix_suggestion(
-                    "add a `description` field stating what the skill does and when to use it",
-                )]
-            }
-            _ => Vec::new(),
-        }
+        missing_field_diagnostic(
+            self,
+            path,
+            err,
+            "description",
+            "SKILL.md is missing the required `description` frontmatter field",
+            "add a `description` field stating what the skill does and when to use it",
+        )
     }
 }
 
@@ -96,18 +122,14 @@ impl SkillRule for MissingName {
 
 impl ParseErrorRule for MissingName {
     fn check(&self, path: &std::path::Path, err: &AdeptError) -> Vec<Diagnostic> {
-        match err {
-            AdeptError::MissingField { field, .. } if *field == "name" => vec![Diagnostic::new(
-                self.code(),
-                "SKILL.md is missing the required `name` frontmatter field",
-                self.default_severity(),
-                path,
-                1,
-                1,
-            )
-            .with_fix_suggestion("add a `name` field matching the skill's directory name")],
-            _ => Vec::new(),
-        }
+        missing_field_diagnostic(
+            self,
+            path,
+            err,
+            "name",
+            "SKILL.md is missing the required `name` frontmatter field",
+            "add a `name` field matching the skill's directory name",
+        )
     }
 }
 
@@ -127,51 +149,32 @@ impl_rule!(
 
 impl ParseErrorRule for MalformedFrontmatter {
     fn check(&self, path: &std::path::Path, err: &AdeptError) -> Vec<Diagnostic> {
-        match err {
-            AdeptError::MissingFrontmatter { .. } => vec![Diagnostic::new(
-                self.code(),
-                "SKILL.md must start with a line containing only '---' to open the YAML frontmatter block",
-                self.default_severity(),
-                path,
-                1,
-                1,
-            )
-            .with_fix_suggestion("add an opening `---` line as the first line of the file")],
-            AdeptError::UnterminatedFrontmatter { .. } => vec![Diagnostic::new(
-                self.code(),
-                "SKILL.md frontmatter is opened with '---' but never closed",
-                self.default_severity(),
-                path,
-                1,
-                1,
-            )
-            .with_fix_suggestion("add a closing `---` line after the frontmatter fields")],
-            AdeptError::InvalidYaml { source, .. } => vec![Diagnostic::new(
-                self.code(),
+        let (message, suggestion): (String, Option<&str>) = match err {
+            AdeptError::MissingFrontmatter { .. } => (
+                "SKILL.md must start with a line containing only '---' to open the YAML \
+                 frontmatter block"
+                    .to_string(),
+                Some("add an opening `---` line as the first line of the file"),
+            ),
+            AdeptError::UnterminatedFrontmatter { .. } => (
+                "SKILL.md frontmatter is opened with '---' but never closed".to_string(),
+                Some("add a closing `---` line after the frontmatter fields"),
+            ),
+            AdeptError::InvalidYaml { source, .. } => (
                 format!("SKILL.md frontmatter is not valid YAML: {source}"),
-                self.default_severity(),
-                path,
-                1,
-                1,
-            )],
-            AdeptError::FrontmatterNotMapping { .. } => vec![Diagnostic::new(
-                self.code(),
-                "SKILL.md frontmatter must be a YAML mapping (key: value pairs)",
-                self.default_severity(),
-                path,
-                1,
-                1,
-            )],
-            AdeptError::InvalidFieldType { field, .. } => vec![Diagnostic::new(
-                self.code(),
+                None,
+            ),
+            AdeptError::FrontmatterNotMapping { .. } => (
+                "SKILL.md frontmatter must be a YAML mapping (key: value pairs)".to_string(),
+                None,
+            ),
+            AdeptError::InvalidFieldType { field, .. } => (
                 format!("SKILL.md frontmatter field `{field}` must be a string"),
-                self.default_severity(),
-                path,
-                1,
-                1,
-            )],
-            _ => Vec::new(),
-        }
+                None,
+            ),
+            _ => return Vec::new(),
+        };
+        parse_error_diagnostic(self, path, message, suggestion)
     }
 }
 

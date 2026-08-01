@@ -25,15 +25,23 @@ impl Counts {
     /// Tally a full diagnostic slice in one pass.
     #[must_use]
     pub fn of(diagnostics: &[Diagnostic]) -> Self {
+        Self::of_severities(diagnostics.iter().map(|d| d.severity))
+    }
+
+    /// Tally severities straight from an iterator, for a caller that has no
+    /// single slice to hand (e.g. `create`, which chains two diagnostic
+    /// vectors and would otherwise concatenate them just to count).
+    #[must_use]
+    pub fn of_severities(severities: impl IntoIterator<Item = Severity>) -> Self {
         let mut counts = Self::default();
-        for d in diagnostics {
-            counts.add(d.severity);
+        for severity in severities {
+            counts.add(severity);
         }
         counts
     }
 
     /// Fold one more diagnostic's severity into the tally.
-    pub fn add(&mut self, severity: Severity) {
+    fn add(&mut self, severity: Severity) {
         match severity {
             Severity::Error => self.errors += 1,
             Severity::Warning => self.warnings += 1,
@@ -64,16 +72,10 @@ pub fn improves_on(current: &[Diagnostic], candidate: &[Diagnostic]) -> bool {
 /// underlying diagnostic slices.
 #[must_use]
 pub fn improves_on_counts(current: Counts, candidate: Counts) -> bool {
-    if candidate.errors != current.errors {
-        return candidate.errors < current.errors;
+    fn key(c: Counts) -> (usize, usize, usize, usize) {
+        (c.errors, c.warnings, c.infos, c.total)
     }
-    if candidate.warnings != current.warnings {
-        return candidate.warnings < current.warnings;
-    }
-    if candidate.infos != current.infos {
-        return candidate.infos < current.infos;
-    }
-    candidate.total < current.total
+    key(candidate) < key(current)
 }
 
 /// Whether `diagnostics` clears `create`'s repair-loop gate: zero `Error`
