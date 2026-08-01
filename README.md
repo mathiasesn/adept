@@ -35,6 +35,9 @@ cargo build --release -p adept
 ./target/release/adept --help
 ```
 
+Once the crate is published, `cargo install adept` will install the CLI
+directly. It is not on crates.io yet.
+
 ## `adept check`
 
 Lints one or more `SKILL.md` files or directories of skills.

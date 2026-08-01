@@ -104,6 +104,8 @@ workspace table, not to a member's `[dependencies]` with an inline version.**
 Cargo.toml                 Virtual workspace root; single source of dependency versions
 rust-toolchain.toml        stable + clippy + rustfmt
 .github/workflows/ci.yml   Build, test, clippy -D warnings, fmt --check, perf smoke test
+.github/workflows/release.yml  release-plz: release-pr + release jobs (§6)
+release_plz.toml           release-plz config: shared version_group, changelog scope
 docs/                      RULES.md, EVALS.md, BACKLOG.md
 
 crates/adept/              CORE LIBRARY — no dependency on any sibling crate
@@ -247,6 +249,18 @@ of criterion output, a known brittleness recorded in `docs/BACKLOG.md`.
 
 `clippy -D warnings` is enforced with `--all-targets`, so **new code must be
 clippy-clean including tests and benches**.
+
+**Release pipeline** (`.github/workflows/release.yml`, `release_plz.toml`).
+release-plz runs on push to `main`: a `release-pr` job keeps a rolling PR open
+carrying Conventional-Commits-derived version bumps and changelog; merging
+that PR lands the bumped versions on `main`. A separate `release` job then
+publishes to crates.io — any crate whose `[workspace.package].version` isn't
+already on the registry, in dependency order — and pushes a `{{ package
+}}-v{{ version }}` tag per published crate. All four packages share one
+`version_group` in `release_plz.toml`, so they bump and publish in lockstep
+rather than independently. The release job keys off crates.io registry state,
+not PR identity — see AGENTS.md's commit conventions for why that means never
+hand-editing the version. Requires the `CARGO_REGISTRY_TOKEN` repo secret.
 
 ## 7. Configuration
 
