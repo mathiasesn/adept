@@ -11,4 +11,4 @@ crates/adept/tests/fixtures/rules/sl105_setext_heading/SKILL.md:8:1: SL103 headi
 crates/adept/tests/fixtures/rules/sl105_setext_heading/SKILL.md:10:1: SL105 heading "Sub" uses setext form; `adept fmt` will rewrite it to ATX (h2)
   fix: write it as `## Sub`, or run `adept fmt` to rewrite it
 crates/adept/tests/fixtures/rules/sl105_setext_heading/SKILL.md:15:1: SL105 heading "#hashtag start of setext" uses setext form; `adept fmt` will rewrite it to ATX (h1)
-  fix: write it as `# #hashtag start of setext`, or run `adept fmt` to rewrite it
+  fix: write it as `# #hashtag start of setext` (the leading `#` is the ATX marker; the heading text itself starts with `#`), or run `adept fmt` to rewrite it

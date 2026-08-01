@@ -223,11 +223,24 @@ impl SkillRule for SetextHeading {
                     skill.body_line_offset + h.line - 1,
                     1,
                 )
-                .with_fix_suggestion(format!(
-                    "write it as `{} {}`, or run `adept fmt` to rewrite it",
-                    "#".repeat(h.value.level as usize),
-                    h.value.text
-                ))
+                .with_fix_suggestion({
+                    let marker = "#".repeat(h.value.level as usize);
+                    if h.value.text.starts_with('#') {
+                        format!(
+                            "write it as `{marker} {text}` (the leading `{marker}` is the ATX \
+                             marker; the heading text itself starts with `#`), or run `adept fmt` \
+                             to rewrite it",
+                            marker = marker,
+                            text = h.value.text,
+                        )
+                    } else {
+                        format!(
+                            "write it as `{marker} {text}`, or run `adept fmt` to rewrite it",
+                            marker = marker,
+                            text = h.value.text,
+                        )
+                    }
+                })
             })
             .collect()
     }
