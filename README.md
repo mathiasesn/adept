@@ -29,14 +29,17 @@ other three analyses, `fix`, and `create` do.
 ## Install
 
 ```bash
+cargo install adept
+```
+
+Or, from source (`adept` is the package name of `crates/adept_cli`):
+
+```bash
 cargo install --path crates/adept_cli
 # or, from within this repo:
 cargo build --release -p adept
 ./target/release/adept --help
 ```
-
-Once the crate is published, `cargo install adept` will install the CLI
-directly. It is not on crates.io yet.
 
 ## `adept check`
 
