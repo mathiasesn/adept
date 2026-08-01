@@ -1,20 +1,20 @@
 //! `SL00x` frontmatter/naming rules.
 //!
-//! `SL003` (`malformed-frontmatter`) has no [`SkillRule`] here: a skill with
-//! malformed frontmatter fails to parse entirely, so it is synthesized from
-//! [`crate::skillset::SkillSet::errors`] by `Linter::lint_set` instead. See
-//! [`super::parse_error_diagnostic`].
+//! `SL001`/`SL002` are dual-registered: they check the ordinary
+//! [`SkillRule`] path (field present but empty) and the [`ParseErrorRule`]
+//! path (field missing entirely, so parsing failed before a `Skill` could
+//! be built). `SL003` (`malformed-frontmatter`) is exclusively a
+//! [`ParseErrorRule`]: a skill with malformed frontmatter never produces a
+//! `Skill` to run an ordinary rule against.
 
 use crate::diagnostic::{Diagnostic, Severity};
+use crate::error::AdeptError;
 use crate::skill::Skill;
 
-use super::{impl_rule, FixKind, LintConfig, Rule, SkillRule};
+use super::{impl_rule, FixKind, LintConfig, ParseErrorRule, Rule, SkillRule};
 
 /// `SL001` `missing-description`: the `description` frontmatter field is
-/// present but empty (or whitespace-only).
-///
-/// A genuinely absent `description` key is instead reported as `SL001` from
-/// the parse error path, since parsing requires the field to be present.
+/// present but empty (or whitespace-only), or absent entirely (parse-time).
 pub struct MissingDescription;
 
 impl_rule!(MissingDescription, "SL001", "missing-description", Error);
@@ -44,8 +44,29 @@ impl SkillRule for MissingDescription {
     }
 }
 
+impl ParseErrorRule for MissingDescription {
+    fn check(&self, path: &std::path::Path, err: &AdeptError) -> Vec<Diagnostic> {
+        match err {
+            AdeptError::MissingField { field, .. } if *field == "description" => {
+                vec![Diagnostic::new(
+                    self.code(),
+                    "SKILL.md is missing the required `description` frontmatter field",
+                    self.default_severity(),
+                    path,
+                    1,
+                    1,
+                )
+                .with_fix_suggestion(
+                    "add a `description` field stating what the skill does and when to use it",
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
 /// `SL002` `missing-name`: the `name` frontmatter field is present but empty
-/// (or whitespace-only).
+/// (or whitespace-only), or absent entirely (parse-time).
 pub struct MissingName;
 
 impl_rule!(MissingName, "SL002", "missing-name", Error);
@@ -69,6 +90,87 @@ impl SkillRule for MissingName {
             .with_fix_suggestion("set `name` to match the skill's directory name")]
         } else {
             Vec::new()
+        }
+    }
+}
+
+impl ParseErrorRule for MissingName {
+    fn check(&self, path: &std::path::Path, err: &AdeptError) -> Vec<Diagnostic> {
+        match err {
+            AdeptError::MissingField { field, .. } if *field == "name" => vec![Diagnostic::new(
+                self.code(),
+                "SKILL.md is missing the required `name` frontmatter field",
+                self.default_severity(),
+                path,
+                1,
+                1,
+            )
+            .with_fix_suggestion("add a `name` field matching the skill's directory name")],
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// `SL003` `malformed-frontmatter`: the frontmatter block itself fails to
+/// parse (missing or unterminated `---` fence, invalid YAML, non-mapping
+/// frontmatter, or a known field with the wrong type). Exclusively a
+/// [`ParseErrorRule`]: a skill in this state has no `Skill` to run an
+/// ordinary rule against.
+pub struct MalformedFrontmatter;
+
+impl_rule!(
+    MalformedFrontmatter,
+    "SL003",
+    "malformed-frontmatter",
+    Error
+);
+
+impl ParseErrorRule for MalformedFrontmatter {
+    fn check(&self, path: &std::path::Path, err: &AdeptError) -> Vec<Diagnostic> {
+        match err {
+            AdeptError::MissingFrontmatter { .. } => vec![Diagnostic::new(
+                self.code(),
+                "SKILL.md must start with a line containing only '---' to open the YAML frontmatter block",
+                self.default_severity(),
+                path,
+                1,
+                1,
+            )
+            .with_fix_suggestion("add an opening `---` line as the first line of the file")],
+            AdeptError::UnterminatedFrontmatter { .. } => vec![Diagnostic::new(
+                self.code(),
+                "SKILL.md frontmatter is opened with '---' but never closed",
+                self.default_severity(),
+                path,
+                1,
+                1,
+            )
+            .with_fix_suggestion("add a closing `---` line after the frontmatter fields")],
+            AdeptError::InvalidYaml { source, .. } => vec![Diagnostic::new(
+                self.code(),
+                format!("SKILL.md frontmatter is not valid YAML: {source}"),
+                self.default_severity(),
+                path,
+                1,
+                1,
+            )],
+            AdeptError::FrontmatterNotMapping { .. } => vec![Diagnostic::new(
+                self.code(),
+                "SKILL.md frontmatter must be a YAML mapping (key: value pairs)",
+                self.default_severity(),
+                path,
+                1,
+                1,
+            )],
+            AdeptError::InvalidFieldType { field, .. } => vec![Diagnostic::new(
+                self.code(),
+                format!("SKILL.md frontmatter field `{field}` must be a string"),
+                self.default_severity(),
+                path,
+                1,
+                1,
+            )],
+            _ => Vec::new(),
         }
     }
 }

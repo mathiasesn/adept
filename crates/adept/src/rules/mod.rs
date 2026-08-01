@@ -1,9 +1,11 @@
 //! The rule engine: [`Rule`], [`Registry`], [`LintConfig`], and [`Linter`].
 //!
-//! Rules come in two flavors: [`SkillRule`]s that check a single [`Skill`]
-//! in isolation, and [`SetRule`]s that check a whole [`SkillSet`] for
-//! cross-skill issues (duplicates, overlapping descriptions, etc). Both
-//! flavors share the base [`Rule`] metadata (code, name, default severity).
+//! Rules come in three flavors: [`SkillRule`]s that check a single
+//! [`Skill`] in isolation, [`SetRule`]s that check a whole [`SkillSet`] for
+//! cross-skill issues (duplicates, overlapping descriptions, etc), and
+//! [`ParseErrorRule`]s that check a parse-time [`AdeptError`] for a skill
+//! that never became a [`Skill`] at all. All three flavors share the base
+//! [`Rule`] metadata (code, name, default severity).
 
 mod cross;
 mod description;
@@ -89,6 +91,16 @@ pub trait SetRule: Rule {
     fn check(&self, set: &SkillSet, config: &LintConfig, tokens: &TokenCounter) -> Vec<Diagnostic>;
 }
 
+/// A rule that checks a parse-time [`AdeptError`] for a skill that failed to
+/// parse into a [`Skill`] at all (so no [`SkillRule`] can run against it).
+pub trait ParseErrorRule: Rule {
+    /// Check `err` (the failure discovered at `path`), returning any
+    /// diagnostics found. Implementations should use
+    /// [`Rule::default_severity`] for the diagnostics they build;
+    /// [`Linter`] applies any configured severity override afterwards.
+    fn check(&self, path: &std::path::Path, err: &AdeptError) -> Vec<Diagnostic>;
+}
+
 /// Implement [`Rule`] for a rule type: its code, kebab-case name, and
 /// default [`Severity`].
 ///
@@ -141,26 +153,18 @@ pub struct RuleMeta {
 
 /// The set of all known rules.
 ///
-/// [`Registry::new`] registers every built-in rule. Note that `SL003`
-/// (`malformed-frontmatter`) has no [`SkillRule`] implementation: it is
-/// synthesized directly from [`SkillSet::errors`] by [`Linter::lint_set`],
-/// since a skill that failed to parse has no [`Skill`] to run rules against.
-/// It is still listed in [`Registry::all_meta`] so it can be looked up,
-/// documented, and enabled/disabled like any other rule.
+/// [`Registry::new`] registers every built-in rule. `SL001`/`SL002` are
+/// dual-registered in both `skill_rules` (empty-field case) and
+/// `parse_error_rules` (missing-field, parse-time case); `SL003` exists only
+/// in `parse_error_rules`, since a skill with malformed frontmatter has no
+/// [`Skill`] to run an ordinary rule against. [`Registry::meta_iter`] dedupes
+/// by code so [`Registry::all_meta`] and the `by_*` lookups stay
+/// single-valued despite the dual registration.
 pub struct Registry {
     skill_rules: Vec<Box<dyn SkillRule>>,
     set_rules: Vec<Box<dyn SetRule>>,
+    parse_error_rules: Vec<Box<dyn ParseErrorRule>>,
 }
-
-/// Metadata for the rules synthesized from parse failures rather than run as
-/// [`SkillRule`]s. Fixed, so it lives in the binary rather than in each
-/// [`Registry`].
-const PARSE_ERROR_META: [RuleMeta; 1] = [RuleMeta {
-    code: "SL003",
-    name: "malformed-frontmatter",
-    default_severity: Severity::Error,
-    fix_kind: FixKind::None,
-}];
 
 impl Registry {
     /// Build the registry containing every built-in rule.
@@ -193,9 +197,16 @@ impl Registry {
             Box::new(cross::OverlappingTriggerPhrasing),
         ];
 
+        let parse_error_rules: Vec<Box<dyn ParseErrorRule>> = vec![
+            Box::new(frontmatter::MissingDescription),
+            Box::new(frontmatter::MissingName),
+            Box::new(frontmatter::MalformedFrontmatter),
+        ];
+
         Self {
             skill_rules,
             set_rules,
+            parse_error_rules,
         }
     }
 
@@ -211,8 +222,15 @@ impl Registry {
         &self.set_rules
     }
 
-    /// Metadata for every registered rule (including `SL003`, which has no
-    /// directly-invocable check), sorted by code.
+    /// The parse-error rules, in registration order.
+    #[must_use]
+    pub fn parse_error_rules(&self) -> &[Box<dyn ParseErrorRule>] {
+        &self.parse_error_rules
+    }
+
+    /// Metadata for every registered rule, deduplicated by code (so `SL001`
+    /// and `SL002`, which are dual-registered in `skill_rules` and
+    /// `parse_error_rules`, appear once each), sorted by code.
     #[must_use]
     pub fn all_meta(&self) -> Vec<RuleMeta> {
         let mut meta: Vec<RuleMeta> = self.meta_iter().collect();
@@ -220,7 +238,8 @@ impl Registry {
         meta
     }
 
-    /// Metadata for every registered rule, in registration order.
+    /// Metadata for every registered rule, deduplicated by code, in
+    /// registration order.
     ///
     /// The unsorted, non-allocating basis for [`Registry::all_meta`] and the
     /// `by_*` lookups, so a single `--select SL001` doesn't build and sort
@@ -234,11 +253,13 @@ impl Registry {
                 fix_kind: r.fix_kind(),
             }
         }
+        let mut seen = HashSet::new();
         self.skill_rules
             .iter()
             .map(|r| meta(r.as_ref()))
             .chain(self.set_rules.iter().map(|r| meta(r.as_ref())))
-            .chain(PARSE_ERROR_META)
+            .chain(self.parse_error_rules.iter().map(|r| meta(r.as_ref())))
+            .filter(move |m| seen.insert(m.code))
     }
 
     /// Look up a rule's metadata by its code (e.g. `"SL001"`).
@@ -449,17 +470,12 @@ impl Linter {
         }
 
         for (path, err) in &set.errors {
-            if let Some(d) = parse_error_diagnostic(path, err) {
-                if !self.config.disabled.contains(d.code) {
-                    let mut d = d;
-                    d.severity = self
-                        .config
-                        .severity_overrides
-                        .get(d.code)
-                        .copied()
-                        .unwrap_or(d.severity);
-                    diagnostics.push(d);
+            for rule in self.registry.parse_error_rules() {
+                if !self.config.is_enabled(rule.as_ref()) {
+                    continue;
                 }
+                let found = rule.check(path, err);
+                diagnostics.extend(self.config.apply_overrides(rule.as_ref(), found));
             }
         }
 
@@ -475,81 +491,6 @@ pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
     diagnostics.sort_by(|a, b| {
         (&a.path, a.line, a.column, a.code).cmp(&(&b.path, b.line, b.column, b.code))
     });
-}
-
-/// Convert a parse-time [`AdeptError`] into the corresponding lint
-/// diagnostic (`SL001`/`SL002`/`SL003`), if it corresponds to one of those.
-fn parse_error_diagnostic(path: &std::path::Path, err: &AdeptError) -> Option<Diagnostic> {
-    match err {
-        AdeptError::MissingField { field, .. } if *field == "description" => Some(Diagnostic::new(
-            "SL001",
-            "SKILL.md is missing the required `description` frontmatter field",
-            Severity::Error,
-            path,
-            1,
-            1,
-        )
-        .with_fix_suggestion(
-            "add a `description` field stating what the skill does and when to use it",
-        )),
-        AdeptError::MissingField { field, .. } if *field == "name" => Some(Diagnostic::new(
-            "SL002",
-            "SKILL.md is missing the required `name` frontmatter field",
-            Severity::Error,
-            path,
-            1,
-            1,
-        )
-        .with_fix_suggestion("add a `name` field matching the skill's directory name")),
-        AdeptError::MissingFrontmatter { .. } => Some(Diagnostic::new(
-            "SL003",
-            "SKILL.md must start with a line containing only '---' to open the YAML frontmatter block",
-            Severity::Error,
-            path,
-            1,
-            1,
-        )
-        .with_fix_suggestion("add an opening `---` line as the first line of the file")),
-        AdeptError::UnterminatedFrontmatter { .. } => Some(Diagnostic::new(
-            "SL003",
-            "SKILL.md frontmatter is opened with '---' but never closed",
-            Severity::Error,
-            path,
-            1,
-            1,
-        )
-        .with_fix_suggestion("add a closing `---` line after the frontmatter fields")),
-        AdeptError::InvalidYaml { source, .. } => Some(Diagnostic::new(
-            "SL003",
-            format!("SKILL.md frontmatter is not valid YAML: {source}"),
-            Severity::Error,
-            path,
-            1,
-            1,
-        )),
-        AdeptError::FrontmatterNotMapping { .. } => Some(Diagnostic::new(
-            "SL003",
-            "SKILL.md frontmatter must be a YAML mapping (key: value pairs)",
-            Severity::Error,
-            path,
-            1,
-            1,
-        )),
-        AdeptError::InvalidFieldType { field, .. } => Some(Diagnostic::new(
-            "SL003",
-            format!("SKILL.md frontmatter field `{field}` must be a string"),
-            Severity::Error,
-            path,
-            1,
-            1,
-        )),
-        AdeptError::MissingField { .. }
-        | AdeptError::Io { .. }
-        | AdeptError::WalkDir(_)
-        | AdeptError::NotFound(_)
-        | AdeptError::TokenizerLoad { .. }
-        | AdeptError::Json(_) => None,
-    }
 }
 
 #[cfg(test)]
@@ -580,5 +521,25 @@ mod tests {
             .by_code("SL001")
             .expect("SL001 should be a registered rule");
         assert_eq!(missing_description.fix_kind, FixKind::None);
+    }
+
+    /// `SL001`/`SL002` are dual-registered (once as a `SkillRule`, once as a
+    /// `ParseErrorRule`) so that both the empty-field and missing-field
+    /// cases are covered; `all_meta` must still yield exactly one entry per
+    /// code despite that.
+    #[test]
+    fn all_meta_has_no_duplicate_codes() {
+        let registry = Registry::new();
+        let meta = registry.all_meta();
+        let mut codes: Vec<&str> = meta.iter().map(|m| m.code).collect();
+        let len_before_dedup = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(
+            codes.len(),
+            len_before_dedup,
+            "all_meta should have no duplicate codes, got: {:?}",
+            meta.iter().map(|m| m.code).collect::<Vec<_>>()
+        );
     }
 }

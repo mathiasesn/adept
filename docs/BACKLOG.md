@@ -102,14 +102,6 @@ a materially different (and riskier) problem than the single-skill
 description/body rewrites `fix_skill` does today. Accepted known
 limitation; see `crates/adept_agent/src/lib.rs` module docs.
 
-### Parse errors bypass the rule pipeline
-`SL001`/`SL002`/`SL003` are synthesized by a `match` on `AdeptError` in
-`Linter::lint_set`, which re-inlines the enable/severity logic that
-`LintConfig` already owns. A third rule flavor (`ParseErrorRule`) in the same
-`Registry` would share dispatch. Until then, a custom `SkillParser` has no
-seam to contribute its own error codes — the `match` is closed over
-`AdeptError`.
-
 ## Performance
 
 Deliberately not done, since `check` runs well under the 1s target

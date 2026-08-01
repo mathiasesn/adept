@@ -493,3 +493,130 @@ fn snapshot_cross_sl402() {
 fn snapshot_cross_sl403() {
     assert_lint_snapshot!(lint_set_fixture("cross_sl403"));
 }
+
+// --- Parse-error rules (SL001/SL002/SL003) flow through the ordinary
+// enablement/severity pipeline, exactly like SkillRule/SetRule. ---
+
+/// Lints a `tests/fixtures/<name>` directory (not `tests/fixtures/rules/`,
+/// which parse-time fixtures don't live under, since the whole point is
+/// that the skill fails to parse) with the given config.
+fn lint_parse_error_fixture(dir: &str, config: LintConfig) -> Vec<Diagnostic> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(dir);
+    let set = SkillSet::discover(path).expect("fixture should discover");
+    let linter = Linter::new(config).expect("default tokenizer should load");
+    linter.lint_set(&set)
+}
+
+#[test]
+fn sl001_parse_error_disabled_by_code() {
+    let mut config = LintConfig::default();
+    config.disabled.insert("SL001".to_string());
+    let diagnostics = lint_parse_error_fixture("missing_required_key", config);
+    assert!(
+        diagnostics.iter().all(|d| d.code != "SL001"),
+        "SL001 should be suppressed by code, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl001_parse_error_disabled_by_name() {
+    let mut config = LintConfig::default();
+    config.disabled.insert("missing-description".to_string());
+    let diagnostics = lint_parse_error_fixture("missing_required_key", config);
+    assert!(
+        diagnostics.iter().all(|d| d.code != "SL001"),
+        "SL001 should be suppressed by kebab-case name, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl001_parse_error_fires_when_enabled() {
+    let diagnostics = lint_parse_error_fixture("missing_required_key", LintConfig::default());
+    assert!(
+        diagnostics.iter().any(|d| d.code == "SL001"),
+        "SL001 should fire by default, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl002_parse_error_disabled_by_code() {
+    let mut config = LintConfig::default();
+    config.disabled.insert("SL002".to_string());
+    let diagnostics = lint_parse_error_fixture("missing_name_key", config);
+    assert!(
+        diagnostics.iter().all(|d| d.code != "SL002"),
+        "SL002 should be suppressed by code, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl002_parse_error_disabled_by_name() {
+    let mut config = LintConfig::default();
+    config.disabled.insert("missing-name".to_string());
+    let diagnostics = lint_parse_error_fixture("missing_name_key", config);
+    assert!(
+        diagnostics.iter().all(|d| d.code != "SL002"),
+        "SL002 should be suppressed by kebab-case name, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl002_parse_error_fires_when_enabled() {
+    let diagnostics = lint_parse_error_fixture("missing_name_key", LintConfig::default());
+    assert!(
+        diagnostics.iter().any(|d| d.code == "SL002"),
+        "SL002 should fire by default, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl003_parse_error_disabled_by_code() {
+    let mut config = LintConfig::default();
+    config.disabled.insert("SL003".to_string());
+    let diagnostics = lint_parse_error_fixture("missing_frontmatter", config);
+    assert!(
+        diagnostics.iter().all(|d| d.code != "SL003"),
+        "SL003 should be suppressed by code, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl003_parse_error_disabled_by_name() {
+    let mut config = LintConfig::default();
+    config.disabled.insert("malformed-frontmatter".to_string());
+    let diagnostics = lint_parse_error_fixture("missing_frontmatter", config);
+    assert!(
+        diagnostics.iter().all(|d| d.code != "SL003"),
+        "SL003 should be suppressed by kebab-case name, got: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn sl003_parse_error_severity_override_applies() {
+    let mut config = LintConfig::default();
+    config
+        .severity_overrides
+        .insert("SL003".to_string(), Severity::Warning);
+    let diagnostics = lint_parse_error_fixture("missing_frontmatter", config);
+    let sl003 = diagnostics
+        .iter()
+        .find(|d| d.code == "SL003")
+        .expect("SL003 should still fire");
+    assert_eq!(sl003.severity, Severity::Warning);
+}
+
+#[test]
+fn sl003_parse_error_severity_override_applies_by_name() {
+    let mut config = LintConfig::default();
+    config
+        .severity_overrides
+        .insert("malformed-frontmatter".to_string(), Severity::Warning);
+    let diagnostics = lint_parse_error_fixture("missing_frontmatter", config);
+    let sl003 = diagnostics
+        .iter()
+        .find(|d| d.code == "SL003")
+        .expect("SL003 should still fire");
+    assert_eq!(sl003.severity, Severity::Warning);
+}
