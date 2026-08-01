@@ -36,7 +36,7 @@ Or, from source (`adept` is the package name of `crates/adept_cli`):
 
 ```bash
 cargo install --path crates/adept_cli
-# or, from within this repo:
+# or, to build and run in place without installing to PATH:
 cargo build --release -p adept
 ./target/release/adept --help
 ```
