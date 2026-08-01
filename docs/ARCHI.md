@@ -265,10 +265,13 @@ identity — see AGENTS.md's commit conventions for why that means never
 hand-editing the version. Requires the `CARGO_REGISTRY_TOKEN` repo secret,
 which is scoped to the `release` step only.
 
-Known gap: the release PR is opened with the default `GITHUB_TOKEN`, and
-GitHub does not fire workflow triggers for PRs it opens — so release PRs
-arrive with no CI checks. Switching that step to a PAT is the fix if that
-matters.
+The `release-pr` step uses a second secret, `RELEASE_PLZ_TOKEN`. GitHub never
+fires workflow triggers for events caused by the default `GITHUB_TOKEN` (loop
+prevention), so a release PR opened with it would arrive with no CI checks at
+all — and that PR is the one whose merge publishes to crates.io. A
+fine-grained PAT with `contents: write` + `pull_requests: write` makes CI run
+on it normally. The step falls back to `GITHUB_TOKEN` when the secret is
+absent, so the workflow still functions, unchecked, without it.
 
 ## 7. Configuration
 

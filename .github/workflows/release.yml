@@ -52,6 +52,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+      # Opened with RELEASE_PLZ_TOKEN, not the default GITHUB_TOKEN: GitHub
+      # never fires workflow triggers for events caused by GITHUB_TOKEN (loop
+      # prevention), so a release PR opened with it arrives with zero CI
+      # checks — and that PR is the one whose merge publishes to crates.io.
+      # A fine-grained PAT with contents:write + pull_requests:write makes CI
+      # run on it normally. Falls back to GITHUB_TOKEN so the workflow still
+      # functions (unchecked) if the secret is absent.
+      #
       # No CARGO_REGISTRY_TOKEN here: opening the release PR only reads the
       # public registry index, so the publish-capable secret stays scoped to
       # the step that actually publishes.
@@ -60,4 +68,4 @@ jobs:
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
