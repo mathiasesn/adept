@@ -47,7 +47,7 @@ jobs:
         # runners (criterion `--quick` keeps this cheap).
         run: |
           set -euo pipefail
-          output="$(cargo bench -p adept --bench lint_100_skills -- --quick 2>&1)"
+          output="$(cargo bench -p adept-core --bench lint_100_skills -- --quick 2>&1)"
           echo "$output"
           # Extract the middle (point-estimate) value from a criterion line like:
           #   lint_100_skills   time:   [22.095 ms 23.102 ms 23.354 ms]

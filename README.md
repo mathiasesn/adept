@@ -31,7 +31,7 @@ other three analyses, `fix`, and `create` do.
 ```bash
 cargo install --path crates/adept_cli
 # or, from within this repo:
-cargo build --release -p adept_cli
+cargo build --release -p adept
 ./target/release/adept --help
 ```
 

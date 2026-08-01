@@ -179,6 +179,15 @@ sibling crate owns one user-facing surface end to end. Anything two surfaces
 need moves *down* into `adept` (this is why `text.rs` and `companion.rs`
 exist), never sideways between siblings.
 
+**Package name ≠ crate name.** Directory names and `use`-path crate names are
+unchanged, but the cargo *package* names differ: `crates/adept` is package
+`adept-core` (crate `adept`), `crates/adept_fmt` is `adept-fmt`, `crates/adept_agent`
+is `adept-agent`, and `crates/adept_cli` is package `adept` (bin `adept`, no
+lib). So `cargo test -p adept-core` builds the core crate, but `use adept::...`
+in source is unaffected — `crates/adept/Cargo.toml` sets `[lib] name = "adept"`
+explicitly. Anything after `-p` on the command line is the package name;
+anything in a `use` statement is the crate name.
+
 ## 5. Core Architecture Principles
 
 Violating one is a design change, not a style preference.
@@ -222,8 +231,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 
 cargo install --path crates/adept_cli
-cargo run -q -p adept_cli -- check <path>
-cargo bench -p adept --bench lint_100_skills -- --quick
+cargo run -q -p adept -- check <path>
+cargo bench -p adept-core --bench lint_100_skills -- --quick
 ```
 
 **CI** (`.github/workflows/ci.yml`, one job on ubuntu-latest, on push to `main`

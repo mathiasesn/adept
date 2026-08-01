@@ -31,12 +31,12 @@ cargo test --workspace
 cargo clippy --all-targets -- -D warnings   # enforced, tests and benches included
 cargo fmt --all -- --check
 
-cargo test -p adept rules::                  # one crate / filtered tests
-cargo test -p adept_fmt --test format_tests  # a single suite
+cargo test -p adept-core rules::             # one crate / filtered tests
+cargo test -p adept-fmt --test format_tests  # a single suite
 cargo insta review                           # review pending snapshot changes
 
-cargo run -q -p adept_cli -- check <path>
-cargo bench -p adept --bench lint_100_skills -- --quick
+cargo run -q -p adept -- check <path>
+cargo bench -p adept-core --bench lint_100_skills -- --quick
 ```
 
 CI runs the four workspace commands above, then a perf smoke test that parses the criterion `lint_100_skills` line and fails above **500ms** (observed ~23ms; 1s is the acceptance criterion, 500ms is the gate).
@@ -45,18 +45,18 @@ CI runs the four workspace commands above, then a perf smoke test that parses th
 
 Virtual cargo workspace, four crates, one binary (`adept`):
 
-- `adept` — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, `markdown` (the shared pulldown-cmark lexer), and `evals` (the eval-dataset schema plus the offline `grade` function).
-- `adept_fmt` — formatter: canonical frontmatter + Markdown reflow. Idempotent, atomic writes.
-- `adept_agent` — everything LLM-assisted. Submodules:
+- `adept` (package `adept-core`, directory `crates/adept`) — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, `markdown` (the shared pulldown-cmark lexer), and `evals` (the eval-dataset schema plus the offline `grade` function).
+- `adept_fmt` (package `adept-fmt`) — formatter: canonical frontmatter + Markdown reflow. Idempotent, atomic writes.
+- `adept_agent` (package `adept-agent`) — everything LLM-assisted. Submodules:
   - `llm` — the transport: `LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`.
   - `eval` — the four `adept eval` analyses: `triggering`, `tokens`, `overlap`, `report`.
   - `fix` — autofix for `FixKind::Llm` diagnostics.
   - `create` — skill authoring: generate → screen → repair → generate-evals.
 
   `llm` and `eval` are re-exported at the crate root. `candidate`/`diff`/`prompts`/`writer`/`gate` sit at crate level because `fix` and `create` share them.
-- `adept_cli` — clap CLI + `adept.toml` config + hand-rolled MCP stdio server.
+- `adept_cli` (package `adept`, directory `crates/adept_cli`) — clap CLI + `adept.toml` config + hand-rolled MCP stdio server.
 
-Dependency direction is strictly layered: `adept` ← `adept_fmt` ← `adept_agent` ← `adept_cli`. `adept_agent` may compose `adept` and `adept_fmt`; nothing in the library stack may depend on `adept_agent`, only `adept_cli` does.
+Dependency direction is strictly layered: `adept` ← `adept_fmt` ← `adept_agent` ← `adept_cli` (crate names; the equivalent package names are `adept-core` ← `adept-fmt` ← `adept-agent` ← `adept`). `adept_agent` may compose `adept` and `adept_fmt`; nothing in the library stack may depend on `adept_agent`, only `adept_cli` does.
 
 Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml` is discovered by walking up from the target path. `[fix]`, `[eval]` and `[create]` are three independent sections (no fallback between any of them); the `ADEPT_MODEL` / `ADEPT_BASE_URL` / `ADEPT_API_KEY` env vars are the only thing they share. A config file containing a stale `[score]` section (the pre-rename name) is a hard error naming `[eval]`, not a silently-ignored table.
 
@@ -94,6 +94,12 @@ The rule itself decides nothing about severity or enablement — the `Linter` ap
 - Formatter fixtures are one file per construct family, plus `proptest_idempotency.rs`. Prose reflow is the least-covered high-risk path: the broad idempotency loop is gated on `reflow_prose: false`, so changes there need their own targeted tests.
 - CLI tests use `assert_cmd`/`predicates` against `crates/adept_cli/tests/fixtures/{clean,defective}-skill`.
 - No test may perform network I/O — use `adept_agent::MockLlmClient`.
+
+## Commit conventions
+
+Releases are automated: release-plz reads Conventional Commits since the last release to decide the version bump. `feat:` and `fix:` bump as expected. `refactor:` does **not** bump by default — but refactors in this repo have historically been breaking (e.g. dissolving a crate into another), so a breaking refactor must be marked `refactor!:` (or `feat!:`, or any type with `!`) or carry a `BREAKING CHANGE:` footer. A public-API break always needs the `!` or the footer, no exceptions.
+
+Never hand-edit `[workspace.package].version` and merge it to `main`. The release job triggers off whether that version already exists on crates.io, not off which PR changed it — a manual bump on `main` fires a real publish outside the release PR. Version bumps come only from the release PR that release-plz opens.
 
 Dependency versions live once in the root `[workspace.dependencies]`; members reference them with `{ workspace = true }`.
 
