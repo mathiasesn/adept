@@ -7,6 +7,9 @@ repository.workspace = true
 rust-version.workspace = true
 readme.workspace = true
 description = "Core data model, parser, and diagnostics for adept, a linter/formatter/scorer for Agent Skills."
+# Vendored third-party skill corpus (~1.8MB) used only by local tests; keep it
+# out of the published crate so it isn't downloaded by every dependent.
+exclude = ["tests/fixtures/corpus/"]
 
 [lib]
 name = "adept"
