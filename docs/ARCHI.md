@@ -105,7 +105,7 @@ Cargo.toml                 Virtual workspace root; single source of dependency v
 rust-toolchain.toml        stable + clippy + rustfmt
 .github/workflows/ci.yml   Build, test, clippy -D warnings, fmt --check, perf smoke test
 .github/workflows/release.yml  release-plz: release + release-pr steps (§6)
-release_plz.toml           release-plz config: shared version_group, changelog scope
+release_plz.toml           release-plz config: shared version_group
 docs/                      RULES.md, EVALS.md, BACKLOG.md
 
 crates/adept/              CORE LIBRARY — no dependency on any sibling crate
@@ -270,8 +270,11 @@ fires workflow triggers for events caused by the default `GITHUB_TOKEN` (loop
 prevention), so a release PR opened with it would arrive with no CI checks at
 all — and that PR is the one whose merge publishes to crates.io. A
 fine-grained PAT with `contents: write` + `pull_requests: write` makes CI run
-on it normally. The step falls back to `GITHUB_TOKEN` when the secret is
-absent, so the workflow still functions, unchecked, without it.
+on it normally, so it is a hard prerequisite: configure the secret before the
+first merge to `main`. There is no fallback — the `release` step above runs
+first and succeeds with the plain `GITHUB_TOKEN`, so a missing PAT doesn't
+fail fast; the first push publishes all four crates irreversibly, and only
+this step goes red afterward.
 
 ## 7. Configuration
 
