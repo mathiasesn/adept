@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 readme.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+categories.workspace = true
 description = "Linter, formatter, and LLM-assisted authoring tool for agent skills (SKILL.md). Installs the `adept` binary."
 
 [[bin]]

@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 readme.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+categories = ["development-tools"]
 description = "LLM-assisted agent capabilities for Agent Skills: LLM transport, evaluation (`adept eval`), lint autofix (`adept fix`), and skill generation (`adept create`)."
 
 [dependencies]

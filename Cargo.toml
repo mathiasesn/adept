@@ -14,6 +14,9 @@ license = "MIT"
 repository = "https://github.com/mathiasesn/adept"
 readme = "README.md"
 rust-version = "1.85"
+keywords = ["agent", "skills", "linter", "formatter", "llm"]
+categories = ["development-tools", "command-line-utilities"]
+homepage = "https://github.com/mathiasesn/adept"
 
 [workspace.dependencies]
 adept-core  = { path = "crates/adept",       version = "0.1.0" }
@@ -40,3 +43,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 jiff = "0.2"
 rustyline = "14"
+toml = "0.8"
