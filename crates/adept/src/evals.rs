@@ -162,26 +162,18 @@ pub enum EvalError {
 /// Returns [`EvalError::Parse`] if any non-blank line is not a valid
 /// [`EvalCase`].
 pub fn parse_jsonl(text: &str) -> Result<Vec<EvalCase>, EvalError> {
-    Ok(parse_jsonl_with_lines(text)?
+    Ok(parse_jsonl_lines(text)?
         .into_iter()
         .map(|(_, case)| case)
         .collect())
 }
 
-/// Like [`parse_jsonl`], but pairs each case with its 1-indexed source line
-/// number (blank lines are skipped, so line numbers may be non-contiguous).
-/// Used internally by [`validate`] so a `schema_version` error can point at
-/// the real line rather than the case's position in the parsed `Vec`.
-fn parse_jsonl_with_lines(text: &str) -> Result<Vec<(usize, EvalCase)>, EvalError> {
-    parse_jsonl_lines(text)
-}
-
 /// Parse a JSONL document of `T`s from `text`, one value per line, pairing
 /// each with its 1-indexed source line number. Blank lines are skipped. The
-/// shared core behind both [`parse_jsonl_with_lines`] (over [`EvalCase`])
-/// and [`parse_results_jsonl`] (over [`CaseResult`]), so the blank-line-skip
-/// behaviour and the 1-indexed [`EvalError::Parse`] contract live in exactly
-/// one place.
+/// shared core behind [`parse_jsonl`]/[`validate`]/[`parse_and_validate`]
+/// (over [`EvalCase`]) and [`parse_results_jsonl`] (over [`CaseResult`]), so
+/// the blank-line-skip behaviour and the 1-indexed [`EvalError::Parse`]
+/// contract live in exactly one place.
 fn parse_jsonl_lines<T: DeserializeOwned>(text: &str) -> Result<Vec<(usize, T)>, EvalError> {
     let mut values = Vec::new();
     for (idx, line) in text.lines().enumerate() {
@@ -231,7 +223,7 @@ pub fn to_jsonl(cases: &[EvalCase]) -> String {
 /// # Errors
 /// Returns the first [`EvalError`] encountered.
 pub fn validate(text: &str) -> Result<(), EvalError> {
-    let cases = parse_jsonl_with_lines(text)?;
+    let cases = parse_jsonl_lines(text)?;
     validate_parsed(&cases)
 }
 
@@ -246,7 +238,7 @@ pub fn validate(text: &str) -> Result<(), EvalError> {
 /// Returns the first [`EvalError`] encountered (a parse failure, an
 /// unsupported `schema_version`, or an empty dataset).
 pub fn parse_and_validate(text: &str) -> Result<Vec<EvalCase>, EvalError> {
-    let numbered = parse_jsonl_with_lines(text)?;
+    let numbered = parse_jsonl_lines(text)?;
     validate_parsed(&numbered)?;
     Ok(numbered.into_iter().map(|(_, case)| case).collect())
 }
@@ -421,7 +413,7 @@ pub struct EvalBenchmarkReport {
     /// One entry per graded [`CaseResult`] (not per dataset case — a case
     /// with both a skill and a baseline result produces two entries).
     pub cases: Vec<CaseReport>,
-    /// Fraction of `skill`-arm cases that passed (0.0 if there were none).
+    /// Fraction of `skill`-arm results that passed (0.0 if there were none).
     pub pass_rate: f64,
     /// Assertions met divided by assertions checked, across all graded
     /// results. Skipped assertions are excluded from both numerator and

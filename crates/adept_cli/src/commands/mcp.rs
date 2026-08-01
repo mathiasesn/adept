@@ -1171,6 +1171,45 @@ mod tests {
         assert_eq!(parsed["result"]["isError"], false);
     }
 
+    /// `check_skill` uses `LintConfig::default()` and does not discover
+    /// `adept.toml` — pins the intentional divergence documented in
+    /// `docs/ARCHI.md` §12: the CLI is the only config-aware entry point.
+    /// An `adept.toml` sitting right next to the skill on disk, raising
+    /// `description_min_tokens` far above the default (6), must have no
+    /// effect on a `path`-based `check_skill` call.
+    #[test]
+    fn check_skill_does_not_discover_adept_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("adept.toml"),
+            "[lint]\ndescription_min_tokens = 1000\n",
+        )
+        .unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        std::fs::write(&skill_path, SAMPLE_SKILL).unwrap();
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "tools/call",
+            "params": { "name": "check_skill", "arguments": { "path": skill_path.to_str().unwrap() } }
+        });
+        let response = handle_message(&request.to_string()).expect("expected a response");
+        let parsed: Value = serde_json::from_str(&response).unwrap();
+        let text = parsed["result"]["content"][0]["text"].as_str().unwrap();
+        let diagnostics: Value = serde_json::from_str(text).unwrap();
+        let codes: Vec<&str> = diagnostics
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["code"].as_str().unwrap())
+            .collect();
+        assert!(
+            !codes.contains(&"SL201"),
+            "check_skill must use LintConfig::default(), not the adept.toml sitting beside the skill: {codes:?}"
+        );
+    }
+
     #[test]
     fn tools_call_format_skill_returns_formatted_text() {
         let request = json!({
