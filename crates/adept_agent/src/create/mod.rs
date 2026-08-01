@@ -371,8 +371,8 @@ struct RoundResult {
 impl RoundResult {
     /// All diagnostics this round is judged on: the candidate's own plus any
     /// newly-appeared sibling ones. Used by [`gate::passes_severity_gate`]
-    /// for candidate-only acceptance, and (via [`Self::combined_len`]) by
-    /// [`gate::improves_on_len`] to compare rounds.
+    /// for candidate-only acceptance, and (via [`Self::combined_counts`]) by
+    /// [`gate::improves_on_counts`] to compare rounds.
     fn combined(&self) -> Vec<Diagnostic> {
         self.candidate_diagnostics
             .iter()
@@ -381,10 +381,19 @@ impl RoundResult {
             .collect()
     }
 
-    /// The length [`Self::combined`] would produce, without building it —
-    /// the round-over-round acceptance comparison only ever needs a count.
-    fn combined_len(&self) -> usize {
-        self.candidate_diagnostics.len() + self.new_sibling_diagnostics.len()
+    /// The per-severity tally [`Self::combined`] would produce, without
+    /// building it — the round-over-round acceptance comparison only ever
+    /// needs the counts.
+    fn combined_counts(&self) -> gate::Counts {
+        let mut counts = gate::Counts::default();
+        for d in self
+            .candidate_diagnostics
+            .iter()
+            .chain(self.new_sibling_diagnostics.iter())
+        {
+            counts.add(d.severity);
+        }
+        counts
     }
 
     fn gate_passes(&self) -> bool {
@@ -519,7 +528,7 @@ pub async fn create_skill(
         let is_better = match &best {
             None => true,
             Some(current_best) => {
-                gate::improves_on_len(current_best.combined_len(), round.combined_len())
+                gate::improves_on_counts(current_best.combined_counts(), round.combined_counts())
             }
         };
 
