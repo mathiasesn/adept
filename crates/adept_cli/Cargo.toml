@@ -1,5 +1,5 @@
 [package]
-name = "adept_cli"
+name = "adept"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,9 +12,9 @@ name = "adept"
 path = "src/main.rs"
 
 [dependencies]
-adept = { workspace = true }
-adept_fmt = { workspace = true }
-adept_agent = { workspace = true }
+adept-core = { workspace = true }
+adept-fmt = { workspace = true }
+adept-agent = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

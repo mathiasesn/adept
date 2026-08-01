@@ -1,5 +1,5 @@
 [package]
-name = "adept_agent"
+name = "adept-agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,8 +8,8 @@ rust-version.workspace = true
 description = "LLM-assisted agent capabilities for Agent Skills: LLM transport, evaluation (`adept eval`), lint autofix (`adept fix`), and skill generation (`adept create`)."
 
 [dependencies]
-adept = { workspace = true }
-adept_fmt = { workspace = true }
+adept-core = { workspace = true }
+adept-fmt = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
