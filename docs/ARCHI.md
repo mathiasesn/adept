@@ -104,7 +104,7 @@ workspace table, not to a member's `[dependencies]` with an inline version.**
 Cargo.toml                 Virtual workspace root; single source of dependency versions
 rust-toolchain.toml        stable + clippy + rustfmt
 .github/workflows/ci.yml   Build, test, clippy -D warnings, fmt --check, perf smoke test
-.github/workflows/release.yml  release-plz: release-pr + release jobs (§6)
+.github/workflows/release.yml  release-plz: release + release-pr steps (§6)
 release_plz.toml           release-plz config: shared version_group, changelog scope
 docs/                      RULES.md, EVALS.md, BACKLOG.md
 
@@ -251,16 +251,24 @@ of criterion output, a known brittleness recorded in `docs/BACKLOG.md`.
 clippy-clean including tests and benches**.
 
 **Release pipeline** (`.github/workflows/release.yml`, `release_plz.toml`).
-release-plz runs on push to `main`: a `release-pr` job keeps a rolling PR open
-carrying Conventional-Commits-derived version bumps and changelog; merging
-that PR lands the bumped versions on `main`. A separate `release` job then
-publishes to crates.io — any crate whose `[workspace.package].version` isn't
-already on the registry, in dependency order — and pushes a `{{ package
-}}-v{{ version }}` tag per published crate. All four packages share one
-`version_group` in `release_plz.toml`, so they bump and publish in lockstep
-rather than independently. The release job keys off crates.io registry state,
-not PR identity — see AGENTS.md's commit conventions for why that means never
-hand-editing the version. Requires the `CARGO_REGISTRY_TOKEN` repo secret.
+release-plz runs on push to `main` as one job with two ordered steps. The
+`release` step publishes to crates.io — any crate whose
+`[workspace.package].version` isn't already on the registry, in dependency
+order — and pushes a `{{ package }}-v{{ version }}` tag per published crate.
+The `release-pr` step then keeps a rolling PR open carrying
+Conventional-Commits-derived version bumps and changelog; merging that PR
+lands the bumped versions on `main`, which the next push's `release` step
+turns into an actual publish. All four packages share one `version_group` in
+`release_plz.toml`, so they bump and publish in lockstep rather than
+independently. The release step keys off crates.io registry state, not PR
+identity — see AGENTS.md's commit conventions for why that means never
+hand-editing the version. Requires the `CARGO_REGISTRY_TOKEN` repo secret,
+which is scoped to the `release` step only.
+
+Known gap: the release PR is opened with the default `GITHUB_TOKEN`, and
+GitHub does not fire workflow triggers for PRs it opens — so release PRs
+arrive with no CI checks. Switching that step to a PAT is the fix if that
+matters.
 
 ## 7. Configuration
 
