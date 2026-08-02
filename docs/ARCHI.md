@@ -265,24 +265,21 @@ and publish in lockstep rather than independently. The `release` job keys off
 crates.io registry state, not PR identity — see AGENTS.md's commit
 conventions for why that means never hand-editing the version. Requires the
 `CARGO_REGISTRY_TOKEN` repo secret, which is scoped to the `release` job
-alone: it carries `contents: write` + `pull-requests: read`, while
-`release-pr` carries `contents: write` + `pull-requests: write`. Both jobs
-carry the same fork guard (`if: github.repository_owner == 'mathiasesn'`),
-and `concurrency` stays workflow-level (`release-plz-${{ github.ref }}`,
-`cancel-in-progress: false`) so it covers both jobs at once and prevents two
-pushes from racing the publish or the PR update. The checkout, `rustup show`,
-and cache steps are shared between the two jobs via YAML anchors defined once
-in `release` and aliased in `release-pr`, so the jobs cannot drift on the
-toolchain or the cache key.
+alone — the only job with publish rights, and the only one that builds, so it
+alone carries the toolchain and cache steps. `release-pr` is the only job with
+PR-write. `concurrency` stays workflow-level so it covers both jobs at once and
+prevents two pushes from racing the publish or the PR update. The one step both
+need, checkout, is a YAML anchor defined in `release` and aliased in
+`release-pr`. `release.yml` owns the literal permissions, guard, and
+concurrency expressions; nothing machine-checks a copy of them here.
 
 The `release` job currently carries `dry_run: true`, so it logs what it would
-publish and publishes nothing. Nothing has been released yet. Going live is
-not a matter of flipping that value to `false` — `release-plz/action` guards
-the flag on string emptiness, not truthiness, and the input has no default,
-so `false` still renders as a non-empty string and `--dry-run` stays in
-effect. Going live means deleting the `dry_run` line entirely; see the
-pre-publish checklist in `docs/BACKLOG.md` for the conditions under which
-that's safe to do.
+publish and publishes nothing. Nothing has been released yet. Going live means
+**deleting** the `dry_run` line, not setting it to `false` — that value is a
+silent no-op, for the reason spelled out in `docs/BACKLOG.md`'s pre-publish
+checklist, which also lists the conditions under which the deletion is safe.
+`crates/adept/tests/workspace_metadata.rs` fails the build if the workflow ever
+sets `dry_run: false`.
 
 The `release-pr` job uses a second secret, `RELEASE_PLZ_TOKEN`. GitHub never
 fires workflow triggers for events caused by the default `GITHUB_TOKEN` (loop
@@ -290,11 +287,10 @@ prevention), so a release PR opened with it would arrive with no CI checks at
 all — and that PR is the one whose merge publishes to crates.io. A
 fine-grained PAT with `contents: write` + `pull_requests: write` makes CI run
 on it normally, so it is a hard prerequisite: configure the secret before the
-first merge to `main`. There is no fallback — with the jobs running in
-parallel there is no "runs first" to fail fast on: the `release` job succeeds
-independently on the plain `GITHUB_TOKEN`, so the first push to `main` can
-still publish all four crates irreversibly while only `release-pr` goes red
-for lacking the PAT.
+first merge to `main`. There is no fallback and no fail-fast: the `release` job
+succeeds on the plain `GITHUB_TOKEN` regardless, so the first push to `main`
+can publish all four crates irreversibly while only `release-pr` goes red for
+lacking the PAT.
 
 ## 7. Configuration
 

@@ -26,6 +26,9 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Same fallback as release.yml: a Cargo.lock change should degrade
+          # to a warm cache, not a cold one.
+          restore-keys: ${{ runner.os }}-cargo-
 
       - name: cargo build
         run: cargo build --workspace --all-targets

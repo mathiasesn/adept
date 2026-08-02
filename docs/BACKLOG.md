@@ -444,6 +444,8 @@ Recorded 2026-07-31.
   publishes all four on the very first push to `main`. Merge with
   `dry_run: true` first, read the job log to confirm it names exactly the four
   crates in dependency order, then delete the line in its own commit.
+  `crates/adept/tests/workspace_metadata.rs` fails the build if the workflow
+  ever sets `dry_run: false`, so the wrong edit cannot reach `main` silently.
 - ~~**Both release secrets must exist before the first merge to `main`
   (#35).**~~ Done: `CARGO_REGISTRY_TOKEN` and `RELEASE_PLZ_TOKEN` are both set
   on the repo. The PAT was blocking, not a nicety — `release.yml`'s

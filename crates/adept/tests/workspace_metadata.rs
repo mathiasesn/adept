@@ -88,6 +88,43 @@ fn member_package_names(root: &Path) -> Vec<String> {
         .collect()
 }
 
+/// `dry_run: false` is a silent no-op, so it must never appear in the release
+/// workflow. `release-plz/action` guards the flag on string emptiness rather
+/// than truthiness (`if [[ -n "${{ inputs.dry_run }}" ]]`, `action.yml:115-119`)
+/// and the input has no `default:` (`action.yml:40-47`), so `false` renders as
+/// the non-empty string `"false"` and `--dry-run` is still passed. Going live
+/// means deleting the line.
+///
+/// The failure mode is why this is mechanical rather than a comment: the "go
+/// live" commit merges, the job goes green, nothing publishes, and there is no
+/// signal until someone notices crates.io is empty. A substring check over the
+/// non-comment lines is sufficient — the only spellings that matter are ones a
+/// human would type, and the comments deliberately quote the bad value while
+/// explaining why it is bad.
+#[test]
+fn release_workflow_never_disables_dry_run_by_value() {
+    let path = workspace_root().join(".github/workflows/release.yml");
+    let workflow = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("should read {}: {e}", path.display()));
+
+    let offender = workflow
+        .lines()
+        .enumerate()
+        .find(|(_, line)| !line.trim_start().starts_with('#') && line.contains("dry_run: false"));
+
+    if let Some((idx, line)) = offender {
+        panic!(
+            "{}:{} sets `{}`, which does NOT disable the dry run — the action \
+             tests the input for emptiness, so `--dry-run` is still passed and \
+             the release silently publishes nothing. Delete the `dry_run` line \
+             instead.",
+            path.display(),
+            idx + 1,
+            line.trim()
+        );
+    }
+}
+
 #[test]
 fn release_plz_toml_matches_workspace_members() {
     let root = workspace_root();
