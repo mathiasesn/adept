@@ -126,7 +126,7 @@ with the concurrency cap sourced from `[fix]` config.
   `crates/adept_cli/tests/common/mod.rs` already establishes. They fail at
   different times because they are separate test binaries.
 - **Nothing pins the crates.io publish metadata on new members (#37).**
-  `workspace_metadata.rs` asserts the `Cargo.toml` ↔ `release_plz.toml`
+  `workspace_metadata.rs` asserts the `Cargo.toml` ↔ `release-plz.toml`
   bijection, so a new crate cannot fall out of the shared `version_group` —
   but no test requires it to carry `keywords`/`homepage`/`categories`. The
   asymmetry favours the wrong half: release-plz drift is loud, whereas wrong
@@ -216,7 +216,7 @@ binary assets. Do not "helpfully" refresh the pin; see the corpus README.
 - **`workspace_metadata.rs` lives in `adept-core`, not `adept_cli`.** Unlike
   `docs_test.rs`, which is here because it imports `adept::Registry`, this test
   imports nothing from `adept`: its subject is workspace-level config
-  (`release_plz.toml` and the member list), which would put it closer to
+  (`release-plz.toml` and the member list), which would put it closer to
   `adept_cli`, the layer that already owns config-file parsing. It stays here
   because a virtual workspace root cannot host tests and `crates/adept/tests`
   is the established home for doc/config drift checks. `toml` is a
@@ -431,17 +431,23 @@ Recorded 2026-07-31.
   hand-shaped `MockLlmClient` responses — a real model's JSON (fenced,
   truncated, or ignoring the companion-edit contract) is the untested input
   class. Run it in the default preview mode first, not `--write`.
-- **Both release secrets must exist before the first merge to `main` (#35).**
-  `CARGO_REGISTRY_TOKEN` with `publish-new` + `publish-update`, and
-  `RELEASE_PLZ_TOKEN`, a fine-grained PAT with `contents: write` +
-  `pull_requests: write`. The PAT is blocking, not a nicety: `release.yml`'s
-  `release-pr` step has no fallback and errors without it. Ordering hazard —
-  the `release` step runs first and succeeds on the plain `GITHUB_TOKEN`, so a
-  missing PAT does not fail fast; the first push publishes all four crates
-  irreversibly and only then goes red.
-- **Confirm all four names are free on crates.io (#35):** `adept`,
-  `adept-core`, `adept-fmt`, `adept-agent`. Category slugs are validated
-  server-side too, so a wrong one is rejected at the worst moment.
+- **Flip `dry_run` to `false` in `release.yml`'s `release` step (#35).** This is
+  the last gate before the one-way door. Nothing named `adept*` exists on
+  crates.io and `[workspace.package].version` is already `0.1.0`, so a
+  live `release` step publishes all four on the very first push to `main` —
+  the release PR is opened afterward, for the version after that. Merge with
+  `dry_run: true`, read the job log to confirm it names exactly the four
+  crates in dependency order, then flip it in its own commit.
+- ~~**Both release secrets must exist before the first merge to `main`
+  (#35).**~~ Done: `CARGO_REGISTRY_TOKEN` and `RELEASE_PLZ_TOKEN` are both set
+  on the repo. The PAT was blocking, not a nicety — `release.yml`'s
+  `release-pr` step has no fallback and errors without it, and it does not fail
+  fast, because the `release` step runs first and succeeds on the plain
+  `GITHUB_TOKEN`.
+- ~~**Confirm all four names are free on crates.io (#35).**~~ Done: `adept`,
+  `adept-core`, `adept-fmt`, and `adept-agent` all return `does not exist` from
+  the crates.io API. Category slugs are still validated server-side, so a wrong
+  one is rejected at the worst moment.
 - **Confirm `persist-credentials: false` suits the release-plz action's
   git-write auth (#35).** Untestable from a PR: `release.yml` fires only on
   push to `main`, so its first real execution is the publishing one. Read the

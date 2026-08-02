@@ -105,7 +105,7 @@ Cargo.toml                 Virtual workspace root; single source of dependency v
 rust-toolchain.toml        stable + clippy + rustfmt
 .github/workflows/ci.yml   Build, test, clippy -D warnings, fmt --check, perf smoke test
 .github/workflows/release.yml  release-plz: release + release-pr steps (§6)
-release_plz.toml           release-plz config: shared version_group
+release-plz.toml           release-plz config: shared version_group
 docs/                      RULES.md, EVALS.md, BACKLOG.md
 
 crates/adept/              CORE LIBRARY — no dependency on any sibling crate
@@ -250,7 +250,7 @@ of criterion output, a known brittleness recorded in `docs/BACKLOG.md`.
 `clippy -D warnings` is enforced with `--all-targets`, so **new code must be
 clippy-clean including tests and benches**.
 
-**Release pipeline** (`.github/workflows/release.yml`, `release_plz.toml`).
+**Release pipeline** (`.github/workflows/release.yml`, `release-plz.toml`).
 release-plz runs on push to `main` as one job with two ordered steps. The
 `release` step publishes to crates.io — any crate whose
 `[workspace.package].version` isn't already on the registry, in dependency
@@ -259,11 +259,15 @@ The `release-pr` step then keeps a rolling PR open carrying
 Conventional-Commits-derived version bumps and changelog; merging that PR
 lands the bumped versions on `main`, which the next push's `release` step
 turns into an actual publish. All four packages share one `version_group` in
-`release_plz.toml`, so they bump and publish in lockstep rather than
+`release-plz.toml`, so they bump and publish in lockstep rather than
 independently. The release step keys off crates.io registry state, not PR
 identity — see AGENTS.md's commit conventions for why that means never
 hand-editing the version. Requires the `CARGO_REGISTRY_TOKEN` repo secret,
 which is scoped to the `release` step only.
+
+The `release` step currently carries `dry_run: true`, so it logs what it would
+publish and publishes nothing. Nothing has been released yet; see the
+pre-publish checklist in `docs/BACKLOG.md` for the conditions to flip it.
 
 The `release-pr` step uses a second secret, `RELEASE_PLZ_TOKEN`. GitHub never
 fires workflow triggers for events caused by the default `GITHUB_TOKEN` (loop

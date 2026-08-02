@@ -44,10 +44,20 @@ jobs:
 
       # `cargo publish` verifies each crate with a full build; without the
       # cache above every push to main pays a cold workspace compile.
+      #
+      # dry_run is deliberate, not leftover scaffolding. No adept crate exists
+      # on crates.io yet and `[workspace.package].version` is already 0.1.0, so
+      # `release` — which publishes any manifest version absent from the
+      # registry, regardless of tags or release PRs — would claim all four
+      # names on the very first push to main. Publishing is a one-way door:
+      # crates.io yanks, it never deletes. Keep this true until the log from a
+      # real run shows the expected four crates in dependency order, then flip
+      # it to false in its own commit.
       - name: Release unpublished versions
         uses: release-plz/action@v0.5.131
         with:
           command: release
+          dry_run: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
