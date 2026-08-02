@@ -5,23 +5,31 @@ on:
     branches:
       - main
 
-# Both release-plz commands run in one job, in order: `release` publishes any
-# version already merged to main, then `release-pr` opens/updates the PR for
-# the next one. Serialised on the branch so two pushes can't race the tag or
+# `release` and `release-pr` are independent, parallel jobs: `release`
+# publishes any version already merged to main, while `release-pr`
+# prepares the PR for the next one. Neither depends on the other's
+# outcome. Serialised on the branch so two pushes can't race the tag or
 # the PR update.
 concurrency:
   group: release-plz-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  release-plz:
+  release:
     name: Release-plz
+    if: ${{ github.repository_owner == 'mathiasesn' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
+      pull-requests: read
     steps:
-      - name: Checkout repository
+      # Anchors below (&checkout, &toolchain, &cache) are referenced by the
+      # release-pr job so the two jobs cannot drift on the toolchain or the
+      # cache key. Cross-job YAML anchors/aliases are a recently-shipped
+      # GitHub Actions feature (actions/runner#1182, closed 2025-08-04) — do
+      # not "fix" this back into duplicated steps.
+      - &checkout
+        name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -30,10 +38,12 @@ jobs:
       # `rustup show` honours rust-toolchain.toml, so releases build with the
       # same toolchain CI tested against. Do not swap this for a pinned
       # `dtolnay/rust-toolchain@stable`.
-      - name: Install Rust toolchain
+      - &toolchain
+        name: Install Rust toolchain
         run: rustup show
 
-      - name: Cache cargo registry and build artifacts
+      - &cache
+        name: Cache cargo registry and build artifacts
         uses: actions/cache@v4
         with:
           path: |
@@ -41,6 +51,11 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Fallback is load-bearing here specifically: merging a release PR
+          # always changes Cargo.lock (release-plz writes the version
+          # bumps), so without restore-keys the one run that pays for four
+          # `cargo publish --verify` builds is guaranteed a cold cache.
+          restore-keys: ${{ runner.os }}-cargo-
 
       # `cargo publish` verifies each crate with a full build; without the
       # cache above every push to main pays a cold workspace compile.
@@ -51,8 +66,12 @@ jobs:
       # registry, regardless of tags or release PRs — would claim all four
       # names on the very first push to main. Publishing is a one-way door:
       # crates.io yanks, it never deletes. Keep this true until the log from a
-      # real run shows the expected four crates in dependency order, then flip
-      # it to false in its own commit.
+      # real run shows the expected four crates in dependency order, then
+      # delete the `dry_run` line entirely — do NOT set it to `false`.
+      # `release-plz/action@v0.5.131` `action.yml:115-118` guards the flag on
+      # string emptiness (`if [[ -n "${{ inputs.dry_run }}" ]]`) and the input
+      # has no `default:` (`action.yml:39`), so `dry_run: false` still renders
+      # as the non-empty string "false" and `--dry-run` is still passed.
       - name: Release unpublished versions
         uses: release-plz/action@v0.5.131
         with:
@@ -62,6 +81,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
+  release-pr:
+    name: Release-plz PR
+    if: ${{ github.repository_owner == 'mathiasesn' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - *checkout
+      - *toolchain
+      - *cache
+
       # RELEASE_PLZ_TOKEN is required, not optional: GitHub never fires
       # workflow triggers for events caused by the default GITHUB_TOKEN (loop
       # prevention), so a release PR opened with it arrives with zero CI
@@ -69,14 +100,15 @@ jobs:
       # A fine-grained PAT with contents:write + pull_requests:write makes CI
       # run on it normally, so it must be configured; there is no fallback.
       #
-      # Ordering hazard: the `release` step above runs first and succeeds
-      # with the plain GITHUB_TOKEN, so a missing PAT doesn't fail fast —
-      # the first push to main publishes all four crates irreversibly, and
-      # only this step goes red afterward.
+      # Ordering hazard: the jobs run in parallel now, not in sequence — a
+      # missing PAT still does not fail fast, because the release job above
+      # succeeds independently on the plain GITHUB_TOKEN. The first push to
+      # main can still publish all four crates irreversibly while this job
+      # goes red separately for lacking the PAT.
       #
       # No CARGO_REGISTRY_TOKEN here: opening the release PR only reads the
       # public registry index, so the publish-capable secret stays scoped to
-      # the step that actually publishes.
+      # the release job that actually publishes.
       - name: Open or update the release PR
         uses: release-plz/action@v0.5.131
         with:
