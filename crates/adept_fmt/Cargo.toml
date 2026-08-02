@@ -8,7 +8,7 @@ rust-version.workspace = true
 readme.workspace = true
 keywords.workspace = true
 homepage.workspace = true
-categories = ["development-tools"]
+categories.workspace = true
 description = "Canonical formatter for SKILL.md agent skills: frontmatter ordering and Markdown reflow, idempotent and atomic."
 
 [dependencies]

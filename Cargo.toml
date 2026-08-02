@@ -15,7 +15,7 @@ repository = "https://github.com/mathiasesn/adept"
 readme = "README.md"
 rust-version = "1.85"
 keywords = ["agent", "skills", "linter", "formatter", "llm"]
-categories = ["development-tools", "command-line-utilities"]
+categories = ["development-tools"]
 homepage = "https://github.com/mathiasesn/adept"
 
 [workspace.dependencies]
