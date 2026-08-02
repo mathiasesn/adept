@@ -431,24 +431,34 @@ Recorded 2026-07-31.
   hand-shaped `MockLlmClient` responses — a real model's JSON (fenced,
   truncated, or ignoring the companion-edit contract) is the untested input
   class. Run it in the default preview mode first, not `--write`.
-- **Flip `dry_run` to `false` in `release.yml`'s `release` step (#35).** This is
-  the last gate before the one-way door. Nothing named `adept*` exists on
-  crates.io and `[workspace.package].version` is already `0.1.0`, so a
-  live `release` step publishes all four on the very first push to `main` —
-  the release PR is opened afterward, for the version after that. Merge with
-  `dry_run: true`, read the job log to confirm it names exactly the four
-  crates in dependency order, then flip it in its own commit.
+- **Delete the `dry_run` line in `release.yml`'s `release` job, don't flip it
+  to `false` (#35).** `release-plz/action@v0.5.131` `action.yml:115-118` guards
+  the flag on string emptiness, not truthiness — `if [[ -n "${{ inputs.dry_run
+  }}" ]]` — and the input has no `default:` (`action.yml:39`), so
+  `with: dry_run: false` renders as the non-empty string `"false"` and
+  `--dry-run` stays in effect. The failure shape is the bad one: the "go live"
+  commit merges, the job goes green, nothing publishes, and there's no signal
+  until someone notices crates.io is empty. This is the last gate before the
+  one-way door. Nothing named `adept*` exists on crates.io and
+  `[workspace.package].version` is already `0.1.0`, so a live `release` job
+  publishes all four on the very first push to `main`. Merge with
+  `dry_run: true` first, read the job log to confirm it names exactly the four
+  crates in dependency order, then delete the line in its own commit.
 - ~~**Both release secrets must exist before the first merge to `main`
   (#35).**~~ Done: `CARGO_REGISTRY_TOKEN` and `RELEASE_PLZ_TOKEN` are both set
   on the repo. The PAT was blocking, not a nicety — `release.yml`'s
-  `release-pr` step has no fallback and errors without it, and it does not fail
-  fast, because the `release` step runs first and succeeds on the plain
-  `GITHUB_TOKEN`.
+  `release-pr` job has no fallback and errors without it; the `release` job
+  succeeds independently on the plain `GITHUB_TOKEN` since the two jobs run in
+  parallel, so a missing PAT would only fail the PR job, silently, next to a
+  green publish.
 - ~~**Confirm all four names are free on crates.io (#35).**~~ Done: `adept`,
   `adept-core`, `adept-fmt`, and `adept-agent` all return `does not exist` from
   the crates.io API. Category slugs are still validated server-side, so a wrong
   one is rejected at the worst moment.
-- **Confirm `persist-credentials: false` suits the release-plz action's
-  git-write auth (#35).** Untestable from a PR: `release.yml` fires only on
-  push to `main`, so its first real execution is the publishing one. Read the
-  action's documented example before merging rather than waiting for a test.
+- ~~**Confirm `persist-credentials: false` suits the release-plz action's
+  git-write auth (#35).**~~ Done: release-plz never uses ambient git
+  credentials. The action passes `--git-token "${GITHUB_TOKEN}"`
+  (`action.yml:167,194`), and the `release-plz/git-config` action it runs
+  first sets only `user.name`/`user.email`, no credential helper. Upstream's
+  own quickstart workflow uses exactly `fetch-depth: 0` +
+  `persist-credentials: false`.
