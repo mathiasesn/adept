@@ -31,3 +31,6 @@ target
 
 # Local task specs
 /specs/
+
+# Environment variables
+.env
