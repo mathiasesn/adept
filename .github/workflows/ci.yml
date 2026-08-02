@@ -83,17 +83,18 @@ jobs:
       - name: Install Rust toolchain
         run: rustup show
 
-      - name: Cache cargo registry and build artifacts
+      # Registry only, and under its own key. maturin builds --release, so the
+      # `ci` job's debug `target/` would warm nothing here, and sharing its key
+      # would make the two jobs race to save it — the loser's artifacts are
+      # discarded and the next run recompiles from scratch.
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          # Same fallback as release.yml: a Cargo.lock change should degrade
-          # to a warm cache, not a cold one.
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ${{ runner.os }}-cargo-registry-maturin-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-maturin-
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -115,6 +116,17 @@ jobs:
           fi
           echo "workspace version: $workspace_version"
 
+          # The load-bearing assertion: maturin must resolve
+          # `version.workspace = true` through cargo metadata. If it silently
+          # stamps 0.0.0 instead, `[workspace.package].version` has stopped
+          # being the single source of truth for the wheel.
+          dist_version="$(.venv/bin/python -c 'import importlib.metadata as m; print(m.version("adept"))')"
+          echo "distribution version: $dist_version"
+          if [ "$dist_version" != "$workspace_version" ]; then
+            echo "::error::wheel version '$dist_version' does not match workspace version '$workspace_version'"
+            exit 1
+          fi
+
           bin_output="$(.venv/bin/adept --version)"
           module_output="$(.venv/bin/python -m adept --version)"
           echo "adept --version: $bin_output"
@@ -125,10 +137,7 @@ jobs:
             exit 1
           fi
 
-          case "$bin_output" in
-            *"$workspace_version"*) ;;
-            *)
-              echo "::error::reported version '$bin_output' does not contain workspace version '$workspace_version'"
-              exit 1
-              ;;
-          esac
+          if [[ "$bin_output" != *"$workspace_version"* ]]; then
+            echo "::error::reported version '$bin_output' does not contain workspace version '$workspace_version'"
+            exit 1
+          fi

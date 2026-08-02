@@ -16,9 +16,11 @@ def find_adept_bin() -> str:
     scripts directory a wheel installer might have used, in order, so the
     lookup works whether adept was installed with `uv tool install`,
     `pip install`, `pip install --target`, or `uv run --with`.
+
+    Kept structurally close to upstream so it stays diffable against ruff on
+    a re-sync; the repetition below is deliberate, not an oversight.
     """
-    exe_suffix = sysconfig.get_config_var("EXE")
-    adept_exe = "adept" + exe_suffix if exe_suffix else "adept"
+    adept_exe = "adept" + (sysconfig.get_config_var("EXE") or "")
 
     candidates = []
 

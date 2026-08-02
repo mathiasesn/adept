@@ -254,26 +254,37 @@ clippy-clean including tests and benches**.
 
 **Python distribution** (root `pyproject.toml`, `python/adept/`). A second,
 independent build path packs the `crates/adept_cli` binary into a Python
-wheel via maturin's `bindings = "bin"` (`build-backend = "maturin"`,
-`manifest-path = "crates/adept_cli/Cargo.toml"`, `python-source = "python"`),
-so `uv tool install git+https://github.com/mathiasesn/adept` puts a real
-native `adept` executable on `PATH` — no PyO3, no importable API. The wheel's
-version is `dynamic = ["version"]`: maturin resolves it from cargo metadata,
+wheel via maturin's `bindings = "bin"`, so
+`uv tool install git+https://github.com/mathiasesn/adept` puts a real native
+`adept` executable on `PATH` — no PyO3, no importable API. Not published to
+PyPI (name squatted, PEP 541 request pending); installable only from the git
+URL.
+
+The wheel's version is `dynamic`: maturin resolves it from cargo metadata,
 which expands `version.workspace = true` back to
-`[workspace.package].version`, so that field stays the single source of
-truth and release-plz needs no change for this to work. `python/adept/` is
-source-discovery-and-dispatch only, not a library surface: `__init__.py`
-re-exports `find_adept_bin`; `_find_adept.py` probes candidate scripts
-directories for the installed binary; `__main__.py` enables
-`python -m adept`, using `os.execvp` on POSIX (replaces the process, not a
-spawn) and `subprocess.run` on Windows as the one deliberate exception to
-the no-subprocess invariant (see AGENTS.md's Invariants section). Not
-published to PyPI (name squatted, PEP 541 request pending) — installable
-only from the git URL. A second CI job, `python-packaging`
-(`.github/workflows/ci.yml`, ubuntu-only), builds the wheel with `uv`,
-installs it, and asserts `adept --version` and `python -m adept --version`
-agree and match the cargo-metadata-resolved workspace version, failing with
-`::error::` on any mismatch.
+`[workspace.package].version`, so that field stays the single source of truth
+and release-plz needs no change. This is load-bearing rather than
+convenient — a maturin that failed to resolve workspace inheritance would
+silently stamp `0.0.0` and create a second source of truth, so the CI job
+asserts the *distribution* version equals the cargo one.
+
+`python/adept/` is discovery-and-dispatch only, not a library surface:
+`__init__.py` re-exports `find_adept_bin`, `_find_adept.py` probes candidate
+scripts directories for the installed binary, and `__main__.py` enables
+`python -m adept`. `__main__.py` is the sole exception to the no-subprocess
+invariant in AGENTS.md, and only partially: its POSIX path calls `os.execvp`,
+which replaces the process rather than spawning one, and only the Windows
+branch — where no exec-and-replace equivalent exists — uses `subprocess.run`.
+That branch is a near-verbatim port of ruff's and is never exercised by CI, a
+coverage gap accepted deliberately when the Linux-only job was chosen.
+
+A second CI job, `python-packaging` (`.github/workflows/ci.yml`,
+ubuntu-only), builds the wheel with `uv`, installs it, and asserts the
+distribution version matches cargo's and that `adept --version` and
+`python -m adept --version` agree, failing with `::error::` on any mismatch.
+It caches only the cargo registry, under its own key: maturin builds
+`--release`, so the `ci` job's debug `target/` would warm nothing, and a
+shared key would make the two jobs race to save it.
 
 **Release pipeline** (`.github/workflows/release.yml`, `release-plz.toml`).
 release-plz runs on push to `main` as two independent jobs, `release` and

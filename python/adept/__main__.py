@@ -1,5 +1,4 @@
 import os
-import subprocess
 import sys
 
 from adept import find_adept_bin
@@ -13,7 +12,11 @@ def find_adept_bin_and_exec() -> None:
         # spawn a subprocess and forward its return code instead. A raised
         # KeyboardInterrupt on Ctrl-C would otherwise print a traceback for
         # something the user intentionally did, so it is caught and turned
-        # into a plain exit(2).
+        # into a plain exit(2). Imported here, not at module scope, so the
+        # POSIX path — which is about to replace the process anyway — does
+        # not pay to import subprocess and its dependencies on every run.
+        import subprocess
+
         try:
             completed_process = subprocess.run([adept, *sys.argv[1:]])
         except KeyboardInterrupt:
