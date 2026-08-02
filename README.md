@@ -1,4 +1,9 @@
-# adept
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/mathiasesn/adept/main/assets/logo/adept-logo-white.svg">
+    <img src="https://raw.githubusercontent.com/mathiasesn/adept/main/assets/logo/adept-logo.svg" alt="adept" width="320">
+  </picture>
+</p>
 
 An extremely fast linter and formatter for Agent Skills.
 
