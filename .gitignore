@@ -40,6 +40,10 @@ __pycache__/
 /dist/
 /build/
 /.venv/
+
 # Nothing consumes a lockfile: there are no Python runtime dependencies and
 # CI installs with `uv pip install .`, never `uv sync`.
 /uv.lock
+
+# Environment variables
+.env
