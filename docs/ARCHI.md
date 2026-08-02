@@ -104,7 +104,7 @@ workspace table, not to a member's `[dependencies]` with an inline version.**
 Cargo.toml                 Virtual workspace root; single source of dependency versions
 rust-toolchain.toml        stable + clippy + rustfmt
 .github/workflows/ci.yml   Build, test, clippy -D warnings, fmt --check, perf smoke test
-.github/workflows/release.yml  release-plz: release + release-pr steps (§6)
+.github/workflows/release.yml  release-plz: release + release-pr jobs (§6)
 release-plz.toml           release-plz config: shared version_group
 docs/                      RULES.md, EVALS.md, BACKLOG.md
 
@@ -251,34 +251,50 @@ of criterion output, a known brittleness recorded in `docs/BACKLOG.md`.
 clippy-clean including tests and benches**.
 
 **Release pipeline** (`.github/workflows/release.yml`, `release-plz.toml`).
-release-plz runs on push to `main` as one job with two ordered steps. The
-`release` step publishes to crates.io — any crate whose
+release-plz runs on push to `main` as two independent jobs, `release` and
+`release-pr`, that run in parallel and do not depend on each other's outcome:
+`release` publishes what is already on `main`, while `release-pr` prepares
+what comes next. The `release` job publishes to crates.io — any crate whose
 `[workspace.package].version` isn't already on the registry, in dependency
 order — and pushes a `{{ package }}-v{{ version }}` tag per published crate.
-The `release-pr` step then keeps a rolling PR open carrying
-Conventional-Commits-derived version bumps and changelog; merging that PR
-lands the bumped versions on `main`, which the next push's `release` step
-turns into an actual publish. All four packages share one `version_group` in
-`release-plz.toml`, so they bump and publish in lockstep rather than
-independently. The release step keys off crates.io registry state, not PR
-identity — see AGENTS.md's commit conventions for why that means never
-hand-editing the version. Requires the `CARGO_REGISTRY_TOKEN` repo secret,
-which is scoped to the `release` step only.
+The `release-pr` job keeps a rolling PR open carrying Conventional-Commits-derived
+version bumps and changelog; merging that PR lands the bumped versions on
+`main`, which the next push's `release` job turns into an actual publish. All
+four packages share one `version_group` in `release-plz.toml`, so they bump
+and publish in lockstep rather than independently. The `release` job keys off
+crates.io registry state, not PR identity — see AGENTS.md's commit
+conventions for why that means never hand-editing the version. Requires the
+`CARGO_REGISTRY_TOKEN` repo secret, which is scoped to the `release` job
+alone: it carries `contents: write` + `pull-requests: read`, while
+`release-pr` carries `contents: write` + `pull-requests: write`. Both jobs
+carry the same fork guard (`if: github.repository_owner == 'mathiasesn'`),
+and `concurrency` stays workflow-level (`release-plz-${{ github.ref }}`,
+`cancel-in-progress: false`) so it covers both jobs at once and prevents two
+pushes from racing the publish or the PR update. The checkout, `rustup show`,
+and cache steps are shared between the two jobs via YAML anchors defined once
+in `release` and aliased in `release-pr`, so the jobs cannot drift on the
+toolchain or the cache key.
 
-The `release` step currently carries `dry_run: true`, so it logs what it would
-publish and publishes nothing. Nothing has been released yet; see the
-pre-publish checklist in `docs/BACKLOG.md` for the conditions to flip it.
+The `release` job currently carries `dry_run: true`, so it logs what it would
+publish and publishes nothing. Nothing has been released yet. Going live is
+not a matter of flipping that value to `false` — `release-plz/action` guards
+the flag on string emptiness, not truthiness, and the input has no default,
+so `false` still renders as a non-empty string and `--dry-run` stays in
+effect. Going live means deleting the `dry_run` line entirely; see the
+pre-publish checklist in `docs/BACKLOG.md` for the conditions under which
+that's safe to do.
 
-The `release-pr` step uses a second secret, `RELEASE_PLZ_TOKEN`. GitHub never
+The `release-pr` job uses a second secret, `RELEASE_PLZ_TOKEN`. GitHub never
 fires workflow triggers for events caused by the default `GITHUB_TOKEN` (loop
 prevention), so a release PR opened with it would arrive with no CI checks at
 all — and that PR is the one whose merge publishes to crates.io. A
 fine-grained PAT with `contents: write` + `pull_requests: write` makes CI run
 on it normally, so it is a hard prerequisite: configure the secret before the
-first merge to `main`. There is no fallback — the `release` step above runs
-first and succeeds with the plain `GITHUB_TOKEN`, so a missing PAT doesn't
-fail fast; the first push publishes all four crates irreversibly, and only
-this step goes red afterward.
+first merge to `main`. There is no fallback — with the jobs running in
+parallel there is no "runs first" to fail fast on: the `release` job succeeds
+independently on the plain `GITHUB_TOKEN`, so the first push to `main` can
+still publish all four crates irreversibly while only `release-pr` goes red
+for lacking the PAT.
 
 ## 7. Configuration
 
