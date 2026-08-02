@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a new capability, rule, or change in behaviour
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please search the [existing issues](../../issues)
+        — the idea may already be proposed, planned, or deliberately declined.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - New lint rule (SL*)
+        - check
+        - fmt
+        - eval
+        - fix
+        - create
+        - mcp
+        - config (adept.toml / env)
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today, and why does that hurt?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: >
+        What should adept do instead? For a new rule, state what it flags,
+        the suggested severity, and whether it is autofixable
+        (deterministic or LLM).
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: A skill snippet plus the output you'd want.
+      render: shell
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
