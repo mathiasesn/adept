@@ -266,7 +266,8 @@ which expands `version.workspace = true` back to
 and release-plz needs no change. The CI job asserts it.
 
 `python/adept/` is discovery-and-dispatch only, not a library surface:
-`__init__.py` re-exports `find_adept_bin`, `_find_adept.py` probes candidate
+`__init__.py` re-exports `find_adept_bin` and `AdeptNotFound`, `_find_adept.py`
+probes candidate
 scripts directories for the installed binary, and `__main__.py` enables
 `python -m adept`. The no-subprocess invariant in AGENTS.md is about the Rust
 binary; `__main__.py` dispatches *to* that binary and so falls outside the
@@ -280,7 +281,9 @@ Linux-only job was chosen (see `docs/BACKLOG.md`).
 A second CI job, `python-packaging` (`.github/workflows/ci.yml`,
 ubuntu-only), builds the wheel with `uv`, installs it, and asserts the
 distribution version matches cargo's and that `adept --version` and
-`python -m adept --version` agree.
+`python -m adept --version` agree. It then runs `python/tests` under pytest —
+a second test runner that `cargo test --workspace` does not reach, pinning the
+binary-discovery ordering in `_find_adept.py`.
 
 **Release pipeline** (`.github/workflows/release.yml`, `release-plz.toml`).
 release-plz runs on push to `main` as two independent jobs, `release` and

@@ -9,7 +9,7 @@ re-sync against upstream would reintroduce bugs this file exists to fix.
 import os
 import sys
 import sysconfig
-from typing import Iterator
+from collections.abc import Iterator
 
 
 class AdeptNotFound(FileNotFoundError):

@@ -16,9 +16,10 @@ def find_adept_bin_and_exec() -> None:
         try:
             completed_process = subprocess.run([adept, *sys.argv[1:]])
         except KeyboardInterrupt:
-            # 130 (128 + SIGINT), not 2: adept documents 2 as its usage/I-O
-            # error code, which would make an interrupt indistinguishable
-            # from a bad invocation.
+            # 130 (128 + SIGINT), not ruff's 2: adept documents 2 as its
+            # usage/I-O error code, which would make an interrupt
+            # indistinguishable from a bad invocation. Untested — CI never
+            # runs this branch.
             sys.exit(130)
         sys.exit(completed_process.returncode)
     else:

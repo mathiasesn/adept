@@ -39,7 +39,7 @@ cargo run -q -p adept -- check <path>
 cargo bench -p adept-core --bench lint_100_skills -- --quick
 ```
 
-CI runs the four workspace commands above, then a perf smoke test that parses the criterion `lint_100_skills` line and fails above **500ms** (observed ~23ms; 1s is the acceptance criterion, 500ms is the gate), then a separate `python-packaging` job (ubuntu-only) that builds the maturin wheel, installs it with `uv`, and asserts `adept --version` and `python -m adept --version` agree and match `[workspace.package].version`.
+CI runs the four workspace commands above, then a perf smoke test that parses the criterion `lint_100_skills` line and fails above **500ms** (observed ~23ms; 1s is the acceptance criterion, 500ms is the gate), then a separate `python-packaging` job (ubuntu-only) that builds the maturin wheel, installs it with `uv`, and asserts `adept --version` and `python -m adept --version` agree and match `[workspace.package].version`, then runs `python/tests` under pytest (the one test suite `cargo test --workspace` does not reach).
 
 ## Architecture
 

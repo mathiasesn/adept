@@ -8,9 +8,8 @@ and the no-binary case must raise `AdeptNotFound` rather than fall through to
 a real system-wide `adept`.
 """
 
-import os
 import stat
-import sys
+import sysconfig
 from pathlib import Path
 
 import pytest
@@ -18,7 +17,9 @@ import pytest
 from adept import _find_adept
 from adept._find_adept import AdeptNotFound, find_adept_bin
 
-EXE_NAME = "adept" + (".exe" if sys.platform == "win32" else "")
+# Derived exactly as the code under test derives it, so the tests stay
+# coupled to the implementation rather than to the host platform.
+EXE_NAME = "adept" + (sysconfig.get_config_var("EXE") or "")
 
 
 def _make_binary(path: Path) -> None:

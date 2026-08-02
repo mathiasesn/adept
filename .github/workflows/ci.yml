@@ -113,9 +113,6 @@ jobs:
           uv venv .venv
           uv pip install --python .venv/bin/python .
 
-      - name: Test the discovery shim
-        run: uv run --with pytest pytest python/tests -q
-
       - name: Verify installed CLI matches the workspace version
         run: |
           set -euo pipefail
@@ -148,3 +145,12 @@ jobs:
             echo "::error::reported version '$bin_output' does not contain workspace version '$workspace_version'"
             exit 1
           fi
+
+      # Runs after the version assertion, and installs into .venv explicitly
+      # rather than via `uv run`, so nothing re-syncs the environment the
+      # assertion above just verified.
+      - name: Test the discovery shim
+        run: |
+          set -euo pipefail
+          uv pip install --python .venv/bin/python pytest
+          .venv/bin/python -m pytest python/tests -q
