@@ -103,7 +103,9 @@ workspace table, not to a member's `[dependencies]` with an inline version.**
 ```
 Cargo.toml                 Virtual workspace root; single source of dependency versions
 rust-toolchain.toml        stable + clippy + rustfmt
-.github/workflows/ci.yml   Build, test, clippy -D warnings, fmt --check, perf smoke test
+pyproject.toml             maturin `bindings = "bin"` — packs crates/adept_cli into a wheel (§6)
+python/adept/              Binary-discovery + `python -m adept` dispatch shim, no API surface
+.github/workflows/ci.yml   ci job (build/test/clippy/fmt/perf) + python-packaging job (§6)
 .github/workflows/release.yml  release-plz: release + release-pr jobs (§6)
 release-plz.toml           release-plz config: shared version_group
 docs/                      RULES.md, EVALS.md, BACKLOG.md
@@ -237,8 +239,8 @@ cargo run -q -p adept -- check <path>
 cargo bench -p adept-core --bench lint_100_skills -- --quick
 ```
 
-**CI** (`.github/workflows/ci.yml`, one job on ubuntu-latest, on push to `main`
-and all PRs) runs those four commands in order, then a **performance smoke
+**CI** (`.github/workflows/ci.yml`, on push to `main` and all PRs) runs a `ci`
+job on ubuntu-latest with those four commands in order, then a **performance smoke
 test**: it runs the criterion bench with `--quick`, greps the
 `lint_100_skills   time: [...]` line, converts the point estimate to
 milliseconds, and fails above **500ms**. That is deliberately ~25× the observed
@@ -249,6 +251,29 @@ of criterion output, a known brittleness recorded in `docs/BACKLOG.md`.
 
 `clippy -D warnings` is enforced with `--all-targets`, so **new code must be
 clippy-clean including tests and benches**.
+
+**Python distribution** (root `pyproject.toml`, `python/adept/`). A second,
+independent build path packs the `crates/adept_cli` binary into a Python
+wheel via maturin's `bindings = "bin"` (`build-backend = "maturin"`,
+`manifest-path = "crates/adept_cli/Cargo.toml"`, `python-source = "python"`),
+so `uv tool install git+https://github.com/mathiasesn/adept` puts a real
+native `adept` executable on `PATH` — no PyO3, no importable API. The wheel's
+version is `dynamic = ["version"]`: maturin resolves it from cargo metadata,
+which expands `version.workspace = true` back to
+`[workspace.package].version`, so that field stays the single source of
+truth and release-plz needs no change for this to work. `python/adept/` is
+source-discovery-and-dispatch only, not a library surface: `__init__.py`
+re-exports `find_adept_bin`; `_find_adept.py` probes candidate scripts
+directories for the installed binary; `__main__.py` enables
+`python -m adept`, using `os.execvp` on POSIX (replaces the process, not a
+spawn) and `subprocess.run` on Windows as the one deliberate exception to
+the no-subprocess invariant (see AGENTS.md's Invariants section). Not
+published to PyPI (name squatted, PEP 541 request pending) — installable
+only from the git URL. A second CI job, `python-packaging`
+(`.github/workflows/ci.yml`, ubuntu-only), builds the wheel with `uv`,
+installs it, and asserts `adept --version` and `python -m adept --version`
+agree and match the cargo-metadata-resolved workspace version, failing with
+`::error::` on any mismatch.
 
 **Release pipeline** (`.github/workflows/release.yml`, `release-plz.toml`).
 release-plz runs on push to `main` as two independent jobs, `release` and

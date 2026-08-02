@@ -17,11 +17,49 @@ def find_adept_bin() -> str:
     lookup works whether adept was installed with `uv tool install`,
     `pip install`, `pip install --target`, or `uv run --with`.
     """
-    adept_exe = "adept" + sysconfig.get_config_var("EXE") if sysconfig.get_config_var("EXE") else "adept"
+    exe_suffix = sysconfig.get_config_var("EXE")
+    adept_exe = "adept" + exe_suffix if exe_suffix else "adept"
+
+    candidates = []
 
     scripts_path = os.path.join(sysconfig.get_path("scripts"), adept_exe)
+    candidates.append(scripts_path)
     if os.path.isfile(scripts_path):
         return scripts_path
+
+    # Search from the base prefix, for `pip install --prefix ...` and similar.
+    base_prefix_paths = (
+        os.path.join(sys.base_prefix, "Scripts", adept_exe),
+        os.path.join(sys.base_prefix, "bin", adept_exe),
+    )
+    for path in base_prefix_paths:
+        candidates.append(path)
+        if os.path.isfile(path):
+            return path
+
+    # Search up the tree from the package root, bounded to a fixed number of
+    # steps so we cannot escape the installation tree onto a system-wide
+    # `adept`: covers `lib/python*/site-packages/adept` installs (`pip
+    # install --prefix ...`, `uv run --with ...`), stepping up to the venv's
+    # `bin`/`Scripts` directory.
+    package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    directory = package_root
+    for _ in range(6):
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        for candidate in ("bin", "Scripts"):
+            candidate_path = os.path.join(parent, candidate, adept_exe)
+            candidates.append(candidate_path)
+            if os.path.isfile(candidate_path):
+                return candidate_path
+        directory = parent
+
+    # Search in `bin` adjacent to package root (e.g. `pip install --target ...`).
+    target_path = os.path.join(package_root, adept_exe)
+    candidates.append(target_path)
+    if os.path.isfile(target_path):
+        return target_path
 
     if sys.version_info >= (3, 10):
         user_scheme = sysconfig.get_preferred_scheme("user")
@@ -33,42 +71,15 @@ def find_adept_bin() -> str:
         user_scheme = "posix_user"
 
     user_path = os.path.join(sysconfig.get_path("scripts", scheme=user_scheme), adept_exe)
+    candidates.append(user_path)
     if os.path.isfile(user_path):
         return user_path
-
-    # Search from the base prefix, for `pip install --prefix ...` and similar.
-    paths = (
-        os.path.join(sys.base_prefix, "Scripts", adept_exe),
-        os.path.join(sys.base_prefix, "bin", adept_exe),
-    )
-    for path in paths:
-        if os.path.isfile(path):
-            return path
-
-    # Search in `bin` adjacent to package root (e.g. `pip install --target ...`).
-    package_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    target_path = os.path.join(package_root, adept_exe)
-    if os.path.isfile(target_path):
-        return target_path
-
-    # Search up the tree from the package root: covers `lib/python*/site-packages/adept`
-    # installs, stepping up to the venv's `bin`/`Scripts` directory.
-    directory = package_root
-    while directory != os.path.dirname(directory):
-        for candidate in ("bin", "Scripts"):
-            candidate_path = os.path.join(directory, candidate, adept_exe)
-            if os.path.isfile(candidate_path):
-                return candidate_path
-        directory = os.path.dirname(directory)
 
     raise AdeptNotFound(
         os.linesep.join(
             [
                 "Unable to find the `adept` binary. Looked in the following locations:",
-                scripts_path,
-                user_path,
-                *paths,
-                target_path,
+                *candidates,
             ]
         )
     )

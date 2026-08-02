@@ -107,17 +107,16 @@ jobs:
       - name: Verify installed CLI matches the workspace version
         run: |
           set -euo pipefail
-          source .venv/bin/activate
 
-          workspace_version="$(sed -n '/^\[workspace.package\]/,/^\[/{/^version *= */{s/^version *= *"\([^"]*\)".*/\1/p}}' Cargo.toml | head -n1)"
+          workspace_version="$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "adept") | .version')"
           if [ -z "$workspace_version" ]; then
-            echo "::error::could not parse [workspace.package].version from Cargo.toml"
+            echo "::error::could not resolve the adept package version from cargo metadata"
             exit 1
           fi
           echo "workspace version: $workspace_version"
 
-          bin_output="$(adept --version)"
-          module_output="$(python -m adept --version)"
+          bin_output="$(.venv/bin/adept --version)"
+          module_output="$(.venv/bin/python -m adept --version)"
           echo "adept --version: $bin_output"
           echo "python -m adept --version: $module_output"
 
