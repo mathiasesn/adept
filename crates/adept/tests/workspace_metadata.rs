@@ -1,15 +1,20 @@
-//! Asserts `release_plz.toml` cannot silently drift out of sync with the
+//! Asserts `release-plz.toml` cannot silently drift out of sync with the
 //! root `Cargo.toml`'s `[workspace] members`: every member's package name
-//! must appear exactly once as a `[[package]]` entry in `release_plz.toml`,
-//! carrying the shared `version_group`, and `release_plz.toml` must not name
+//! must appear exactly once as a `[[package]]` entry in `release-plz.toml`,
+//! carrying the shared `version_group`, and `release-plz.toml` must not name
 //! anything that isn't a real member.
 //!
 //! release-plz has no workspace-level default for `version_group`, so a
-//! member added to `Cargo.toml` and forgotten in `release_plz.toml` would
+//! member added to `Cargo.toml` and forgotten in `release-plz.toml` would
 //! otherwise silently start versioning on its own. Package names are not
 //! derivable from directory names (`crates/adept` -> package `adept-core`,
 //! `crates/adept_cli` -> package `adept`), so this reads each member's own
 //! `Cargo.toml` for its `[package] name` rather than guessing from the path.
+//!
+//! The hyphen in the filename is load-bearing: release-plz only ever looks for
+//! `release-plz.toml` or `.release-plz.toml`, so an underscored copy parses
+//! fine here while release-plz runs with its defaults and versions the crates
+//! apart.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -87,7 +92,7 @@ fn member_package_names(root: &Path) -> Vec<String> {
 fn release_plz_toml_matches_workspace_members() {
     let root = workspace_root();
     let member_names = member_package_names(&root);
-    let config: ReleasePlzConfig = read_toml(&root.join("release_plz.toml"));
+    let config: ReleasePlzConfig = read_toml(&root.join("release-plz.toml"));
 
     let mut errors: Vec<String> = Vec::new();
 
@@ -98,7 +103,7 @@ fn release_plz_toml_matches_workspace_members() {
             Some(name) => format!("`{name}`"),
             None => {
                 errors.push(format!(
-                    "release_plz.toml [[package]] entry #{idx} has no `name` key"
+                    "release-plz.toml [[package]] entry #{idx} has no `name` key"
                 ));
                 format!("#{idx}")
             }
@@ -106,11 +111,11 @@ fn release_plz_toml_matches_workspace_members() {
         match entry.version_group.as_deref() {
             Some(group) if group == VERSION_GROUP => {}
             Some(other) => errors.push(format!(
-                "release_plz.toml entry {label} has version_group = \"{other}\", expected \
+                "release-plz.toml entry {label} has version_group = \"{other}\", expected \
                  \"{VERSION_GROUP}\" so all crates version in lockstep"
             )),
             None => errors.push(format!(
-                "release_plz.toml entry {label} is missing version_group = \"{VERSION_GROUP}\""
+                "release-plz.toml entry {label} is missing version_group = \"{VERSION_GROUP}\""
             )),
         }
     }
@@ -125,13 +130,13 @@ fn release_plz_toml_matches_workspace_members() {
     for (&name, &count) in &counts {
         if count > 1 {
             errors.push(format!(
-                "release_plz.toml has {count} [[package]] entries named `{name}`, expected one"
+                "release-plz.toml has {count} [[package]] entries named `{name}`, expected one"
             ));
         }
         // No stale entries pointing at packages that no longer exist.
         if !member_names.iter().any(|m| m == name) {
             errors.push(format!(
-                "release_plz.toml has a [[package]] entry named `{name}`, which is not a \
+                "release-plz.toml has a [[package]] entry named `{name}`, which is not a \
                  workspace member in Cargo.toml — remove it or fix the name"
             ));
         }
@@ -141,7 +146,7 @@ fn release_plz_toml_matches_workspace_members() {
     for member in &member_names {
         if !counts.contains_key(member.as_str()) {
             errors.push(format!(
-                "release_plz.toml is missing a [[package]] entry for workspace member \
+                "release-plz.toml is missing a [[package]] entry for workspace member \
                  `{member}` — add one with version_group = \"{VERSION_GROUP}\""
             ));
         }
@@ -149,7 +154,7 @@ fn release_plz_toml_matches_workspace_members() {
 
     assert!(
         errors.is_empty(),
-        "release_plz.toml is out of sync with Cargo.toml's workspace members:\n{}",
+        "release-plz.toml is out of sync with Cargo.toml's workspace members:\n{}",
         errors.join("\n")
     );
 }
