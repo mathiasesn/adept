@@ -226,6 +226,14 @@ binary assets. Do not "helpfully" refresh the pin; see the corpus README.
   `Options` flag added there silently changes the oracle too. Accepted as the
   price of the single-construction-site invariant: an oracle with its own
   `Options` would drift from the parser it is supposed to check.
+- **The Windows branch of `python/adept/__main__.py` has no CI coverage —
+  accepted.** Its POSIX path calls `os.execvp`, which replaces the process
+  rather than spawning one; only the Windows branch — where no exec-and-replace
+  equivalent exists — uses `subprocess.run`. That branch is a near-verbatim
+  port of ruff's and is never exercised because the `python-packaging` CI job
+  (`.github/workflows/ci.yml`) is ubuntu-only. A coverage gap accepted
+  deliberately when the Linux-only job was chosen, not rediscovered as a defect.
+  See `docs/ARCHI.md` §6.
 
 ## External prior art: `huggingface/upskill`
 

@@ -268,12 +268,14 @@ and release-plz needs no change. The CI job asserts it.
 `python/adept/` is discovery-and-dispatch only, not a library surface:
 `__init__.py` re-exports `find_adept_bin`, `_find_adept.py` probes candidate
 scripts directories for the installed binary, and `__main__.py` enables
-`python -m adept`. `__main__.py` is the sole exception to the no-subprocess
-invariant in AGENTS.md, and only partially: its POSIX path calls `os.execvp`,
-which replaces the process rather than spawning one, and only the Windows
-branch — where no exec-and-replace equivalent exists — uses `subprocess.run`.
-That branch is a near-verbatim port of ruff's and is never exercised by CI, a
-coverage gap accepted deliberately when the Linux-only job was chosen.
+`python -m adept`. The no-subprocess invariant in AGENTS.md is about the Rust
+binary; `__main__.py` dispatches *to* that binary and so falls outside the
+invariant's subject rather than carving out an exception to it. Its POSIX
+path calls `os.execvp`, which replaces the process rather than spawning one,
+and only the Windows branch — where no exec-and-replace equivalent exists —
+uses `subprocess.run`. That branch is a near-verbatim port of ruff's and is
+never exercised by CI, a coverage gap accepted deliberately when the
+Linux-only job was chosen (see `docs/BACKLOG.md`).
 
 A second CI job, `python-packaging` (`.github/workflows/ci.yml`,
 ubuntu-only), builds the wheel with `uv`, installs it, and asserts the
