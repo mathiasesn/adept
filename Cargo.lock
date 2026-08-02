@@ -6,47 +6,9 @@ version = 4
 name = "adept"
 version = "0.1.0"
 dependencies = [
- "criterion",
- "insta",
- "owo-colors",
- "pulldown-cmark",
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 1.0.69",
- "tiktoken-rs",
- "walkdir",
-]
-
-[[package]]
-name = "adept_agent"
-version = "0.1.0"
-dependencies = [
- "adept",
- "adept_fmt",
- "async-trait",
- "insta",
- "jiff",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "similar",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "adept_cli"
-version = "0.1.0"
-dependencies = [
- "adept",
- "adept_agent",
- "adept_fmt",
+ "adept-agent",
+ "adept-core",
+ "adept-fmt",
  "anyhow",
  "assert_cmd",
  "clap",
@@ -64,10 +26,49 @@ dependencies = [
 ]
 
 [[package]]
-name = "adept_fmt"
+name = "adept-agent"
 version = "0.1.0"
 dependencies = [
- "adept",
+ "adept-core",
+ "adept-fmt",
+ "async-trait",
+ "insta",
+ "jiff",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "similar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "adept-core"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "insta",
+ "owo-colors",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tiktoken-rs",
+ "toml",
+ "walkdir",
+]
+
+[[package]]
+name = "adept-fmt"
+version = "0.1.0"
+dependencies = [
+ "adept-core",
  "insta",
  "proptest",
  "pulldown-cmark",

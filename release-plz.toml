@@ -1,0 +1,19 @@
+# Every workspace member shares one version_group, so all four crates version
+# in lockstep. release-plz has no workspace-level default for this: a new
+# member added to Cargo.toml must be appended here too, or it silently
+# versions on its own.
+[[package]]
+name = "adept-core"
+version_group = "adept"
+
+[[package]]
+name = "adept-fmt"
+version_group = "adept"
+
+[[package]]
+name = "adept-agent"
+version_group = "adept"
+
+[[package]]
+name = "adept"
+version_group = "adept"

@@ -104,6 +104,8 @@ workspace table, not to a member's `[dependencies]` with an inline version.**
 Cargo.toml                 Virtual workspace root; single source of dependency versions
 rust-toolchain.toml        stable + clippy + rustfmt
 .github/workflows/ci.yml   Build, test, clippy -D warnings, fmt --check, perf smoke test
+.github/workflows/release.yml  release-plz: release + release-pr jobs (§6)
+release-plz.toml           release-plz config: shared version_group
 docs/                      RULES.md, EVALS.md, BACKLOG.md
 
 crates/adept/              CORE LIBRARY — no dependency on any sibling crate
@@ -179,6 +181,15 @@ sibling crate owns one user-facing surface end to end. Anything two surfaces
 need moves *down* into `adept` (this is why `text.rs` and `companion.rs`
 exist), never sideways between siblings.
 
+**Package name ≠ crate name.** Directory names and `use`-path crate names are
+unchanged, but the cargo *package* names differ: `crates/adept` is package
+`adept-core` (crate `adept`), `crates/adept_fmt` is `adept-fmt`, `crates/adept_agent`
+is `adept-agent`, and `crates/adept_cli` is package `adept` (bin `adept`, no
+lib). So `cargo test -p adept-core` builds the core crate, but `use adept::...`
+in source is unaffected — `crates/adept/Cargo.toml` sets `[lib] name = "adept"`
+explicitly. Anything after `-p` on the command line is the package name;
+anything in a `use` statement is the crate name.
+
 ## 5. Core Architecture Principles
 
 Violating one is a design change, not a style preference.
@@ -222,8 +233,8 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 
 cargo install --path crates/adept_cli
-cargo run -q -p adept_cli -- check <path>
-cargo bench -p adept --bench lint_100_skills -- --quick
+cargo run -q -p adept -- check <path>
+cargo bench -p adept-core --bench lint_100_skills -- --quick
 ```
 
 **CI** (`.github/workflows/ci.yml`, one job on ubuntu-latest, on push to `main`
@@ -238,6 +249,48 @@ of criterion output, a known brittleness recorded in `docs/BACKLOG.md`.
 
 `clippy -D warnings` is enforced with `--all-targets`, so **new code must be
 clippy-clean including tests and benches**.
+
+**Release pipeline** (`.github/workflows/release.yml`, `release-plz.toml`).
+release-plz runs on push to `main` as two independent jobs, `release` and
+`release-pr`, that run in parallel and do not depend on each other's outcome:
+`release` publishes what is already on `main`, while `release-pr` prepares
+what comes next. The `release` job publishes to crates.io — any crate whose
+`[workspace.package].version` isn't already on the registry, in dependency
+order — and pushes a `{{ package }}-v{{ version }}` tag per published crate.
+The `release-pr` job keeps a rolling PR open carrying Conventional-Commits-derived
+version bumps and changelog; merging that PR lands the bumped versions on
+`main`, which the next push's `release` job turns into an actual publish. All
+four packages share one `version_group` in `release-plz.toml`, so they bump
+and publish in lockstep rather than independently. The `release` job keys off
+crates.io registry state, not PR identity — see AGENTS.md's commit
+conventions for why that means never hand-editing the version. Requires the
+`CARGO_REGISTRY_TOKEN` repo secret, which is scoped to the `release` job
+alone — the only job with publish rights, and the only one that builds, so it
+alone carries the toolchain and cache steps. `release-pr` is the only job with
+PR-write. `concurrency` stays workflow-level so it covers both jobs at once and
+prevents two pushes from racing the publish or the PR update. The one step both
+need, checkout, is a YAML anchor defined in `release` and aliased in
+`release-pr`. `release.yml` owns the literal permissions, guard, and
+concurrency expressions; nothing machine-checks a copy of them here.
+
+The `release` job currently carries `dry_run: true`, so it logs what it would
+publish and publishes nothing. Nothing has been released yet. Going live means
+**deleting** the `dry_run` line, not setting it to `false` — that value is a
+silent no-op, for the reason spelled out in `docs/BACKLOG.md`'s pre-publish
+checklist, which also lists the conditions under which the deletion is safe.
+`crates/adept/tests/workspace_metadata.rs` fails the build if the workflow ever
+sets `dry_run: false`.
+
+The `release-pr` job uses a second secret, `RELEASE_PLZ_TOKEN`. GitHub never
+fires workflow triggers for events caused by the default `GITHUB_TOKEN` (loop
+prevention), so a release PR opened with it would arrive with no CI checks at
+all — and that PR is the one whose merge publishes to crates.io. A
+fine-grained PAT with `contents: write` + `pull_requests: write` makes CI run
+on it normally, so it is a hard prerequisite: configure the secret before the
+first merge to `main`. There is no fallback and no fail-fast: the `release` job
+succeeds on the plain `GITHUB_TOKEN` regardless, so the first push to `main`
+can publish all four crates irreversibly while only `release-pr` goes red for
+lacking the PAT.
 
 ## 7. Configuration
 

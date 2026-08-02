@@ -1,24 +1,28 @@
 [package]
-name = "adept_cli"
+name = "adept"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "CLI binary (`adept`) for linting, formatting, and scoring Agent Skills. Owned by the CLI agent."
+readme.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+categories = ["development-tools", "command-line-utilities"]
+description = "Linter, formatter, and LLM-assisted authoring tool for agent skills (SKILL.md). Installs the `adept` binary."
 
 [[bin]]
 name = "adept"
 path = "src/main.rs"
 
 [dependencies]
-adept = { workspace = true }
-adept_fmt = { workspace = true }
-adept_agent = { workspace = true }
+adept-core = { workspace = true }
+adept-fmt = { workspace = true }
+adept-agent = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-toml = "0.8"
+toml = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 owo-colors = { workspace = true }
@@ -30,4 +34,4 @@ rustyline = { workspace = true }
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
-tempfile = "3"
+tempfile = { workspace = true }

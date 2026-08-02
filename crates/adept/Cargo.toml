@@ -1,11 +1,21 @@
 [package]
-name = "adept"
+name = "adept-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme.workspace = true
+keywords.workspace = true
+homepage.workspace = true
+categories.workspace = true
 description = "Core data model, parser, and diagnostics for adept, a linter/formatter/scorer for Agent Skills."
+# Vendored third-party skill corpus (~1.8MB) used only by local tests; keep it
+# out of the published crate so it isn't downloaded by every dependent.
+exclude = ["tests/fixtures/corpus/"]
+
+[lib]
+name = "adept"
 
 [dependencies]
 serde = { workspace = true }
@@ -20,7 +30,8 @@ owo-colors = { workspace = true }
 [dev-dependencies]
 insta = { workspace = true }
 criterion = "0.5"
-tempfile = "3"
+tempfile = { workspace = true }
+toml = { workspace = true }
 
 [[bench]]
 name = "lint_100_skills"
