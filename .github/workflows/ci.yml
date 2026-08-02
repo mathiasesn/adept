@@ -73,3 +73,63 @@ jobs:
             echo "::error::lint_100_skills took ${ms}ms, exceeding the 500ms regression threshold (target: under 1000ms; typical: ~23ms)"
             exit 1
           fi
+
+  python-packaging:
+    name: python packaging (maturin, ubuntu-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # Same fallback as release.yml: a Cargo.lock change should degrade
+          # to a warm cache, not a cold one.
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build and install adept from the checkout
+        run: |
+          set -euo pipefail
+          uv venv .venv
+          uv pip install --python .venv/bin/python .
+
+      - name: Verify installed CLI matches the workspace version
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+
+          workspace_version="$(sed -n '/^\[workspace.package\]/,/^\[/{/^version *= */{s/^version *= *"\([^"]*\)".*/\1/p}}' Cargo.toml | head -n1)"
+          if [ -z "$workspace_version" ]; then
+            echo "::error::could not parse [workspace.package].version from Cargo.toml"
+            exit 1
+          fi
+          echo "workspace version: $workspace_version"
+
+          bin_output="$(adept --version)"
+          module_output="$(python -m adept --version)"
+          echo "adept --version: $bin_output"
+          echo "python -m adept --version: $module_output"
+
+          if [ "$bin_output" != "$module_output" ]; then
+            echo "::error::'adept --version' ($bin_output) and 'python -m adept --version' ($module_output) disagree"
+            exit 1
+          fi
+
+          case "$bin_output" in
+            *"$workspace_version"*) ;;
+            *)
+              echo "::error::reported version '$bin_output' does not contain workspace version '$workspace_version'"
+              exit 1
+              ;;
+          esac
