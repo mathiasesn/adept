@@ -117,6 +117,22 @@ with the concurrency cap sourced from `[fix]` config.
   events (#15).** A backslash escape splits one word into several `Inline::Text`
   nodes. `adept_fmt` defends locally (`877721f`, `c596f8b`), but the surprise
   remains in the shared AST for any other consumer.
+- **`repo_root()` is triplicated across `crates/adept/tests` (#36).**
+  `rules.rs:18`, `docs_test.rs:14` (inlined into `load_doc`) and
+  `workspace_metadata.rs` each encode "this crate lives at
+  `<root>/crates/adept`" separately, two via `../..` and one via
+  `.parent().and_then(Path::parent)`. Each `tests/*.rs` is its own crate, so
+  sharing needs a `tests/common/mod.rs` — the layout
+  `crates/adept_cli/tests/common/mod.rs` already establishes. They fail at
+  different times because they are separate test binaries.
+- **Nothing pins the crates.io publish metadata on new members (#37).**
+  `workspace_metadata.rs` asserts the `Cargo.toml` ↔ `release_plz.toml`
+  bijection, so a new crate cannot fall out of the shared `version_group` —
+  but no test requires it to carry `keywords`/`homepage`/`categories`. The
+  asymmetry favours the wrong half: release-plz drift is loud, whereas wrong
+  metadata publishes silently and is then immutable for that version. The
+  concrete case is a new *binary* crate forgetting to override the
+  library-case `categories` default.
 
 **Corpus, resolved.** 10 Apache-2.0 skills are vendored under
 `crates/adept/tests/fixtures/corpus/` at upstream
@@ -197,6 +213,14 @@ binary assets. Do not "helpfully" refresh the pin; see the corpus README.
   same block structure — is in principle checkable against the real parser.
   Deferred: the oracle is a larger rearchitecture with a per-word parse cost
   on the format path.
+- **`workspace_metadata.rs` lives in `adept-core`, not `adept_cli`.** Unlike
+  `docs_test.rs`, which is here because it imports `adept::Registry`, this test
+  imports nothing from `adept`: its subject is workspace-level config
+  (`release_plz.toml` and the member list), which would put it closer to
+  `adept_cli`, the layer that already owns config-file parsing. It stays here
+  because a virtual workspace root cannot host tests and `crates/adept/tests`
+  is the established home for doc/config drift checks. `toml` is a
+  dev-dependency only, so nothing reaches the published artifact.
 - **The formatter's semantic oracle no longer pins its own parser options.**
   `adept_fmt/tests/format_tests.rs` now calls `adept::markdown::parser`, so an
   `Options` flag added there silently changes the oracle too. Accepted as the
@@ -407,3 +431,18 @@ Recorded 2026-07-31.
   hand-shaped `MockLlmClient` responses — a real model's JSON (fenced,
   truncated, or ignoring the companion-edit contract) is the untested input
   class. Run it in the default preview mode first, not `--write`.
+- **Both release secrets must exist before the first merge to `main` (#35).**
+  `CARGO_REGISTRY_TOKEN` with `publish-new` + `publish-update`, and
+  `RELEASE_PLZ_TOKEN`, a fine-grained PAT with `contents: write` +
+  `pull_requests: write`. The PAT is blocking, not a nicety: `release.yml`'s
+  `release-pr` step has no fallback and errors without it. Ordering hazard —
+  the `release` step runs first and succeeds on the plain `GITHUB_TOKEN`, so a
+  missing PAT does not fail fast; the first push publishes all four crates
+  irreversibly and only then goes red.
+- **Confirm all four names are free on crates.io (#35):** `adept`,
+  `adept-core`, `adept-fmt`, `adept-agent`. Category slugs are validated
+  server-side too, so a wrong one is rejected at the worst moment.
+- **Confirm `persist-credentials: false` suits the release-plz action's
+  git-write auth (#35).** Untestable from a PR: `release.yml` fires only on
+  push to `main`, so its first real execution is the publishing one. Read the
+  action's documented example before merging rather than waiting for a test.
