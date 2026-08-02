@@ -68,10 +68,11 @@ jobs:
       # crates.io yanks, it never deletes. Keep this true until the log from a
       # real run shows the expected four crates in dependency order, then
       # delete the `dry_run` line entirely — do NOT set it to `false`.
-      # `release-plz/action@v0.5.131` `action.yml:115-118` guards the flag on
+      # `release-plz/action@v0.5.131` `action.yml:115-119` guards the flag on
       # string emptiness (`if [[ -n "${{ inputs.dry_run }}" ]]`) and the input
-      # has no `default:` (`action.yml:39`), so `dry_run: false` still renders
-      # as the non-empty string "false" and `--dry-run` is still passed.
+      # has no `default:` (`action.yml:40-47`), so `dry_run: false` still
+      # renders as the non-empty string "false" and `--dry-run` is still
+      # passed.
       - name: Release unpublished versions
         uses: release-plz/action@v0.5.131
         with:

@@ -432,9 +432,9 @@ Recorded 2026-07-31.
   truncated, or ignoring the companion-edit contract) is the untested input
   class. Run it in the default preview mode first, not `--write`.
 - **Delete the `dry_run` line in `release.yml`'s `release` job, don't flip it
-  to `false` (#35).** `release-plz/action@v0.5.131` `action.yml:115-118` guards
+  to `false` (#35).** `release-plz/action@v0.5.131` `action.yml:115-119` guards
   the flag on string emptiness, not truthiness — `if [[ -n "${{ inputs.dry_run
-  }}" ]]` — and the input has no `default:` (`action.yml:39`), so
+  }}" ]]` — and the input has no `default:` (`action.yml:40-47`), so
   `with: dry_run: false` renders as the non-empty string `"false"` and
   `--dry-run` stays in effect. The failure shape is the bad one: the "go live"
   commit merges, the job goes green, nothing publishes, and there's no signal
