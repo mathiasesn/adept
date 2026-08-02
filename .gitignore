@@ -31,3 +31,11 @@ target
 
 # Local task specs
 /specs/
+
+# Python build artifacts
+__pycache__/
+*.pyc
+dist/
+build/
+*.egg-info/
+.venv/
