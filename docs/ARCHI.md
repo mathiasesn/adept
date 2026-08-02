@@ -263,10 +263,7 @@ URL.
 The wheel's version is `dynamic`: maturin resolves it from cargo metadata,
 which expands `version.workspace = true` back to
 `[workspace.package].version`, so that field stays the single source of truth
-and release-plz needs no change. This is load-bearing rather than
-convenient — a maturin that failed to resolve workspace inheritance would
-silently stamp `0.0.0` and create a second source of truth, so the CI job
-asserts the *distribution* version equals the cargo one.
+and release-plz needs no change. The CI job asserts it.
 
 `python/adept/` is discovery-and-dispatch only, not a library surface:
 `__init__.py` re-exports `find_adept_bin`, `_find_adept.py` probes candidate
@@ -281,10 +278,7 @@ coverage gap accepted deliberately when the Linux-only job was chosen.
 A second CI job, `python-packaging` (`.github/workflows/ci.yml`,
 ubuntu-only), builds the wheel with `uv`, installs it, and asserts the
 distribution version matches cargo's and that `adept --version` and
-`python -m adept --version` agree, failing with `::error::` on any mismatch.
-It caches only the cargo registry, under its own key: maturin builds
-`--release`, so the `ci` job's debug `target/` would warm nothing, and a
-shared key would make the two jobs race to save it.
+`python -m adept --version` agree.
 
 **Release pipeline** (`.github/workflows/release.yml`, `release-plz.toml`).
 release-plz runs on push to `main` as two independent jobs, `release` and

@@ -12,13 +12,16 @@ class AdeptNotFound(FileNotFoundError):
 def find_adept_bin() -> str:
     """Return the path to the `adept` binary installed by this package.
 
-    Adapted from ruff's `find_ruff_bin` implementation: probes every
-    scripts directory a wheel installer might have used, in order, so the
-    lookup works whether adept was installed with `uv tool install`,
-    `pip install`, `pip install --target`, or `uv run --with`.
+    Adapted from ruff's `find_ruff_bin`: probes every scripts directory a
+    wheel installer might have used, in order, so the lookup works whether
+    adept was installed with `uv tool install`, `pip install`,
+    `pip install --target`, or `uv run --with`.
 
-    Kept structurally close to upstream so it stays diffable against ruff on
-    a re-sync; the repetition below is deliberate, not an oversight.
+    The probe-then-return repetition is upstream's shape and is kept
+    deliberately, so this stays diffable against ruff on a re-sync. One part
+    is *not* upstream's: the bounded upward walk below replaces ruff's single
+    `site-packages`-relative probe, to cover layouts where the binary sits
+    more than one level above the package.
     """
     adept_exe = "adept" + (sysconfig.get_config_var("EXE") or "")
 

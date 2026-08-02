@@ -8,14 +8,20 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# The &checkout and &rust-toolchain anchors are aliased by the
+# python-packaging job so the two cannot drift on checkout options or on how
+# the toolchain is installed. Same convention as release.yml. The cache steps
+# are deliberately *not* shared — see the comment on each.
 jobs:
   ci:
     name: build, test, clippy, fmt
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - &checkout
+        uses: actions/checkout@v7
 
-      - name: Install Rust toolchain
+      - &rust-toolchain
+        name: Install Rust toolchain
         run: rustup show
 
       - name: Cache cargo registry and build artifacts
@@ -78,23 +84,25 @@ jobs:
     name: python packaging (maturin, ubuntu-only)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - *checkout
 
-      - name: Install Rust toolchain
-        run: rustup show
+      - *rust-toolchain
 
-      # Registry only, and under its own key. maturin builds --release, so the
-      # `ci` job's debug `target/` would warm nothing here, and sharing its key
-      # would make the two jobs race to save it — the loser's artifacts are
-      # discarded and the next run recompiles from scratch.
-      - name: Cache cargo registry
+      # Under its own key, not the `ci` job's: maturin builds --release, so
+      # that job's debug `target/` would warm nothing here, and sharing a key
+      # would make the two race to save it — the loser's artifacts are
+      # discarded and the next run recompiles from scratch. The release
+      # `target/` is worth caching on its own, since the compile is the
+      # entire cost of this job.
+      - name: Cache cargo registry and release build
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-maturin-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-registry-maturin-
+            target
+          key: ${{ runner.os }}-cargo-maturin-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-maturin-release-
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -110,10 +118,6 @@ jobs:
           set -euo pipefail
 
           workspace_version="$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[] | select(.name == "adept") | .version')"
-          if [ -z "$workspace_version" ]; then
-            echo "::error::could not resolve the adept package version from cargo metadata"
-            exit 1
-          fi
           echo "workspace version: $workspace_version"
 
           # The load-bearing assertion: maturin must resolve
