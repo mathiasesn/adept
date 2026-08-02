@@ -5,6 +5,14 @@
   </picture>
 </p>
 
+<p align="center">
+  <a href="https://github.com/mathiasesn/adept"><img src="https://img.shields.io/badge/adept-checked-000000?logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDE2IDE2IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPjxwYXRoIGQ9Ik00IDNoOHYxaC04eiBNNCA0aDh2MWgtOHogTTEwIDVoMnYxaC0yeiBNMTAgNmgydjFoLTJ6IE00IDdoOHYxaC04eiBNNCA4aDh2MWgtOHogTTQgOWgydjFoLTJ6IE0xMCA5aDJ2MWgtMnogTTQgMTBoMnYxaC0yeiBNMTAgMTBoMnYxaC0yeiBNNCAxMWg4djFoLTh6IE00IDEyaDh2MWgtOHoiIGZpbGw9IiNmZmZmZmYiLz48L3N2Zz4=" alt="checked with adept"></a>
+  <a href="https://crates.io/crates/adept"><img src="https://img.shields.io/crates/v/adept?logo=rust&logoColor=white&label=crates.io&color=E05D44" alt="crates.io"></a>
+  <a href="https://github.com/mathiasesn/adept/blob/main/LICENSE"><img src="https://img.shields.io/github/license/mathiasesn/adept?label=license&color=44CC11" alt="license"></a>
+  <img src="https://img.shields.io/badge/rust-1.85%2B-blue?logo=rust&logoColor=white&label=MSRV" alt="MSRV 1.85+">
+  <a href="https://github.com/mathiasesn/adept/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/mathiasesn/adept/ci.yml?branch=main&logo=github&label=CI" alt="CI"></a>
+</p>
+
 An extremely fast linter and formatter for Agent Skills.
 
 `adept` checks the folder-of-instructions "Agent Skill" pattern (a
