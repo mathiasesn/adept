@@ -60,11 +60,14 @@ def find_adept_bin() -> str:
                 return candidate_path
         directory = parent
 
-    # Search in `bin` adjacent to package root (e.g. `pip install --target ...`).
-    target_path = os.path.join(package_root, adept_exe)
-    candidates.append(target_path)
-    if os.path.isfile(target_path):
-        return target_path
+    # Search in `bin`/`Scripts` adjacent to the package root: `pip install
+    # --target X` puts the package at `X/adept` and the script at `X/bin`,
+    # which the upward walk above never reaches — it starts at X's parent.
+    for candidate in ("bin", "Scripts"):
+        target_path = os.path.join(package_root, candidate, adept_exe)
+        candidates.append(target_path)
+        if os.path.isfile(target_path):
+            return target_path
 
     if sys.version_info >= (3, 10):
         user_scheme = sysconfig.get_preferred_scheme("user")
