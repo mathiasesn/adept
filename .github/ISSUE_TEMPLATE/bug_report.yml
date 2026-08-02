@@ -1,0 +1,78 @@
+name: Bug report
+description: Something in adept behaves incorrectly
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, please search the [existing issues](../../issues)
+        — the bug may already be reported or knowingly deferred.
+
+  - type: dropdown
+    id: command
+    attributes:
+      label: Subcommand
+      description: Which subcommand does this affect?
+      options:
+        - check
+        - fmt
+        - eval
+        - fix
+        - create
+        - mcp
+        - other / not command-specific
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did adept do, and what did you expect instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Exact command, plus the smallest `SKILL.md` (and
+        `adept.toml`, if relevant) that triggers it. For example:
+
+        ```
+        $ adept check ./skills/my-skill
+        ...
+
+        SKILL.md:
+        ---
+        name: my-skill
+        description: ...
+        ---
+        ```
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: adept version
+      description: Output of `adept --version`, or the commit SHA.
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "Linux 6.8 x86_64 / macOS 15 arm64 / Windows 11"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Logs, stack traces, related issues.
