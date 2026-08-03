@@ -199,13 +199,25 @@ impl ScrubbedBody {
     /// [`OpenAiCompatClient::send_once`], immediately after `scrub` runs (the
     /// tests below also construct one directly), so no unscrubbed text can
     /// reach this constructor from outside the crate.
+    #[must_use]
     pub(crate) fn new(scrubbed: impl Into<String>) -> Self {
         Self(scrubbed.into())
     }
 
     /// Borrow the scrubbed text.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Take the scrubbed text back out. `pub(crate)`, and deliberately not a
+    /// public `From<ScrubbedBody> for String`: the guarantee this type carries
+    /// is about *construction* provenance, so unwrapping in-crate to hand the
+    /// body to a sink that wants an owned `String` is fine, while a public
+    /// escape hatch would let external code launder the type away.
+    #[must_use]
+    pub(crate) fn into_inner(self) -> String {
+        self.0
     }
 }
 
@@ -754,7 +766,7 @@ impl OpenAiCompatClient {
                         Some(status.as_u16()),
                         request_headers,
                         response_headers,
-                        body_text.as_str().to_owned(),
+                        body_text.into_inner(),
                         "ok".to_string(),
                     ));
                     return Ok(response);
@@ -780,7 +792,7 @@ impl OpenAiCompatClient {
             Some(status.as_u16()),
             request_headers,
             response_headers,
-            body_text.as_str().to_owned(),
+            body_text.into_inner(),
             outcome_label,
         ));
         Err(outcome)

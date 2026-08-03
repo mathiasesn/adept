@@ -926,18 +926,12 @@ tracing output and no capture artifact, including when smuggled into a prompt.
   needs the attribute too**; `Timeout`, `EmptyChoices` and `RetriesExhausted` go
   without because their payloads are adept's own.
 
-  `LlmError::Status.body` is typed as `ScrubbedBody`
-  (`crates/adept_agent/src/llm/client.rs`), not `String`: a struct with a
-  private inner field and a `pub(crate)` constructor, built exactly once at
-  the scrub site in `OpenAiCompatClient::send_once`. This makes "scrubbed of
-  the API key" a property the type carries rather than a comment on the
-  field — `new`'s `pub(crate)` visibility means an unscrubbed `Status` would
-  require writing a second, deliberate call site inside `adept-agent` rather
-  than happening silently, and external code cannot construct one at all.
-  `Request` and `MalformedResponse` do not use it: they carry formatted error
-  text (a reqwest message, a `serde_json` message), not a backend body, so
-  there is no scrub result to type — and `#[non_exhaustive]` already blocks
-  external construction of those variants.
+  `LlmError::Status.body` is typed as `ScrubbedBody`, not `String`: a private
+  inner field with a `pub(crate)` constructor, built once at the scrub site in
+  `OpenAiCompatClient::send_once`, so "scrubbed of the API key" is a property
+  the type carries. Why the other variants opt out, and why there is no public
+  way back to `String`, are on the type's rustdoc in
+  `crates/adept_agent/src/llm/client.rs` — don't restate it here.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O
   error.
 - **Rule codes are permanent and never reused.** Retired codes stay retired and

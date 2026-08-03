@@ -48,7 +48,7 @@ Virtual cargo workspace, four crates, one binary (`adept`):
 - `adept` (package `adept-core`, directory `crates/adept`) — core: `Skill`, `SkillParser`, `SkillSet`, `Diagnostic`, `AdeptError`, `TokenCounter`, the rule engine, `markdown` (the shared pulldown-cmark lexer), and `evals` (the eval-dataset schema plus the offline `grade` function).
 - `adept_fmt` (package `adept-fmt`) — formatter: canonical frontmatter + Markdown reflow. Idempotent, atomic writes.
 - `adept_agent` (package `adept-agent`) — everything LLM-assisted. Submodules:
-  - `llm` — the transport: `LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`.
+  - `llm` — the transport and its config resolution: `LlmClient`, `OpenAiCompatClient`, `MockLlmClient`, `CaptureSink`, `LlmConfig`, `ConfigError`/`llm_available`, `ScrubbedBody`.
   - `eval` — the four `adept eval` analyses: `triggering`, `tokens`, `overlap`, `report`.
   - `fix` — autofix for `FixKind::Llm` diagnostics.
   - `create` — skill authoring: generate → screen → repair → generate-evals.
