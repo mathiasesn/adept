@@ -400,7 +400,7 @@ LLM-backed commands only, resolved in `adept_agent::LlmConfig::resolve`):
 | Var | Flag | Purpose |
 |---|---|---|
 | `ADEPT_MODEL` | `--model` | Required by the `triggering`/`token-bloat`/`overlap` analyses, which exit 2 without it; grading alone needs no model. Over MCP its absence fails those analyses per-call rather than hiding the tool — §12. |
-| `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1` |
+| `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1`. `LlmConfig::resolve` parses the resolved value with `reqwest::Url` and returns `ConfigError::CredentialsInBaseUrl` if `username()` is non-empty or `password()` is `Some` — a `base_url` carrying credentials is rejected at resolution, never accepted and scrubbed later. A value that fails to parse at all is left alone and still fails downstream at `RequestBuilder::build`; the check targets userinfo only. `resolve_llm_client` (`adept_cli::config`) matches the variant to print credential-specific guidance naming `api_key` instead of the generic model-guidance text, and `probe_model_available` (`adept_cli::commands::eval`) treats it distinctly from "no model configured" rather than folding it into `false`. Both paths exit 2. |
 | `ADEPT_API_KEY` | *(none)* | Bearer token. Never accepted as a flag. Held as a `RedactedString` — §15. |
 | `ADEPT_LOG` | `-v`/`-vv`/`-vvv` | `EnvFilter` syntax (e.g. `adept_agent::llm::client=trace`). Overrides the `-v` count wholesale. Adept's own namespace, not `RUST_LOG`. |
 
@@ -862,6 +862,14 @@ tracing output and no capture artifact, including when smuggled into a prompt.
 - **The API key never leaves `RedactedString`.** `Debug` and `Display` both
   render `****`. `Authorization` is omitted entirely from captured metadata;
   `run_metadata.json` carries only `api_key_present: bool`.
+- **A credential-bearing `base_url` is rejected at config resolution, not
+  scrubbed at each egress.** `LlmConfig::resolve` returns
+  `ConfigError::CredentialsInBaseUrl` when the resolved `base_url` parses with
+  non-empty `username()` or a `password()`, closing the three egresses a
+  userinfo-carrying URL previously reached — `LlmError::Request`'s `Display`
+  (via reqwest), the matching `tracing` event, and `RunMetadata.base_url` on
+  disk — by construction rather than per-site sanitization. See §7 and
+  `docs/BACKLOG.md`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O
   error.
 - **Rule codes are permanent and never reused.** Retired codes stay retired and

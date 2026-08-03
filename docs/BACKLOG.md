@@ -428,6 +428,23 @@ Recorded 2026-07-31.
   is in scope, so a future fifth consumer is covered by default. The other
   body-bearing variant, `MalformedResponse`, carries only `serde_json`'s
   message, which does not embed the input.
+- **Resolved: a credential-bearing `base_url` leaked userinfo via three
+  egresses.** `LlmError::Request(e.to_string())` embeds reqwest's URL
+  serialization (including `user:password@`) via `Display`, reaching stderr
+  and a `tracing` event; `RunMetadata.base_url` wrote the same value verbatim
+  into capture artifacts on disk. Per-egress sanitization was considered and
+  rejected for the same reason as the fix for `LlmError::Status` above (#31):
+  it is the exact shape that let that one ship unscrubbed, and it cannot cover
+  URL logging performed by `reqwest` or a
+  transitive dependency, which is not adept's code to scrub. Fixed by
+  rejecting credentials at `LlmConfig::resolve` instead — a `base_url` whose
+  parsed `username()`/`password()` is non-empty now returns
+  `ConfigError::CredentialsInBaseUrl` before it can reach any egress, making
+  `resolved.base_url` credential-free by construction rather than sanitized at
+  each of the three sites. `LlmError` also gained `#[non_exhaustive]` so it can
+  no longer be constructed or exhaustively matched from outside `adept-agent`.
+  Breaking on both counts: a previously-working `base_url` now exits 2, and
+  external code matching on `LlmError` needs a wildcard arm.
 
 ## Pre-publish checklist
 
