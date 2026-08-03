@@ -167,10 +167,10 @@ impl EvalReport {
                     out.push_str(&format!("  skipped: {reason} ({count})\n"));
                 }
             }
-            if !evals.out_of_range_results.is_empty() {
+            if !evals.unknown_result_ids.is_empty() {
                 out.push_str(&format!(
-                    "  out-of-range result cases: {:?}\n",
-                    evals.out_of_range_results
+                    "  results with unknown case id: {:?}\n",
+                    evals.unknown_result_ids
                 ));
             }
             if !evals.unmatched_cases.is_empty() {

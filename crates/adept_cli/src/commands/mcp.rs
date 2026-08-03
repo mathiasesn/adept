@@ -1293,7 +1293,7 @@ mod tests {
         std::fs::create_dir_all(&evals_dir).unwrap();
         std::fs::write(
             evals_dir.join("evals.jsonl"),
-            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+            "{\"schema_version\":2,\"id\":\"p-1\",\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
         )
         .unwrap();
         path
@@ -1468,7 +1468,7 @@ mod tests {
 
         let arguments = json!({
             "path": path.to_str().unwrap(),
-            "results": [ { "case": 1, "response": "it is ok" } ],
+            "results": [ { "id": "p-1", "response": "it is ok" } ],
         });
         let (text, is_error) = eval_skill_tool(&arguments);
         assert!(!is_error, "grading-only eval_skill call failed: {text}");
@@ -1538,7 +1538,7 @@ mod tests {
 
         let arguments = json!({
             "content": SAMPLE_SKILL,
-            "results": [ { "case": 1, "response": "it is ok" } ],
+            "results": [ { "id": "p-1", "response": "it is ok" } ],
             "evals": "does-not-matter.jsonl",
         });
 
@@ -1549,7 +1549,7 @@ mod tests {
         let dataset_path = dir.path().join("evals.jsonl");
         std::fs::write(
             &dataset_path,
-            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[\
+            "{\"schema_version\":2,\"id\":\"p-1\",\"prompt\":\"p\",\"assertions\":[\
              {\"kind\":\"contains\",\"value\":\"ok\"},\
              {\"kind\":\"file_exists\",\"path\":\"out.txt\"}]}\n",
         )
