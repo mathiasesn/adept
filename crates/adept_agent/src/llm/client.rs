@@ -175,6 +175,7 @@ impl ChatResponse {
 }
 
 /// Errors that can occur while talking to an LLM backend.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
     /// The underlying HTTP request failed (connection error, DNS, etc).
@@ -187,6 +188,7 @@ pub enum LlmError {
 
     /// The backend returned a non-2xx status code.
     #[error("backend returned status {status}: {body}")]
+    #[non_exhaustive]
     Status {
         /// The HTTP status code.
         status: u16,
@@ -271,6 +273,14 @@ pub enum ConfigError {
         "no model configured: set ADEPT_MODEL, pass --model, or set LlmConfig::model explicitly"
     )]
     MissingModel,
+
+    /// `base_url` embedded userinfo credentials (`user:pass@host`), which
+    /// would otherwise leak into error messages, tracing output, and
+    /// on-disk capture artifacts.
+    #[error(
+        "base_url must not embed credentials: set ADEPT_API_KEY or the [section] api_key setting instead"
+    )]
+    CredentialsInBaseUrl,
 }
 
 impl LlmConfig {
@@ -285,13 +295,22 @@ impl LlmConfig {
     ///
     /// # Errors
     /// Returns [`ConfigError::MissingModel`] if no model is resolved from
-    /// any source.
+    /// any source, or [`ConfigError::CredentialsInBaseUrl`] if the resolved
+    /// `base_url` embeds userinfo credentials.
     pub fn resolve(&self) -> Result<ResolvedLlmConfig, ConfigError> {
         let base_url = self
             .base_url
             .clone()
             .or_else(|| std::env::var(ENV_BASE_URL).ok())
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+        // Reject userinfo credentials embedded in the URL (`user:pass@host`);
+        // a `base_url` that merely fails to parse is left to fail later at
+        // request-build time, not rejected here.
+        if let Ok(parsed) = reqwest::Url::parse(&base_url) {
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                return Err(ConfigError::CredentialsInBaseUrl);
+            }
+        }
         let api_key = self
             .api_key
             .clone()
@@ -1015,5 +1034,60 @@ mod tests {
 
         std::env::remove_var(ENV_MODEL);
         std::env::remove_var(ENV_BASE_URL);
+    }
+
+    #[test]
+    fn resolve_rejects_credentials_in_base_url() {
+        let username_only = LlmConfig {
+            base_url: Some("https://user@gw.example/v1".to_string()),
+            model: Some("m".to_string()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            username_only.resolve(),
+            Err(ConfigError::CredentialsInBaseUrl)
+        ));
+
+        let password_only = LlmConfig {
+            base_url: Some("https://:sekret@gw.example/v1".to_string()),
+            model: Some("m".to_string()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            password_only.resolve(),
+            Err(ConfigError::CredentialsInBaseUrl)
+        ));
+
+        let both = LlmConfig {
+            base_url: Some("https://user:sekret@gw.example/v1".to_string()),
+            model: Some("m".to_string()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            both.resolve(),
+            Err(ConfigError::CredentialsInBaseUrl)
+        ));
+    }
+
+    #[test]
+    fn resolve_allows_base_url_without_credentials() {
+        let clean = LlmConfig {
+            base_url: Some("https://gw.example/v1".to_string()),
+            model: Some("m".to_string()),
+            ..Default::default()
+        };
+        let resolved = clean.resolve().unwrap();
+        assert_eq!(resolved.base_url, "https://gw.example/v1");
+    }
+
+    #[test]
+    fn resolve_allows_unparseable_base_url() {
+        let malformed = LlmConfig {
+            base_url: Some("not a url".to_string()),
+            model: Some("m".to_string()),
+            ..Default::default()
+        };
+        let resolved = malformed.resolve().unwrap();
+        assert_eq!(resolved.base_url, "not a url");
     }
 }
