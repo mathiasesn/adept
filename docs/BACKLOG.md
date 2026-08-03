@@ -387,12 +387,6 @@ ARCHI §10/§16 describe the shipped shape.
 
 **Also deferred, from the same unification work:**
 
-- **Dataset cases are referenced by 1-indexed line number, which is brittle
-  (#29).** `CaseResult::case` names a case by its position in
-  `evals/evals.jsonl`. A harness that reorders, filters, or regenerates a subset
-  can make a `case` number silently point at the wrong case, undetectably.
-  Content-addressed ids would fix it but need a dataset `schema_version` bump.
-  Revisit if a harness author reports this biting.
 - Run-history storage (#23, upskill item 3) was explicitly out of scope there.
 
 ## Tracing & capture follow-ups
