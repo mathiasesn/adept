@@ -179,6 +179,12 @@ impl EvalReport {
                     evals.unmatched_cases
                 ));
             }
+            if !evals.ambiguous_case_ids.is_empty() {
+                out.push_str(&format!(
+                    "  ambiguous case ids (empty or duplicated, not graded): {:?}\n",
+                    evals.ambiguous_case_ids
+                ));
+            }
             if let (Some(tin), Some(tout)) = (evals.tokens_in, evals.tokens_out) {
                 out.push_str(&format!("tokens: {tin} in / {tout} out\n"));
             }

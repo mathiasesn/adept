@@ -154,7 +154,7 @@ only. Also JSONL: one `adept::evals::CaseResult` per line, blank lines skipped.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `id` | yes | Which dataset case this is for, by `EvalCase::id`. An `id` absent from the dataset is reported in `unknown_result_ids`, never graded against an arbitrary case. |
+| `id` | yes | Which dataset case this is for, by `EvalCase::id`. An `id` absent from the dataset is reported in `unknown_result_ids`, never graded against an arbitrary case. An `id` that is empty or shared by more than one dataset case is *ambiguous* and is reported in `ambiguous_case_ids` instead — see below. |
 | `arm` | no | `"skill"` (default) or `"baseline"`. The baseline arm is what makes skill lift computable; a file that never mentions arms is graded as all-`skill`. |
 | `response` | yes | The agent's response text, graded by `contains`. |
 | `cwd` | no | Working directory the case ran in. `file_exists`/`file_contains` resolve against it; absent means those are `skipped`. |
@@ -194,6 +194,18 @@ companion-path sandboxing `adept_agent` uses elsewhere.
   dataset, or a dataset case with no `skill`-arm result, is reported
   explicitly (`unknown_result_ids` / `unmatched_cases`, both `id`-valued),
   never silently ignored.
+- **Ambiguous case ids** — `grade` does not trust its caller to have run
+  `validate` first. If `cases` itself contains an empty id, or an id shared
+  by more than one case, that id is ambiguous: it is excluded from the
+  id → case lookup entirely, and any result naming it is neither graded
+  against one arbitrary member of the duplicate set nor counted as
+  `unknown_result_ids` (it *is* a real id, just not a safe one to resolve).
+  Ambiguous ids are collected into `ambiguous_case_ids` (sorted,
+  deduplicated) so a dataset that skipped `validate` fails loud instead of
+  misgrading silently — this is the specific ambiguity content-addressed
+  case ids exist to remove. A case whose id is ambiguous never appears in
+  `unmatched_cases` either, since it was never a candidate for matching in
+  the first place.
 
 ### Skip semantics
 

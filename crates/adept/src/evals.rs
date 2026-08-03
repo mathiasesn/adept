@@ -26,7 +26,7 @@
 //! names via a supplied working directory, never anything it spawns or
 //! discovers on its own.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use serde::de::DeserializeOwned;
@@ -323,7 +323,7 @@ fn validate_parsed_refs(cases: &[(usize, &EvalCase)]) -> Result<(), EvalError> {
             return Err(EvalError::EmptyId { line: *line });
         }
     }
-    let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut seen_ids: HashSet<&str> = HashSet::new();
     for (line, case) in cases {
         if !seen_ids.insert(case.id.as_str()) {
             return Err(EvalError::DuplicateId {
@@ -501,6 +501,15 @@ pub struct EvalBenchmarkReport {
     pub unknown_result_ids: Vec<String>,
     /// Dataset case ids that had no `skill`-arm result at all.
     pub unmatched_cases: Vec<String>,
+    /// Dataset case ids that are ambiguous — either empty, or shared by more
+    /// than one case — as found among the `cases` passed to [`grade`]. A
+    /// result naming one of these ids is never graded against an arbitrary
+    /// member of the ambiguous set; it is reported here instead. Sorted and
+    /// deduplicated, so output is stable regardless of `cases` order. This
+    /// is distinct from [`Self::unknown_result_ids`]: "no such id" and "more
+    /// than one such id" are different diagnoses a harness author needs to
+    /// tell apart.
+    pub ambiguous_case_ids: Vec<String>,
 }
 
 /// Grade `results` (typically parsed via [`parse_results_jsonl`]) against
@@ -510,9 +519,14 @@ pub struct EvalBenchmarkReport {
 /// from `cases`, so reordering `cases` never changes which case a given
 /// result grades against. A result whose `id` is absent from the dataset is
 /// reported in [`EvalBenchmarkReport::unknown_result_ids`], never graded
-/// against an arbitrary case. If `cases` itself contains duplicate ids (a
-/// dataset that skipped [`validate`]), the last case with a given id wins
-/// the lookup.
+/// against an arbitrary case.
+///
+/// `grade` does not trust its caller to have run [`validate`] first: if
+/// `cases` itself contains an empty id, or an id shared by more than one
+/// case, that id is ambiguous and is never used to resolve a result. Such
+/// ids are collected into [`EvalBenchmarkReport::ambiguous_case_ids`]
+/// instead, and any result naming one is reported there rather than graded
+/// against an arbitrary member of the duplicate set.
 ///
 /// Purely offline and deterministic: a substring match, filesystem reads
 /// resolved against each result's `cwd`, and a lookup into
@@ -521,9 +535,25 @@ pub struct EvalBenchmarkReport {
 #[must_use]
 pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport {
     let mut report = EvalBenchmarkReport::default();
+
+    let mut id_counts: HashMap<&str, usize> = HashMap::new();
+    for case in cases {
+        *id_counts.entry(case.id.as_str()).or_insert(0) += 1;
+    }
+    let ambiguous_ids: HashSet<&str> = id_counts
+        .iter()
+        .filter(|(id, count)| id.is_empty() || **count > 1)
+        .map(|(id, _)| *id)
+        .collect();
+    report.ambiguous_case_ids = ambiguous_ids.iter().map(|id| (*id).to_string()).collect();
+    report.ambiguous_case_ids.sort();
+    report.ambiguous_case_ids.dedup();
+
     let mut id_to_index: HashMap<&str, usize> = HashMap::new();
     for (idx, case) in cases.iter().enumerate() {
-        id_to_index.insert(case.id.as_str(), idx);
+        if !ambiguous_ids.contains(case.id.as_str()) {
+            id_to_index.insert(case.id.as_str(), idx);
+        }
     }
     let mut skill_seen = vec![false; cases.len()];
     let (mut skill_pass, mut skill_total) = (0usize, 0usize);
@@ -532,6 +562,11 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
     let mut any_tokens = false;
 
     for result in results {
+        if ambiguous_ids.contains(result.id.as_str()) {
+            // Already surfaced in `ambiguous_case_ids`; refuse to grade
+            // against an arbitrary member of the duplicate set.
+            continue;
+        }
         let Some(&index) = id_to_index.get(result.id.as_str()) else {
             report.unknown_result_ids.push(result.id.clone());
             continue;
@@ -571,7 +606,7 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
     }
 
     for (idx, seen) in skill_seen.iter().enumerate() {
-        if !seen {
+        if !seen && !ambiguous_ids.contains(cases[idx].id.as_str()) {
             report.unmatched_cases.push(cases[idx].id.clone());
         }
     }
@@ -1233,6 +1268,66 @@ mod tests {
         assert_eq!(forward_report.pass_rate, reordered_report.pass_rate);
         assert!(forward_report.unmatched_cases.is_empty());
         assert!(reordered_report.unmatched_cases.is_empty());
+
+        // Full per-assertion outcome vectors, not just the pass bit, so a
+        // reordering bug that flipped an individual assertion while
+        // preserving the overall pass/fail result would still be caught.
+        let assertions_by_case =
+            |report: &EvalBenchmarkReport| -> BTreeMap<String, Vec<AssertionResult>> {
+                report
+                    .cases
+                    .iter()
+                    .map(|c| (c.case.clone(), c.assertions.clone()))
+                    .collect()
+            };
+        assert_eq!(
+            assertions_by_case(&forward_report),
+            assertions_by_case(&reordered_report)
+        );
+    }
+
+    #[test]
+    fn grade_reports_duplicate_ids_as_ambiguous_and_grades_neither_case() {
+        // Two cases sharing an id (a dataset that skipped `validate`): both
+        // must be reported as ambiguous, and a result naming that id must
+        // not be silently graded against whichever one `HashMap::insert`
+        // happened to keep last.
+        let cases = vec![contains_case("a", "hello"), contains_case("a", "goodbye")];
+        let results = vec![skill_result("a", "hello there")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.ambiguous_case_ids, vec!["a".to_string()]);
+        assert!(report.cases.is_empty());
+        assert_eq!(report.pass_rate, 0.0);
+        assert!(report.unmatched_cases.is_empty());
+        assert!(report.unknown_result_ids.is_empty());
+    }
+
+    #[test]
+    fn grade_reports_empty_ids_as_ambiguous_and_grades_neither_case() {
+        // Even a single case with an empty id is not a safe grading target:
+        // it is not a case-identifying id at all.
+        let cases = vec![contains_case("", "hello"), contains_case("b", "world")];
+        let results = vec![skill_result("", "hello there"), skill_result("b", "world")];
+        let report = grade(&cases, &results);
+        assert_eq!(report.ambiguous_case_ids, vec!["".to_string()]);
+        assert_eq!(report.cases.len(), 1);
+        assert_eq!(report.cases[0].case, "b");
+        assert!(report.unknown_result_ids.is_empty());
+    }
+
+    #[test]
+    fn grade_normal_path_is_unaffected_by_ambiguity_defense() {
+        let cases = vec![contains_case("a", "hello"), contains_case("b", "world")];
+        let results = vec![
+            skill_result("a", "hello there"),
+            skill_result("b", "world wide"),
+        ];
+        let report = grade(&cases, &results);
+        assert!(report.ambiguous_case_ids.is_empty());
+        assert_eq!(report.cases.len(), 2);
+        assert_eq!(report.pass_rate, 1.0);
+        assert!(report.unmatched_cases.is_empty());
+        assert!(report.unknown_result_ids.is_empty());
     }
 
     #[test]

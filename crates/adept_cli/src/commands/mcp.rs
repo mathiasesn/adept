@@ -1475,6 +1475,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert!(parsed.get("triggering").is_none());
         assert_eq!(parsed["evals"]["pass_rate"], 1.0);
+        // Acceptance criterion 8: MCP `eval_skill` reports case ids, not
+        // line numbers — assert the id actually reaches the client, not
+        // just that it round-trips through serde in isolation.
+        assert_eq!(parsed["evals"]["cases"][0]["case"], "p-1");
     }
 
     /// Regression test for the MCP counterpart of the CLI fix in commit
