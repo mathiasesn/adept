@@ -196,7 +196,9 @@ fn already_formatted_fixture_is_byte_identical() {
 /// ATX. This is a separate test (not folded into
 /// `snapshots_and_invariants_hold_for_every_fixture`, which only ever runs
 /// `FmtConfig::default()`) so both configured styles get their own
-/// reviewed snapshot for the same source.
+/// reviewed snapshot for the same source. The default `heading-style =
+/// "atx"` fixture snapshot (`format_tests__setext_headings.snap`, produced
+/// by that shared loop) exercises the same source under the default style.
 #[test]
 fn setext_fixture_round_trips_under_setext_heading_style() {
     let source = fs::read_to_string(fixtures_dir().join("setext_headings.md")).unwrap();
@@ -232,13 +234,29 @@ fn setext_fixture_round_trips_under_setext_heading_style() {
         formatted.contains("### Atx H3"),
         "h3 should still print as ATX:\n{formatted}"
     );
+
+    // Headings whose text starts with a block-marker-like word (`>`, an
+    // ordered-list marker, a bullet marker, a bare `#` run) must fall back
+    // to ATX rather than being emitted in setext form: on setext's own line
+    // (no leading `# `), such a word would be reparsed as a
+    // blockquote/list/heading opener on the very next pass, silently
+    // destroying the heading and breaking idempotency (see the printer's
+    // `first_word_marker_like` fallback in `print_block`). Assert both that
+    // the heading survives (level + text intact, as ATX) and that nothing
+    // upstream of it got misparsed as a blockquote/list/thematic-break.
+    for (text, expected_atx) in [
+        ("> quoted heading", "## > quoted heading"),
+        ("1. numbered heading", "## 1. numbered heading"),
+        ("- dashed heading", "## - dashed heading"),
+        ("# hash heading", "## # hash heading"),
+    ] {
+        assert!(
+            formatted.contains(expected_atx),
+            "heading {text:?} should have fallen back to ATX (found no {expected_atx:?}):\n{formatted}"
+        );
+    }
 }
 
-/// The default `heading-style = "atx"` fixture snapshot
-/// (`format_tests__setext_headings.snap`, produced by the shared
-/// `snapshots_and_invariants_hold_for_every_fixture` loop) exercises the
-/// same source under the default style, so both configured styles have a
-/// reviewed snapshot for it.
 #[test]
 fn crlf_input_is_handled() {
     let lf = fs::read_to_string(fixtures_dir().join("headings.md")).unwrap();

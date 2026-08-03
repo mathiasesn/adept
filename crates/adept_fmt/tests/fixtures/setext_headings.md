@@ -15,3 +15,21 @@ more text
 ### Atx H3
 
 done
+
+## > quoted heading
+
+Text whose leading word is block-marker-like must not be emitted in setext
+form: reparsed, `> quoted heading` on its own line would read as a
+blockquote, not a heading.
+
+## 1. numbered heading
+
+Same hazard, ordered-list-marker shaped.
+
+## - dashed heading
+
+Same hazard, bullet-marker shaped.
+
+## # hash heading
+
+Same hazard, a bare `#` run.

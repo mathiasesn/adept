@@ -57,16 +57,27 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
             // both matches "today's behaviour is unchanged" under the
             // (default) Atx style and makes the choice trivially
             // idempotent.
-            if cfg.heading_style == HeadingStyle::Setext && level <= 2 {
+            //
+            // Setext form puts the heading text on its own line with no
+            // leading marker (unlike ATX's `# `), so a text whose first word
+            // is itself block-marker-like (`> ...`, `1. ...`, `- ...`, a
+            // bare `#` run, ...) would be reparsed as a blockquote/list/etc.
+            // on the very next line, with the underline then read as an
+            // unrelated thematic break — silently destroying the heading and
+            // breaking idempotency. Rather than backslash-escaping into the
+            // heading text (lossy/surprising for a heading's own words),
+            // fall back to ATX for that one heading: ATX's leading `# ` can
+            // never itself be reparsed as something else, so it's always a
+            // safe fallback, the same way h3+ already falls back to ATX.
+            let first_word_marker_like = text.split_whitespace().next().is_some_and(marker_like);
+            if cfg.heading_style == HeadingStyle::Setext
+                && level <= 2
+                && !text.is_empty()
+                && !first_word_marker_like
+            {
                 let underline_char = if level == 1 { '=' } else { '-' };
-                if text.is_empty() {
-                    // An empty setext underline would parse back as a
-                    // thematic break / nothing at all; fall back to ATX.
-                    vec!["#".repeat(level as usize)]
-                } else {
-                    let underline = underline_char.to_string().repeat(text.chars().count());
-                    vec![text, underline]
-                }
+                let underline = underline_char.to_string().repeat(text.chars().count());
+                vec![text, underline]
             } else {
                 let hashes = "#".repeat(level as usize);
                 if text.is_empty() {
@@ -393,16 +404,19 @@ fn looks_like_html_start(word: &str) -> bool {
 }
 
 /// Backslash-escape the punctuation in `word` that would otherwise trigger
-/// block-level reparsing if it started a line (see `marker_like`). All
-/// escaped characters are CommonMark-escapable, so this is
+/// block-level reparsing if it started a line (see `marker_like`). Most
+/// escaped characters are CommonMark-escapable, so escaping them is
 /// meaning-preserving: the escaped form re-parses as the literal character,
 /// e.g. `\-`, `\>`, `\##`, `\===` (escaping just the leading `=` already
 /// stops the rest from reading as a setext underline), `\***`, `\___`,
 /// `\|`, `\<div>`, `\[label]:`. The 4-space-indent backstop is the one
-/// exception: a leading space is not itself CommonMark-escapable, but
-/// prefixing it with `\` still defuses the hazard, since the line then
-/// starts with a non-space character and no longer carries 4 columns of
-/// leading indentation.
+/// exception, and it is *not* meaning-preserving: a leading space is not
+/// itself CommonMark-escapable, so `\` + space renders as a literal
+/// backslash rather than disappearing. It still defuses the reparse hazard
+/// (the line no longer carries 4 columns of leading indentation), which is
+/// all this backstop is for — this arm is currently unreachable in practice
+/// (see `marker_like`'s 4-space-indent comment), kept only so the function
+/// stays total if that ever changes.
 fn escape_line_start(word: &str) -> String {
     if let Some(rest) = word.strip_suffix('.').or_else(|| word.strip_suffix(')')) {
         let marker = &word[rest.len()..];
@@ -605,10 +619,21 @@ mod tests {
     // covered from day one rather than silently falling through.
 
     #[test]
-    fn four_space_indent_is_marker_like_and_escapes_to_non_space_start() {
+    fn four_space_indent_is_marker_like_and_backstop_defuses_reparse_but_is_lossy() {
+        // This backstop is not meaning-preserving (see `escape_line_start`'s
+        // doc comment): a leading space isn't CommonMark-escapable, so
+        // `\` + space renders as a literal backslash rather than
+        // disappearing. What it actually guarantees is that the escaped
+        // line no longer opens with 4 columns of indentation, so it can't
+        // be misread as an indented code block on reparse — not that the
+        // rendered text is unchanged.
         assert!(marker_like("    code"));
         let escaped = escape_line_start("    code");
-        assert!(!escaped.starts_with(' '), "escaped form: {escaped}");
+        assert!(!escaped.starts_with("    "), "escaped form: {escaped}");
+        assert!(
+            escaped.starts_with('\\'),
+            "escaped form should visibly carry the lossy backslash: {escaped}"
+        );
     }
 
     #[test]
