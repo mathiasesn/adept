@@ -411,16 +411,20 @@ credentials is rejected at resolution, never accepted and scrubbed later. A
 value that fails to parse at all is left alone and still fails downstream at
 `RequestBuilder::build`; the check targets userinfo only.
 
-Every caller of `resolve()` decides what "an LLM is configured" means through
-one shared predicate, `adept_cli::config::llm_available`: it maps `Ok(_)` and
+Callers asking the yes/no question "is an LLM configured?" go through one shared
+predicate, `adept_cli::config::llm_available`: it maps `Ok(_)` and
 `Err(ConfigError::CredentialsInBaseUrl)` both to `true` (the user did point at
-an endpoint; only `MissingModel` means "no model") and is exhaustive, so a
-future `ConfigError` variant is a compile error here rather than a silent
-fallthrough. Four call sites share it:
+an endpoint; only `MissingModel` means "no model"). Callers that instead need to
+*report* the failure match `ConfigError` directly to choose their wording. Both
+kinds match exhaustively, so a future `ConfigError` variant is a compile error
+rather than a silent fallthrough. Four consumers, three of them sharing the
+predicate:
 
 - `resolve_llm_client` (`adept_cli::config`) — used by the `eval`/`fix` CLI
-  commands. On `CredentialsInBaseUrl` it prints credential-specific guidance
-  naming `api_key` instead of the generic model-guidance text, and exits `2`.
+  commands. The one consumer that does *not* use the predicate: it matches the
+  variants directly, because it reports rather than classifies. On
+  `CredentialsInBaseUrl` it prints credential-specific guidance naming
+  `api_key` instead of the generic model-guidance text, and exits `2`.
 - `probe_model_available` (`adept_cli::commands::eval`) — the CLI's
   triggering/token-bloat/overlap precondition check. Also exits `2` on
   `CredentialsInBaseUrl`, via the same path as `resolve_llm_client`.
@@ -911,11 +915,12 @@ tracing output and no capture artifact, including when smuggled into a prompt.
   disk — by construction rather than per-site sanitization. `ResolvedLlmConfig`
   and the `LlmError::Request`/`MalformedResponse` variants are
   `#[non_exhaustive]`, so `resolve()` is the only way to build one from outside
-  the crate — a struct literal can't bypass the check. All four consumers
-  (`resolve_llm_client`, `probe_model_available`, and the two MCP call sites in
-  `commands/mcp.rs`) route the decision through the shared
-  `adept_cli::config::llm_available` predicate; the CLI paths exit `2`, the MCP
-  paths surface it as a per-call tool error (no exit code). See §7, §12, and
+  the crate — a struct literal can't bypass the check. Of the four consumers,
+  `probe_model_available` and the two MCP call sites in `commands/mcp.rs` share
+  the `adept_cli::config::llm_available` predicate, while `resolve_llm_client`
+  matches the variants directly to pick its guidance text; the CLI paths exit
+  `2`, the MCP paths surface it as a per-call tool error (no exit code). Every
+  one of these matches is exhaustive. See §7, §12, and
   `docs/BACKLOG.md`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O
   error.
