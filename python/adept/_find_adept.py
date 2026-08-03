@@ -23,22 +23,24 @@ def _is_script_entry(relative_path: str, exe_name: str) -> bool:
     `RECORD` also lists the `adept/` package's own files (including
     `__pycache__/*.pyc`) and the `*.dist-info/` metadata directory, so a
     same-named file can appear there too; both are excluded on their leading
-    path segment.
+    path segment. `relative_path` comes from a `PackagePath` (a
+    `PurePosixPath` parsed from RECORD), so it is always `/`-separated, even
+    on Windows.
     """
     if os.path.basename(relative_path) != exe_name:
         return False
-    first_segment = relative_path.replace("\\", "/").split("/", 1)[0]
+    first_segment = relative_path.split("/", 1)[0]
     return first_segment != "adept" and not first_segment.endswith(".dist-info")
 
 
 def find_adept_bin() -> str:
     """Return the path to the `adept` binary installed by this package.
 
-    Resolved from the installing distribution's `RECORD`: every install
-    layout (venv, `--target`, `--prefix`, `uv tool install`, ...) records
-    where it put the script, so reading that record replaces probing
-    candidate directories. Raises `AdeptNotFound` for each of the distinct
-    ways that lookup can fail; there is no fallback to a guessed path.
+    Reads the `adept` distribution's own `RECORD` (every install layout —
+    venv, `--target`, `--prefix`, `uv tool install`, ... — records where it
+    put the script) and resolves that entry to a filesystem path. Raises
+    `AdeptNotFound` for each of the distinct ways that lookup can fail; there
+    is no fallback to a guessed path.
     """
     exe_name = "adept" + (sysconfig.get_config_var("EXE") or "")
 

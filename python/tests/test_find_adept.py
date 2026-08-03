@@ -96,6 +96,10 @@ def test_target_install_resolves_sibling_bin_entry(tmp_path, monkeypatch):
         files=[
             "adept/__init__.py",
             "adept-0.1.0.dist-info/RECORD",
+            # A same-directory, differently-named entry ahead of the script
+            # entry: pins that selection also checks the basename, not just
+            # the leading path segment.
+            "bin/other-tool",
             f"bin/{EXE_NAME}",
         ],
     )
@@ -146,7 +150,15 @@ def test_no_matching_entry_raises(tmp_path, monkeypatch):
 
 
 def test_matched_entry_missing_file_raises(tmp_path, monkeypatch):
-    """RECORD names a script entry, but no file exists at the resolved path."""
+    """RECORD names a script entry, but no file exists at the resolved path.
+
+    A decoy binary sits elsewhere on disk, at a location RECORD never
+    mentions, to pin that a missing RECORD-named file is never papered over
+    by finding something else nearby.
+    """
+    decoy = tmp_path / "somewhere-else" / "bin" / EXE_NAME
+    _make_binary(decoy)
+
     dist = _FakeDistribution(
         root=tmp_path,
         files=[
@@ -161,26 +173,6 @@ def test_matched_entry_missing_file_raises(tmp_path, monkeypatch):
 
 
 # --- escape prevention ------------------------------------------------------
-
-
-def test_decoy_outside_install_tree_is_never_returned(tmp_path, monkeypatch):
-    """A binary sitting outside what RECORD names must never be returned, even
-    when RECORD's own script entry does not resolve to a real file.
-    """
-    decoy = tmp_path / "somewhere-else" / "bin" / EXE_NAME
-    _make_binary(decoy)
-
-    dist = _FakeDistribution(
-        root=tmp_path / "X",
-        files=[
-            "adept/__init__.py",
-            f"bin/{EXE_NAME}",
-        ],
-    )
-    _patch_distribution(monkeypatch, dist)
-
-    with pytest.raises(AdeptNotFound):
-        find_adept_bin()
 
 
 def test_decoy_under_package_or_dist_info_is_never_returned(tmp_path, monkeypatch):
