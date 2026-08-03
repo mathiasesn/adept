@@ -54,6 +54,26 @@ cargo build --release -p adept
 ./target/release/adept --help
 ```
 
+### Python / `uv`
+
+`adept` isn't on PyPI (the name is taken by an unrelated, abandoned
+package), so install it straight from the GitHub repo with `uv`:
+
+```bash
+uv tool install git+https://github.com/mathiasesn/adept
+```
+
+Or run it once, without installing, via `uvx`:
+
+```bash
+uvx --from git+https://github.com/mathiasesn/adept adept check <path>
+```
+
+This is a source build — a Rust toolchain must be installed, and `uv`
+compiles the whole workspace, which takes minutes rather than seconds.
+`python -m adept` also works once installed, and forwards to the same
+binary.
+
 ## `adept check`
 
 Lints one or more `SKILL.md` files or directories of skills.

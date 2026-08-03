@@ -32,5 +32,18 @@ target
 # Local task specs
 /specs/
 
+# Python build artifacts. The root-only ones are anchored so a nested
+# `build/` or `dist/` elsewhere in the tree stays visible.
+__pycache__/
+*.pyc
+*.egg-info/
+/dist/
+/build/
+/.venv/
+
+# Nothing consumes a lockfile: there are no Python runtime dependencies and
+# CI installs with `uv pip install .`, never `uv sync`.
+/uv.lock
+
 # Environment variables
 .env

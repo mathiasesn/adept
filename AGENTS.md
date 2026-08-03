@@ -39,7 +39,7 @@ cargo run -q -p adept -- check <path>
 cargo bench -p adept-core --bench lint_100_skills -- --quick
 ```
 
-CI runs the four workspace commands above, then a perf smoke test that parses the criterion `lint_100_skills` line and fails above **500ms** (observed ~23ms; 1s is the acceptance criterion, 500ms is the gate).
+CI runs the four workspace commands above, then a perf smoke test that parses the criterion `lint_100_skills` line and fails above **500ms** (observed ~23ms; 1s is the acceptance criterion, 500ms is the gate), then a separate `python-packaging` job (ubuntu-only) that builds the maturin wheel, installs it with `uv`, and asserts `adept --version` and `python -m adept --version` agree and match `[workspace.package].version`, then runs `python/tests` under pytest (the one test suite `cargo test --workspace` does not reach).
 
 ## Architecture
 
@@ -65,7 +65,7 @@ Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml
 - **`check`, `fmt`, and eval-dataset grading never touch the network.** The `triggering`, `token-bloat`, and `overlap` analyses do, and they run only when a model is configured; `adept eval --select evals` makes no network call and requires no API key. No test may perform network I/O — use `adept_agent::MockLlmClient`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O error.
 - **MCP stdout carries only JSON-RPC.** All logging goes to stderr; a stray `println!` in `commands/mcp.rs` breaks every client silently. `handle_message` stays I/O-pure. The MCP `create_skill`/`generate_evals` tools are preview-only and never write to disk; `eval_skill` is read-only (also never writes) and, unlike those two, is always advertised regardless of whether a model is configured.
-- **adept spawns no subprocess, ever.** Not `check`/`fmt`/`eval`/`fix`, not `create` (the `command` eval assertion is defined and validated, never executed). Eval-dataset grading judges a `command` assertion only from a harness-supplied exit code.
+- **The adept binary spawns no subprocess, ever.** Not `check`/`fmt`/`eval`/`fix`, not `create` (the `command` eval assertion is defined and validated, never executed). Eval-dataset grading judges a `command` assertion only from a harness-supplied exit code. The rule is about the Rust binary; the Python distribution shim that dispatches *to* it (`python/adept/__main__.py`) is out of its scope — see `docs/ARCHI.md` §6.
 - **Rule codes are permanent and never reused.** `SL202` is retired and stays retired so old configs fail closed.
 - **One parser-construction site.** All markdown goes through `adept::markdown::parser()`, the sole caller of `Parser::new_ext` (`crates/adept/src/markdown/mod.rs`); `grep -rn "Parser::new" crates/` must keep yielding exactly one hit, or the linter and formatter drift on what a heading is.
 - **Never load BPE tables outside `token.rs::load_bpe`** (caches the `Result` too). Expensive objects are built once in `static OnceLock`, which is why `Rule: Send + Sync`.

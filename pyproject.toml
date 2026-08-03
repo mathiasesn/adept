@@ -1,0 +1,37 @@
+[build-system]
+requires = ["maturin>=1.9,<2", "patchelf; sys_platform == 'linux'"]
+build-backend = "maturin"
+
+[project]
+name = "adept"
+description = "An extremely fast linter and formatter for Agent Skills"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dynamic = ["version"]
+keywords = ["agent", "skills", "linter", "formatter", "llm"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.urls]
+Repository = "https://github.com/mathiasesn/adept"
+
+[tool.maturin]
+bindings = "bin"
+manifest-path = "crates/adept_cli/Cargo.toml"
+python-source = "python"
+strip = true
+exclude = [
+    "crates/*/tests/**",
+    "crates/*/benches/**",
+    "**/*.snap",
+    "**/snapshots/**",
+]
