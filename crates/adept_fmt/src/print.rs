@@ -264,23 +264,60 @@ fn wrap_paragraph(inline: &[Inline], cfg: &FmtConfig) -> Vec<String> {
 /// True when `word` would be interpreted as CommonMark block-starting syntax
 /// were it to appear as the first token on a line — a bullet/blockquote/ATX
 /// heading marker, an ordered-list marker, a thematic break (`---`, `***`,
-/// `___`), or a setext underline (`===`, or a lone `-`). Used by
-/// `wrap_tokens` to keep reflow idempotent: width-only line breaking can
-/// otherwise strand a mid-sentence marker-shaped token (e.g. a bare `-` or a
-/// `***` separator) at the start of a wrapped continuation line, silently
-/// turning prose into a list/heading/rule on the next pass (the "leaning
-/// toothpick" bug). Note this is intentionally unconditional — it does not
-/// matter whether more content follows on the line, since a paragraph's
-/// genuine first token can never itself be marker-like (the source would
-/// have parsed as a list/blockquote/heading/etc. instead, not a paragraph),
-/// so `wrap_tokens` only ever needs to keep marker-like tokens off of
-/// *wrapped* line starts — forbidding them unconditionally is simplest and
-/// only costs an occasional over-width line, same as long words/URLs.
+/// `___`), a setext underline (`===`, or a lone `-`), a GFM table row
+/// (`|...`), an HTML block start (`<div>`, `<!--`, `</p>`, ...), a
+/// link-reference definition (`[label]:...`), or a 4-space-indented code
+/// block. Used by `wrap_tokens` to keep reflow idempotent: width-only line
+/// breaking can otherwise strand a mid-sentence marker-shaped token (e.g. a
+/// bare `-` or a `***` separator) at the start of a wrapped continuation
+/// line, silently turning prose into a list/heading/rule/table/etc. on the
+/// next pass (the "leaning toothpick" bug). Note this is intentionally
+/// unconditional — it does not matter whether more content follows on the
+/// line, since a paragraph's genuine first token can never itself be
+/// marker-like (the source would have parsed as a list/blockquote/heading/
+/// etc. instead, not a paragraph), so `wrap_tokens` only ever needs to keep
+/// marker-like tokens off of *wrapped* line starts — forbidding them
+/// unconditionally is simplest and only costs an occasional over-width
+/// line, same as long words/URLs.
 fn marker_like(word: &str) -> bool {
     if word == ">" {
         return true;
     }
     if !word.is_empty() && word.len() <= 6 && word.bytes().all(|b| b == b'#') {
+        return true;
+    }
+    // GFM table row: a bare `|` opening a line reads as a table row (and,
+    // paired with a plausible delimiter row, a whole table) on reparse.
+    if word.starts_with('|') {
+        return true;
+    }
+    // HTML block start: CommonMark HTML blocks (types 1-7) can interrupt a
+    // paragraph, so a verbatim `Inline::Html` tag (emitted unescaped by
+    // `build_tokens`, see its match arm) that gets wrapped to a line start
+    // must not be reread as opening a block on the next pass. Matches an
+    // opening tag (`<div`), a closing tag (`</div`), a comment (`<!--`), or
+    // a processing instruction (`<?php`) — the CommonMark HTML-block
+    // start conditions — not a bare `<` used as a comparison operator.
+    if looks_like_html_start(word) {
+        return true;
+    }
+    // Link-reference definition: `[label]: destination` at a line start
+    // defines a reference rather than reading as inline text. `escape_text`
+    // already backslash-escapes bare `[`/`]` in plain text (see below), and
+    // no token `build_tokens` builds for a real link/image/footnote
+    // reference has this shape (they read `[text](dest)` / `[^label]`, never
+    // `[label]:`), so this arm is currently unreachable in practice — kept
+    // as a defensive backstop, matching the `'*'` arm below.
+    if word.starts_with('[') && word.contains("]:") {
+        return true;
+    }
+    // 4-space indented code: `wrap_tokens` never itself emits leading
+    // whitespace (words are glued with a single space or start a fresh line
+    // with none) and `indent_block`'s container prefixes never exceed the
+    // container's own established content width, so no token reaching this
+    // function can currently start with real leading spaces — kept as a
+    // defensive backstop, matching the `'*'` arm below.
+    if word.starts_with("    ") {
         return true;
     }
     // Ordered-list marker: 1-9 ASCII digits followed by a single `.` or `)`.
@@ -318,12 +355,30 @@ fn marker_like(word: &str) -> bool {
     }
 }
 
+/// True when `word` opens like an HTML tag, closing tag, comment, or
+/// processing instruction — the shapes CommonMark's HTML-block-start rule
+/// recognizes — as opposed to a bare `<` used as a comparison operator
+/// (`a < b`), which is not itself block-starting and shouldn't be forced off
+/// a line start.
+fn looks_like_html_start(word: &str) -> bool {
+    let mut chars = word.chars();
+    if chars.next() != Some('<') {
+        return false;
+    }
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
+}
+
 /// Backslash-escape the punctuation in `word` that would otherwise trigger
 /// block-level reparsing if it started a line (see `marker_like`). All
 /// escaped characters are CommonMark-escapable, so this is
 /// meaning-preserving: the escaped form re-parses as the literal character,
 /// e.g. `\-`, `\>`, `\##`, `\===` (escaping just the leading `=` already
-/// stops the rest from reading as a setext underline), `\***`, `\___`.
+/// stops the rest from reading as a setext underline), `\***`, `\___`,
+/// `\|`, `\<div>`, `\[label]:`. The 4-space-indent backstop is the one
+/// exception: a leading space is not itself CommonMark-escapable, but
+/// prefixing it with `\` still defuses the hazard, since the line then
+/// starts with a non-space character and no longer carries 4 columns of
+/// leading indentation.
 fn escape_line_start(word: &str) -> String {
     if let Some(rest) = word.strip_suffix('.').or_else(|| word.strip_suffix(')')) {
         let marker = &word[rest.len()..];
@@ -507,5 +562,42 @@ fn render_code_span(s: &str) -> String {
         format!("{fence} {s} {fence}")
     } else {
         format!("{fence}{s}{fence}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // These two `marker_like` arms (4-space indent, link-reference
+    // definition) are defensive backstops: no token `build_tokens` can
+    // currently build has either shape (see the comments on those arms), so
+    // there is no full `adept_fmt::format_str` repro to drive through
+    // `crates/adept_fmt/tests/format_tests.rs`'s marker-guard helpers the
+    // way the reachable constructs (table row, HTML block start) are
+    // tested. These call `marker_like`/`escape_line_start` directly instead,
+    // pinning the recognition and its escape so a future token producer
+    // that *does* carry a leading-space or link-ref-def-shaped word is
+    // covered from day one rather than silently falling through.
+
+    #[test]
+    fn four_space_indent_is_marker_like_and_escapes_to_non_space_start() {
+        assert!(marker_like("    code"));
+        let escaped = escape_line_start("    code");
+        assert!(!escaped.starts_with(' '), "escaped form: {escaped}");
+    }
+
+    #[test]
+    fn link_reference_definition_is_marker_like_and_escapes_to_non_bracket_start() {
+        assert!(marker_like("[foo]:"));
+        let escaped = escape_line_start("[foo]:");
+        assert!(!escaped.starts_with('['), "escaped form: {escaped}");
+    }
+
+    #[test]
+    fn bare_less_than_comparison_is_not_marker_like() {
+        // `a < b` mid-prose is a plain comparison, not an HTML tag start;
+        // `looks_like_html_start` must not flag a lone `<`.
+        assert!(!marker_like("<"));
     }
 }

@@ -533,6 +533,33 @@ fn wrapped_line_starting_with_blockquote_marker_is_not_reparsed_as_nested_quote(
 /// ```` ```rest ...``` ```` fenced code block); restored, it stays
 /// idempotent because `~~~` is forced back onto the prior (over-width)
 /// line.
+/// A mid-prose `|` (table-row pipe) placed right after a hard line break —
+/// exactly the case `wrap_tokens` cannot avoid by gluing onto a previous
+/// line — must hit the escape fallback rather than reach `wrap_tokens` as a
+/// bare `|` at a line start, which reads as (part of) a GFM table row on
+/// reparse.
+#[test]
+fn wrapped_line_starting_with_table_pipe_is_not_reparsed_as_table_row() {
+    assert_marker_idempotent(
+        "some text before the break  \n| a | b | and then some trailing prose after the marker\n",
+        "|",
+    );
+}
+
+/// A mid-prose `<div>` HTML tag is parsed as a genuine inline-HTML token
+/// (`Inline::Html`, emitted verbatim by `build_tokens`) regardless of where
+/// it sits in the paragraph. Forced to a wrapped line start via a hard
+/// break, it must not be reinterpreted as opening an HTML block on the next
+/// pass — CommonMark's HTML-block-start rule lets a tag like `<div>`
+/// interrupt a paragraph.
+#[test]
+fn wrapped_line_starting_with_html_tag_is_not_reparsed_as_html_block() {
+    assert_marker_idempotent(
+        "some text before the break  \n<div> and then some trailing prose after the marker\n",
+        "<div>",
+    );
+}
+
 #[test]
 fn wrapped_line_starting_with_tilde_fence_is_not_reparsed_as_code_block() {
     let filler = "x".repeat(53);
