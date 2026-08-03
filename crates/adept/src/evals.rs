@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 /// breaking change to a harness consuming this schema. `SCHEMA_VERSION`
 /// changes only when the *shape* of a dataset line changes — rarely, and
 /// loudly, the same way a lint rule code is never reused.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// One deterministic, offline-checkable assertion about a case's expected
 /// outcome.
@@ -109,10 +109,31 @@ impl Assertion {
 ///
 /// Carries its own `schema_version` (see [`SCHEMA_VERSION`] and the module
 /// docs) so a dataset stays self-describing without a JSONL envelope.
+///
+/// Identified by `id`, not by its position in the file: a [`CaseResult`]
+/// references a case by this `id`, so reordering, filtering, or regenerating
+/// a subset of a dataset never changes which case a result grades against.
+/// `id` must be non-empty and unique across the dataset — see [`validate`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalCase {
     /// The schema version this line was written against.
     pub schema_version: u32,
+    /// This case's identity, stable across reordering of the dataset file.
+    /// Must be non-empty and unique across the dataset (see [`validate`]).
+    /// `adept create` generates a deterministic kebab-case slug; a
+    /// hand-written dataset may use any non-empty string.
+    ///
+    /// `#[serde(default)]` (rather than a hard deserialization requirement)
+    /// is deliberate: it lets a `schema_version: 1` line — which predates
+    /// this field and so never has it — still deserialize far enough for
+    /// [`validate`]'s `schema_version` check to run first and report
+    /// [`EvalError::UnsupportedSchemaVersion`], instead of a generic missing-
+    /// field [`EvalError::Parse`] that would obscure the real reason the
+    /// line is rejected. A `schema_version: 2` line without `id` still gets
+    /// rejected — by [`validate`]'s empty-id check, which runs right after
+    /// the schema_version check.
+    #[serde(default)]
+    pub id: String,
     /// The prompt the skill under test should handle.
     pub prompt: String,
     /// The assertions a harness checks the response against. May be empty
@@ -147,6 +168,20 @@ pub enum EvalError {
     /// The dataset contained no cases (after skipping blank lines).
     #[error("eval dataset is empty: at least one case is required")]
     Empty,
+    /// Line `line` has an empty `id`.
+    #[error("line {line}: case id must not be empty")]
+    EmptyId {
+        /// The 1-indexed line number of the offending case.
+        line: usize,
+    },
+    /// Line `line` repeats an `id` already used earlier in the dataset.
+    #[error("line {line}: duplicate case id {id:?}")]
+    DuplicateId {
+        /// The 1-indexed line number of the duplicate.
+        line: usize,
+        /// The repeated id.
+        id: String,
+    },
 }
 
 /// Parse a JSONL eval dataset from `text`, one [`EvalCase`] per line.
@@ -214,6 +249,8 @@ pub fn to_jsonl(cases: &[EvalCase]) -> String {
 ///   failure — unknown assertion `kind`s surface here as a parse error);
 /// - every case's `schema_version` is one this build of adept understands
 ///   (currently only [`SCHEMA_VERSION`] itself);
+/// - every case's `id` is non-empty;
+/// - every case's `id` is unique across the dataset;
 /// - the dataset is non-empty.
 ///
 /// Deliberately does not check whether assertions are *satisfiable* — that
@@ -245,8 +282,9 @@ pub fn parse_and_validate(text: &str) -> Result<Vec<EvalCase>, EvalError> {
 
 /// Validate already-parsed `cases` in memory, without serializing them to
 /// JSONL and reparsing — the same checks [`validate`] performs (every
-/// `schema_version` understood, dataset non-empty), for a caller that just
-/// built or already parsed its cases and doesn't need the string round trip.
+/// `schema_version` understood, every `id` non-empty and unique, dataset
+/// non-empty), for a caller that just built or already parsed its cases and
+/// doesn't need the string round trip.
 /// Line numbers are reported as 1-indexed positions in `cases` (there is no
 /// source text to point at).
 ///
@@ -262,7 +300,8 @@ pub fn validate_cases(cases: &[EvalCase]) -> Result<(), EvalError> {
 }
 
 /// Shared check used by both [`validate`] and [`validate_cases`]: every
-/// case's `schema_version` is understood, and the dataset is non-empty.
+/// case's `schema_version` is understood, every `id` is non-empty and
+/// unique, and the dataset is non-empty.
 fn validate_parsed(cases: &[(usize, EvalCase)]) -> Result<(), EvalError> {
     let numbered: Vec<(usize, &EvalCase)> =
         cases.iter().map(|(line, case)| (*line, case)).collect();
@@ -276,6 +315,20 @@ fn validate_parsed_refs(cases: &[(usize, &EvalCase)]) -> Result<(), EvalError> {
             return Err(EvalError::UnsupportedSchemaVersion {
                 line: *line,
                 found: case.schema_version,
+            });
+        }
+    }
+    for (line, case) in cases {
+        if case.id.is_empty() {
+            return Err(EvalError::EmptyId { line: *line });
+        }
+    }
+    let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for (line, case) in cases {
+        if !seen_ids.insert(case.id.as_str()) {
+            return Err(EvalError::DuplicateId {
+                line: *line,
+                id: case.id.clone(),
             });
         }
     }
@@ -323,9 +376,11 @@ pub struct TokenUsage {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CaseResult {
-    /// Which dataset case this result is for: the 1-indexed line number in
-    /// `evals/evals.jsonl`.
-    pub case: usize,
+    /// Which dataset case this result is for, by [`EvalCase::id`]. An `id`
+    /// not present in the dataset is reported (see
+    /// [`EvalBenchmarkReport::unknown_result_ids`]), never graded against an
+    /// arbitrary case.
+    pub id: String,
     /// `"skill"` (default) or `"baseline"`.
     #[serde(default)]
     pub arm: Arm,
@@ -394,8 +449,8 @@ pub struct AssertionResult {
 /// The graded outcome of one [`CaseResult`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaseReport {
-    /// The 1-indexed dataset case this result graded.
-    pub case: usize,
+    /// The dataset case this result graded, by [`EvalCase::id`].
+    pub case: String,
     /// Which arm this result was for.
     pub arm: Arm,
     /// `true` only if every non-skipped assertion passed **and** at least
@@ -440,15 +495,24 @@ pub struct EvalBenchmarkReport {
     pub tokens_in: Option<u64>,
     /// Sum of output tokens across results that reported [`TokenUsage`].
     pub tokens_out: Option<u64>,
-    /// `case` values from results that named a dataset case out of range
-    /// (including `0`, since cases are 1-indexed).
-    pub out_of_range_results: Vec<usize>,
-    /// 1-indexed dataset cases that had no `skill`-arm result at all.
-    pub unmatched_cases: Vec<usize>,
+    /// [`CaseResult::id`] values from results that named an id absent from
+    /// the dataset. Such a result is reported here, not graded against an
+    /// arbitrary case.
+    pub unknown_result_ids: Vec<String>,
+    /// Dataset case ids that had no `skill`-arm result at all.
+    pub unmatched_cases: Vec<String>,
 }
 
 /// Grade `results` (typically parsed via [`parse_results_jsonl`]) against
 /// `cases` (typically parsed via [`parse_jsonl`]/[`validate`]).
+///
+/// Results are resolved to a dataset case through an id → index map built
+/// from `cases`, so reordering `cases` never changes which case a given
+/// result grades against. A result whose `id` is absent from the dataset is
+/// reported in [`EvalBenchmarkReport::unknown_result_ids`], never graded
+/// against an arbitrary case. If `cases` itself contains duplicate ids (a
+/// dataset that skipped [`validate`]), the last case with a given id wins
+/// the lookup.
 ///
 /// Purely offline and deterministic: a substring match, filesystem reads
 /// resolved against each result's `cwd`, and a lookup into
@@ -457,6 +521,10 @@ pub struct EvalBenchmarkReport {
 #[must_use]
 pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport {
     let mut report = EvalBenchmarkReport::default();
+    let mut id_to_index: HashMap<&str, usize> = HashMap::new();
+    for (idx, case) in cases.iter().enumerate() {
+        id_to_index.insert(case.id.as_str(), idx);
+    }
     let mut skill_seen = vec![false; cases.len()];
     let (mut skill_pass, mut skill_total) = (0usize, 0usize);
     let (mut baseline_pass, mut baseline_total) = (0usize, 0usize);
@@ -464,16 +532,16 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
     let mut any_tokens = false;
 
     for result in results {
-        if result.case == 0 || result.case > cases.len() {
-            report.out_of_range_results.push(result.case);
+        let Some(&index) = id_to_index.get(result.id.as_str()) else {
+            report.unknown_result_ids.push(result.id.clone());
             continue;
-        }
-        let case = &cases[result.case - 1];
+        };
+        let case = &cases[index];
         let (case_report, grading) = grade_case(case, result);
 
         match result.arm {
             Arm::Skill => {
-                skill_seen[result.case - 1] = true;
+                skill_seen[index] = true;
                 skill_total += 1;
                 if case_report.pass {
                     skill_pass += 1;
@@ -504,7 +572,7 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
 
     for (idx, seen) in skill_seen.iter().enumerate() {
         if !seen {
-            report.unmatched_cases.push(idx + 1);
+            report.unmatched_cases.push(cases[idx].id.clone());
         }
     }
 
@@ -582,7 +650,7 @@ fn grade_case(case: &EvalCase, result: &CaseResult) -> (CaseReport, CaseGrading)
 
     (
         CaseReport {
-            case: result.case,
+            case: result.id.clone(),
             arm: result.arm,
             pass,
             assertions,
@@ -700,6 +768,7 @@ mod tests {
     fn sample_case() -> EvalCase {
         EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: "summarize-the-attached-report".to_string(),
             prompt: "Summarize the attached report.".to_string(),
             assertions: vec![
                 Assertion::Contains {
@@ -749,15 +818,14 @@ mod tests {
 
     #[test]
     fn unknown_assertion_kind_is_a_clear_error_not_a_panic() {
-        let text =
-            r#"{"schema_version":1,"prompt":"p","assertions":[{"kind":"unheard_of","value":"x"}]}"#;
+        let text = r#"{"schema_version":2,"id":"x","prompt":"p","assertions":[{"kind":"unheard_of","value":"x"}]}"#;
         let err = parse_jsonl(text).unwrap_err();
         assert!(matches!(err, EvalError::Parse { line: 1, .. }));
     }
 
     #[test]
     fn validate_rejects_unsupported_schema_version() {
-        let text = r#"{"schema_version":999,"prompt":"p","assertions":[]}"#;
+        let text = r#"{"schema_version":999,"id":"x","prompt":"p","assertions":[]}"#;
         let err = validate(text).unwrap_err();
         match err {
             EvalError::UnsupportedSchemaVersion { line, found } => {
@@ -805,16 +873,64 @@ mod tests {
 
     #[test]
     fn missing_required_field_is_a_parse_error() {
-        let text = r#"{"schema_version":1,"assertions":[]}"#; // missing `prompt`
+        let text = r#"{"schema_version":2,"id":"x","assertions":[]}"#; // missing `prompt`
         let err = parse_jsonl(text).unwrap_err();
         assert!(matches!(err, EvalError::Parse { line: 1, .. }));
     }
 
+    #[test]
+    fn validate_rejects_schema_version_1_dataset() {
+        // Clean break: a v1 dataset (no `id`, and `schema_version: 1`) is
+        // rejected via the existing UnsupportedSchemaVersion path, not
+        // migrated or given auto-generated ids.
+        let text = r#"{"schema_version":1,"prompt":"p","assertions":[]}"#;
+        let err = validate(text).unwrap_err();
+        match err {
+            EvalError::UnsupportedSchemaVersion { line, found } => {
+                assert_eq!(line, 1);
+                assert_eq!(found, 1);
+            }
+            other => panic!("expected UnsupportedSchemaVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_empty_id_naming_the_line() {
+        let good = serde_json::to_string(&sample_case()).unwrap();
+        let mut empty_id = sample_case();
+        empty_id.id = String::new();
+        let bad = serde_json::to_string(&empty_id).unwrap();
+        let text = format!("{good}\n{bad}\n");
+        let err = validate(&text).unwrap_err();
+        match err {
+            EvalError::EmptyId { line } => assert_eq!(line, 2),
+            other => panic!("expected EmptyId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_ids_naming_the_line() {
+        let mut first = sample_case();
+        first.id = "dup".to_string();
+        let mut second = sample_case();
+        second.id = "dup".to_string();
+        let text = to_jsonl(&[first, second]);
+        let err = validate(&text).unwrap_err();
+        match err {
+            EvalError::DuplicateId { line, id } => {
+                assert_eq!(line, 2);
+                assert_eq!(id, "dup");
+            }
+            other => panic!("expected DuplicateId, got {other:?}"),
+        }
+    }
+
     // --- grading tests ---
 
-    fn contains_case(value: &str) -> EvalCase {
+    fn contains_case(id: &str, value: &str) -> EvalCase {
         EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: id.to_string(),
             prompt: "do the thing".to_string(),
             assertions: vec![Assertion::Contains {
                 value: value.to_string(),
@@ -822,9 +938,9 @@ mod tests {
         }
     }
 
-    fn skill_result(case: usize, response: &str) -> CaseResult {
+    fn skill_result(id: &str, response: &str) -> CaseResult {
         CaseResult {
-            case,
+            id: id.to_string(),
             arm: Arm::Skill,
             response: response.to_string(),
             cwd: None,
@@ -835,17 +951,17 @@ mod tests {
 
     #[test]
     fn parses_results_jsonl_skipping_blanks() {
-        let text = "{\"case\":1,\"response\":\"ok\"}\n\n{\"case\":2,\"response\":\"ok2\",\"arm\":\"baseline\"}\n";
+        let text = "{\"id\":\"a\",\"response\":\"ok\"}\n\n{\"id\":\"b\",\"response\":\"ok2\",\"arm\":\"baseline\"}\n";
         let results = parse_results_jsonl(text).unwrap();
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].case, 1);
+        assert_eq!(results[0].id, "a");
         assert_eq!(results[0].arm, Arm::Skill);
         assert_eq!(results[1].arm, Arm::Baseline);
     }
 
     #[test]
     fn parse_results_jsonl_reports_offending_line() {
-        let text = "{\"case\":1,\"response\":\"ok\"}\nnot json\n";
+        let text = "{\"id\":\"a\",\"response\":\"ok\"}\nnot json\n";
         let err = parse_results_jsonl(text).unwrap_err();
         match err {
             EvalError::Parse { line, .. } => assert_eq!(line, 2),
@@ -854,20 +970,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_results_jsonl_missing_id_is_a_parse_error() {
+        let text = "{\"response\":\"ok\"}\n";
+        let err = parse_results_jsonl(text).unwrap_err();
+        assert!(matches!(err, EvalError::Parse { line: 1, .. }));
+    }
+
+    #[test]
     fn grade_all_pass() {
-        let cases = vec![contains_case("hello"), contains_case("world")];
-        let results = vec![skill_result(1, "hello there"), skill_result(2, "big world")];
+        let cases = vec![contains_case("a", "hello"), contains_case("b", "world")];
+        let results = vec![
+            skill_result("a", "hello there"),
+            skill_result("b", "big world"),
+        ];
         let report = grade(&cases, &results);
         assert_eq!(report.pass_rate, 1.0);
         assert_eq!(report.assertion_success_rate, 1.0);
         assert!(report.unmatched_cases.is_empty());
-        assert!(report.out_of_range_results.is_empty());
+        assert!(report.unknown_result_ids.is_empty());
     }
 
     #[test]
     fn grade_all_fail() {
-        let cases = vec![contains_case("hello"), contains_case("world")];
-        let results = vec![skill_result(1, "nope"), skill_result(2, "nada")];
+        let cases = vec![contains_case("a", "hello"), contains_case("b", "world")];
+        let results = vec![skill_result("a", "nope"), skill_result("b", "nada")];
         let report = grade(&cases, &results);
         assert_eq!(report.pass_rate, 0.0);
         assert_eq!(report.assertion_success_rate, 0.0);
@@ -876,22 +1002,22 @@ mod tests {
 
     #[test]
     fn grade_mixed() {
-        let cases = vec![contains_case("hello"), contains_case("world")];
-        let results = vec![skill_result(1, "hello there"), skill_result(2, "nada")];
+        let cases = vec![contains_case("a", "hello"), contains_case("b", "world")];
+        let results = vec![skill_result("a", "hello there"), skill_result("b", "nada")];
         let report = grade(&cases, &results);
         assert_eq!(report.pass_rate, 0.5);
     }
 
     #[test]
     fn grade_baseline_and_skill_arms_computes_lift() {
-        let cases = vec![contains_case("hello"), contains_case("world")];
-        let mut baseline1 = skill_result(1, "nope");
+        let cases = vec![contains_case("a", "hello"), contains_case("b", "world")];
+        let mut baseline1 = skill_result("a", "nope");
         baseline1.arm = Arm::Baseline;
-        let mut baseline2 = skill_result(2, "nada");
+        let mut baseline2 = skill_result("b", "nada");
         baseline2.arm = Arm::Baseline;
         let results = vec![
-            skill_result(1, "hello there"),
-            skill_result(2, "big world"),
+            skill_result("a", "hello there"),
+            skill_result("b", "big world"),
             baseline1,
             baseline2,
         ];
@@ -909,10 +1035,10 @@ mod tests {
         // baseline arm's assertion leaked into the aggregate, the
         // denominator would be 2 instead of 1 and `assertions_met` would
         // still be 1, giving a different (wrong) success rate.
-        let cases = vec![contains_case("hello")];
-        let mut baseline = skill_result(1, "goodbye");
+        let cases = vec![contains_case("a", "hello")];
+        let mut baseline = skill_result("a", "goodbye");
         baseline.arm = Arm::Baseline;
-        let results = vec![skill_result(1, "hello there"), baseline];
+        let results = vec![skill_result("a", "hello there"), baseline];
 
         let report = grade(&cases, &results);
 
@@ -930,8 +1056,8 @@ mod tests {
 
     #[test]
     fn grade_skill_arm_only_omits_lift() {
-        let cases = vec![contains_case("hello")];
-        let results = vec![skill_result(1, "hello there")];
+        let cases = vec![contains_case("a", "hello")];
+        let results = vec![skill_result("a", "hello there")];
         let report = grade(&cases, &results);
         assert_eq!(report.baseline_pass_rate, None);
         assert_eq!(report.lift_percentage_points, None);
@@ -945,6 +1071,7 @@ mod tests {
 
         let case = EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: "a".to_string(),
             prompt: "p".to_string(),
             assertions: vec![
                 Assertion::Contains {
@@ -965,7 +1092,7 @@ mod tests {
         let mut command_exit_codes = HashMap::new();
         command_exit_codes.insert("test -s out/summary.md".to_string(), 0);
         let result = CaseResult {
-            case: 1,
+            id: "a".to_string(),
             arm: Arm::Skill,
             response: "here is your summary".to_string(),
             cwd: Some(dir.path().to_string_lossy().to_string()),
@@ -989,6 +1116,7 @@ mod tests {
     fn grade_skip_reasons_command_without_exit_code_and_file_without_cwd() {
         let case = EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: "a".to_string(),
             prompt: "p".to_string(),
             assertions: vec![
                 Assertion::FileExists {
@@ -1003,7 +1131,7 @@ mod tests {
                 },
             ],
         };
-        let result = skill_result(1, "response");
+        let result = skill_result("a", "response");
         let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
         assert_eq!(report.assertions_checked, 0);
         assert_eq!(report.assertions_skipped, 3);
@@ -1037,12 +1165,13 @@ mod tests {
         // silently look like a perfect score while checking nothing.
         let case = EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: "a".to_string(),
             prompt: "p".to_string(),
             assertions: vec![Assertion::Command {
                 command: "true".to_string(),
             }],
         };
-        let result = skill_result(1, "response");
+        let result = skill_result("a", "response");
         let report = grade(std::slice::from_ref(&case), std::slice::from_ref(&result));
         assert_eq!(report.cases.len(), 1);
         assert!(!report.cases[0].pass);
@@ -1050,28 +1179,60 @@ mod tests {
     }
 
     #[test]
-    fn grade_reports_out_of_range_case_index() {
-        let cases = vec![contains_case("hello")];
-        let results = vec![skill_result(5, "hello")];
+    fn grade_reports_unknown_result_id_and_does_not_grade_it() {
+        let cases = vec![contains_case("a", "hello")];
+        let results = vec![skill_result("nonexistent", "hello")];
         let report = grade(&cases, &results);
-        assert_eq!(report.out_of_range_results, vec![5]);
+        assert_eq!(report.unknown_result_ids, vec!["nonexistent".to_string()]);
         assert!(report.cases.is_empty());
-    }
-
-    #[test]
-    fn grade_reports_case_zero_as_out_of_range() {
-        let cases = vec![contains_case("hello")];
-        let results = vec![skill_result(0, "hello")];
-        let report = grade(&cases, &results);
-        assert_eq!(report.out_of_range_results, vec![0]);
+        // Not graded against the one case that does exist either.
+        assert_eq!(report.pass_rate, 0.0);
     }
 
     #[test]
     fn grade_reports_dataset_case_with_no_result() {
-        let cases = vec![contains_case("hello"), contains_case("world")];
-        let results = vec![skill_result(1, "hello there")];
+        let cases = vec![contains_case("a", "hello"), contains_case("b", "world")];
+        let results = vec![skill_result("a", "hello there")];
         let report = grade(&cases, &results);
-        assert_eq!(report.unmatched_cases, vec![2]);
+        assert_eq!(report.unmatched_cases, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn reordering_dataset_lines_does_not_change_any_cases_grade() {
+        // The central regression test for this change: identity is by `id`,
+        // not position, so grading the same results against a dataset whose
+        // case order has been shuffled must produce the exact same
+        // per-case, per-id outcomes.
+        let forward = vec![
+            contains_case("a", "hello"),
+            contains_case("b", "world"),
+            contains_case("c", "goodbye"),
+        ];
+        let reordered = vec![
+            contains_case("c", "goodbye"),
+            contains_case("a", "hello"),
+            contains_case("b", "world"),
+        ];
+        let results = vec![
+            skill_result("a", "hello there"),
+            skill_result("b", "nada"), // fails
+            skill_result("c", "goodbye now"),
+        ];
+
+        let forward_report = grade(&forward, &results);
+        let reordered_report = grade(&reordered, &results);
+
+        let as_map = |report: &EvalBenchmarkReport| -> BTreeMap<String, bool> {
+            report
+                .cases
+                .iter()
+                .map(|c| (c.case.clone(), c.pass))
+                .collect()
+        };
+        assert_eq!(as_map(&forward_report), as_map(&reordered_report));
+        assert_eq!(forward_report.pass_rate, reordered_report.pass_rate);
+        assert!(forward_report.unmatched_cases.is_empty());
+        assert!(reordered_report.unmatched_cases.is_empty());
     }
 
     #[test]
@@ -1079,13 +1240,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let case = EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: "a".to_string(),
             prompt: "p".to_string(),
             assertions: vec![Assertion::FileExists {
                 path: "/etc/passwd".to_string(),
             }],
         };
         let result = CaseResult {
-            case: 1,
+            id: "a".to_string(),
             arm: Arm::Skill,
             response: "r".to_string(),
             cwd: Some(dir.path().to_string_lossy().to_string()),
@@ -1104,13 +1266,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let case = EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: "a".to_string(),
             prompt: "p".to_string(),
             assertions: vec![Assertion::FileExists {
                 path: "../escape.txt".to_string(),
             }],
         };
         let result = CaseResult {
-            case: 1,
+            id: "a".to_string(),
             arm: Arm::Skill,
             response: "r".to_string(),
             cwd: Some(dir.path().to_string_lossy().to_string()),
@@ -1132,13 +1295,14 @@ mod tests {
         std::fs::write(dir.path().join("src/out.txt"), "content").unwrap();
         let case = EvalCase {
             schema_version: SCHEMA_VERSION,
+            id: "a".to_string(),
             prompt: "p".to_string(),
             assertions: vec![Assertion::FileExists {
                 path: "src/out.txt".to_string(),
             }],
         };
         let result = CaseResult {
-            case: 1,
+            id: "a".to_string(),
             arm: Arm::Skill,
             response: "r".to_string(),
             cwd: Some(dir.path().to_string_lossy().to_string()),

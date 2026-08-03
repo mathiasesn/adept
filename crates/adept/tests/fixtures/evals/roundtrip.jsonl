@@ -1,2 +1,2 @@
-{"schema_version":1,"prompt":"Summarize the attached report and save it.","assertions":[{"kind":"contains","value":"summary"},{"kind":"file_exists","path":"out/summary.md"},{"kind":"file_contains","path":"out/summary.md","value":"conclusion"},{"kind":"command","command":"test -s out/summary.md"}]}
-{"schema_version":1,"prompt":"Delete the scratch file when done.","assertions":[{"kind":"command","command":"test ! -e scratch.tmp"}]}
+{"schema_version":2,"id":"summarize-the-attached-report-and-save-it","prompt":"Summarize the attached report and save it.","assertions":[{"kind":"contains","value":"summary"},{"kind":"file_exists","path":"out/summary.md"},{"kind":"file_contains","path":"out/summary.md","value":"conclusion"},{"kind":"command","command":"test -s out/summary.md"}]}
+{"schema_version":2,"id":"delete-the-scratch-file-when-done","prompt":"Delete the scratch file when done.","assertions":[{"kind":"command","command":"test ! -e scratch.tmp"}]}
