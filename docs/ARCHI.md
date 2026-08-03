@@ -269,11 +269,10 @@ and release-plz needs no change. The CI job asserts it.
 `__init__.py` re-exports `find_adept_bin` and `AdeptNotFound`, `_find_adept.py`
 resolves the installed binary from the installing distribution's own `RECORD`
 (via `importlib.metadata`) rather than inferring a layout from directory
-names, and `__main__.py` enables `python -m adept`. There is no fallback: a
-source checkout (no installed distribution), a distribution with no
-`RECORD`, a `RECORD` with no matching script entry, and a matching entry
-whose file is missing each raise `AdeptNotFound` with a distinct message
-instead of guessing. The no-subprocess invariant in AGENTS.md is about the Rust
+names, and `__main__.py` enables `python -m adept`. There is no fallback — an
+install that produces no usable `RECORD` raises `AdeptNotFound` rather than
+guessing a path, so a source checkout cannot resolve the binary by design.
+The no-subprocess invariant in AGENTS.md is about the Rust
 binary; `__main__.py` dispatches *to* that binary and so falls outside the
 invariant's subject rather than carving out an exception to it. Its POSIX
 path calls `os.execvp`, which replaces the process rather than spawning one,
