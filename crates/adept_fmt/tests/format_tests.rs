@@ -235,26 +235,48 @@ fn setext_fixture_round_trips_under_setext_heading_style() {
         "h3 should still print as ATX:\n{formatted}"
     );
 
-    // Headings whose text starts with a block-marker-like word (`>`, an
-    // ordered-list marker, a bullet marker, a bare `#` run) must fall back
-    // to ATX rather than being emitted in setext form: on setext's own line
-    // (no leading `# `), such a word would be reparsed as a
-    // blockquote/list/heading opener on the very next pass, silently
-    // destroying the heading and breaking idempotency (see the printer's
-    // `first_word_marker_like` fallback in `print_block`). Assert both that
-    // the heading survives (level + text intact, as ATX) and that nothing
-    // upstream of it got misparsed as a blockquote/list/thematic-break.
+    // Headings whose text could be reparsed as opening a different block on
+    // the next pass must fall back to ATX rather than being emitted in
+    // setext form: on setext's own line (no leading `# `), such text would
+    // be reparsed as a blockquote/list/table/HTML-block/code-fence/etc.
+    // opener, with the underline then read as an unrelated thematic break —
+    // silently destroying the heading and breaking idempotency (see
+    // `heading_text_can_use_setext` in `print.rs`). This deliberately
+    // includes cases `marker_like` itself would miss (`>quoted` with no
+    // space, `~~~fence` which isn't a pure tilde run) since the heading
+    // printer uses its own conservative allowlist, not `marker_like`.
+    // Assert both that the heading survives (level + text intact, as ATX)
+    // and that nothing upstream of it got misparsed.
     for (text, expected_atx) in [
         ("> quoted heading", "## > quoted heading"),
         ("1. numbered heading", "## 1. numbered heading"),
         ("- dashed heading", "## - dashed heading"),
         ("# hash heading", "## # hash heading"),
+        (">quoted heading", "## >quoted heading"),
+        (">> nested quote heading", "## >> nested quote heading"),
+        ("~~~fence", "## ~~~fence"),
+        // Backtick and `[`/`]` are always backslash-escaped by `escape_text`
+        // regardless of heading style, so the ATX fallback carries that
+        // escaping too.
+        ("```fence", r"## \`\`\`fence"),
+        ("|table| heading", "## |table| heading"),
+        // `<div>` parses as a separate inline-HTML token from the following
+        // text, so a space is (re-)introduced between them on reflow.
+        ("<div>hi heading", "## <div> hi heading"),
+        ("[label]: dest heading", r"## \[label\]: dest heading"),
     ] {
         assert!(
             formatted.contains(expected_atx),
             "heading {text:?} should have fallen back to ATX (found no {expected_atx:?}):\n{formatted}"
         );
     }
+
+    // A multi-byte, alphabetic first character is safe and must stay
+    // setext, not fall back to ATX.
+    assert!(
+        formatted.contains("多字节 heading\n--"),
+        "multi-byte-first-char heading should stay setext:\n{formatted}"
+    );
 }
 
 #[test]

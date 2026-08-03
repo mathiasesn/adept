@@ -39,6 +39,36 @@ fn print_blocks(blocks: &[Block], cfg: &FmtConfig, depth: usize, tight: bool) ->
     lines
 }
 
+/// Whether `text` is safe to print as a setext heading's own line (no
+/// leading marker, unlike ATX's `# `). If it could instead be reparsed as
+/// opening a different block on the very next pass — with the underline
+/// then read as an unrelated thematic break — that would silently destroy
+/// the heading and break idempotency.
+///
+/// This is deliberately **not** `marker_like`, and must not be unified with
+/// it: `marker_like` was tuned for *wrapped* tokens, where
+/// `escape_line_start` also runs and a paragraph's genuine first token can
+/// never itself be marker-like — neither holds at a setext line start,
+/// where the text is arbitrary and nothing escapes it, so `marker_like`'s
+/// deliberate narrowness (e.g. only a lone `>`, only pure repeated-char
+/// runs) is a hole here. Widening `marker_like` to close it would also make
+/// ordinary reflow escape more than it needs to, which is exactly the
+/// unnecessary-diff problem setext support exists to avoid.
+///
+/// Instead this is a separate, conservative allowlist local to heading
+/// printing: setext is used only when the text is *provably* safe. Every
+/// CommonMark block-start construct is introduced by punctuation,
+/// whitespace/indentation, or a digit-run marker (`1.`, `123)`), so a text
+/// whose first character is a letter — ASCII alphabetic, or any non-ASCII
+/// alphabetic character — cannot itself open a block. Anything else
+/// (leading punctuation, leading whitespace, a leading digit, or an empty
+/// text) is rejected. A wrong "yes" here silently destroys a heading; a
+/// wrong "no" only costs a slightly different rendering of the same
+/// heading, so this errs toward rejecting whenever in doubt.
+fn heading_text_can_use_setext(text: &str) -> bool {
+    text.chars().next().is_some_and(char::is_alphabetic)
+}
+
 /// Print a single block. `depth` counts container nesting (block quotes,
 /// lists, footnote definitions) seen so far; once it reaches
 /// [`MAX_NESTING_DEPTH`] we stop recursing into further containers
@@ -57,23 +87,9 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
             // both matches "today's behaviour is unchanged" under the
             // (default) Atx style and makes the choice trivially
             // idempotent.
-            //
-            // Setext form puts the heading text on its own line with no
-            // leading marker (unlike ATX's `# `), so a text whose first word
-            // is itself block-marker-like (`> ...`, `1. ...`, `- ...`, a
-            // bare `#` run, ...) would be reparsed as a blockquote/list/etc.
-            // on the very next line, with the underline then read as an
-            // unrelated thematic break — silently destroying the heading and
-            // breaking idempotency. Rather than backslash-escaping into the
-            // heading text (lossy/surprising for a heading's own words),
-            // fall back to ATX for that one heading: ATX's leading `# ` can
-            // never itself be reparsed as something else, so it's always a
-            // safe fallback, the same way h3+ already falls back to ATX.
-            let first_word_marker_like = text.split_whitespace().next().is_some_and(marker_like);
             if cfg.heading_style == HeadingStyle::Setext
                 && level <= 2
-                && !text.is_empty()
-                && !first_word_marker_like
+                && heading_text_can_use_setext(&text)
             {
                 let underline_char = if level == 1 { '=' } else { '-' };
                 let underline = underline_char.to_string().repeat(text.chars().count());
@@ -648,5 +664,44 @@ mod tests {
         // `a < b` mid-prose is a plain comparison, not an HTML tag start;
         // `looks_like_html_start` must not flag a lone `<`.
         assert!(!marker_like("<"));
+    }
+
+    #[test]
+    fn heading_text_starting_with_a_letter_can_use_setext() {
+        assert!(heading_text_can_use_setext("Top Setext"));
+        assert!(heading_text_can_use_setext("多字节 heading"));
+    }
+
+    #[test]
+    fn heading_text_with_unsafe_first_character_cannot_use_setext() {
+        // `flatten_words` never actually produces leading whitespace (it
+        // splits on whitespace when building words), so the leading-space
+        // and leading-tab cases below can't arise through the normal
+        // `format_str` path today — same as `marker_like`'s 4-space-indent
+        // arm. They're pinned directly here as a defensive backstop, since
+        // `heading_text_can_use_setext` must reject them regardless of
+        // whether anything currently constructs such a `text`.
+        for text in [
+            "",
+            " leading space",
+            "\tleading tab",
+            ">quoted",
+            ">> nested quote",
+            "1. numbered",
+            "123) numbered",
+            "- dash",
+            "# hash",
+            "~~~fence",
+            "```fence",
+            "|table|",
+            "<div>hi",
+            "[label]: dest",
+            "9lives",
+        ] {
+            assert!(
+                !heading_text_can_use_setext(text),
+                "expected {text:?} to be rejected"
+            );
+        }
     }
 }
