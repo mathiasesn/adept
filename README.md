@@ -178,7 +178,7 @@ layer), configured via environment variables or flags:
 | Env var           | Flag          | Purpose                                  |
 | ------------------ | ------------- | ----------------------------------------- |
 | `ADEPT_MODEL`       | `--model`     | Model identifier to request.              |
-| `ADEPT_BASE_URL`    | `--base-url`  | Base URL, default `https://api.openai.com/v1`. |
+| `ADEPT_BASE_URL`    | `--base-url`  | Base URL, default `https://api.openai.com/v1`. Embedding a credential in it (`https://user:pass@host/v1`) is a hard error exiting `2` — put the credential in `ADEPT_API_KEY`/`api_key` instead. |
 | `ADEPT_API_KEY`     | *(none)*      | Bearer token, if the endpoint needs one.  |
 
 Also: `--num-prompts`, `--seed`, `--judge-samples` (triggering),
@@ -336,9 +336,12 @@ one-word-per-line output.
 
 Two more tools, `create_skill` and `generate_evals`, mirror `adept
 create`'s generation and eval-dataset pipeline. They are network-backed
-and **conditionally advertised** — only when an LLM backend can actually
-be resolved (`ADEPT_MODEL` etc. set, or `model`/`base_url` arguments
-passed):
+and **conditionally advertised**, gated on an `llm_available` predicate
+rather than on `resolve()` succeeding — set `ADEPT_MODEL` etc. (or pass
+`model`/`base_url` arguments) and the tools are advertised, even if
+`base_url` embeds a credential and would make `resolve()` itself fail;
+that failure then surfaces as a per-call tool error, not as the tools
+vanishing from the list:
 
 ```console
 $ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | ADEPT_MODEL=gpt-4o-mini adept mcp
