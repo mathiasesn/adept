@@ -400,9 +400,44 @@ LLM-backed commands only, resolved in `adept_agent::LlmConfig::resolve`):
 | Var | Flag | Purpose |
 |---|---|---|
 | `ADEPT_MODEL` | `--model` | Required by the `triggering`/`token-bloat`/`overlap` analyses, which exit 2 without it; grading alone needs no model. Over MCP its absence fails those analyses per-call rather than hiding the tool — §12. |
-| `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1`. `LlmConfig::resolve` parses the resolved value with `reqwest::Url` and returns `ConfigError::CredentialsInBaseUrl` if `username()` is non-empty or `password()` is `Some` — a `base_url` carrying credentials is rejected at resolution, never accepted and scrubbed later. A value that fails to parse at all is left alone and still fails downstream at `RequestBuilder::build`; the check targets userinfo only. `resolve_llm_client` (`adept_cli::config`) matches the variant to print credential-specific guidance naming `api_key` instead of the generic model-guidance text, and `probe_model_available` (`adept_cli::commands::eval`) treats it distinctly from "no model configured" rather than folding it into `false`. Both paths exit 2. |
+| `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1`. Rejects an embedded credential — see below. |
 | `ADEPT_API_KEY` | *(none)* | Bearer token. Never accepted as a flag. Held as a `RedactedString` — §15. |
 | `ADEPT_LOG` | `-v`/`-vv`/`-vvv` | `EnvFilter` syntax (e.g. `adept_agent::llm::client=trace`). Overrides the `-v` count wholesale. Adept's own namespace, not `RUST_LOG`. |
+
+**`ADEPT_BASE_URL` credential rejection.** `LlmConfig::resolve` parses the
+resolved value with `reqwest::Url` and returns `ConfigError::CredentialsInBaseUrl`
+if `username()` is non-empty or `password()` is `Some` — a `base_url` carrying
+credentials is rejected at resolution, never accepted and scrubbed later. A
+value that fails to parse at all is left alone and still fails downstream at
+`RequestBuilder::build`; the check targets userinfo only.
+
+Every caller of `resolve()` decides what "an LLM is configured" means through
+one shared predicate, `adept_cli::config::llm_available`: it maps `Ok(_)` and
+`Err(ConfigError::CredentialsInBaseUrl)` both to `true` (the user did point at
+an endpoint; only `MissingModel` means "no model") and is exhaustive, so a
+future `ConfigError` variant is a compile error here rather than a silent
+fallthrough. Four call sites share it:
+
+- `resolve_llm_client` (`adept_cli::config`) — used by the `eval`/`fix` CLI
+  commands. On `CredentialsInBaseUrl` it prints credential-specific guidance
+  naming `api_key` instead of the generic model-guidance text, and exits `2`.
+- `probe_model_available` (`adept_cli::commands::eval`) — the CLI's
+  triggering/token-bloat/overlap precondition check. Also exits `2` on
+  `CredentialsInBaseUrl`, via the same path as `resolve_llm_client`.
+- The `create_skill`/`generate_evals` tool-advertisement gate
+  (`adept_cli::commands::mcp`) — calls `llm_available` to decide
+  whether to list those tools in `tools/list`. A `CredentialsInBaseUrl` counts
+  as configured, so the tools stay **advertised** rather than vanishing
+  indistinguishably from "no model configured"; the actual credential error
+  then surfaces per-call when the tool is invoked.
+- `eval_skill`'s model-availability check (`adept_cli::commands::mcp`) — same
+  treatment: `CredentialsInBaseUrl` selects the LLM-backed
+  analyses as available, and the real `resolve()` failure is reported as a
+  structured per-call tool error naming the problem.
+
+MCP has no exit code, so unlike the two CLI paths above, both MCP consumers
+surface `CredentialsInBaseUrl` as a JSON-RPC tool-call error, not a process
+exit — see §12.
 
 No compile-time feature flags. `LintConfig`'s numeric thresholds each carry a
 doc comment justifying the number — **keep that rationale attached if you
@@ -652,7 +687,12 @@ deliberately not used: a direct implementation keeps both the dependency
 footprint and the risk of an SDK writing to stdout at zero.
 
 Five tools. `check_skill`, `format_skill`, and `eval_skill` are advertised
-unconditionally; `create_skill` and `generate_evals` only when a model resolves.
+unconditionally; `create_skill` and `generate_evals` only when
+`adept_cli::config::llm_available` reports a model configured (§7) — which
+also holds true for a `ConfigError::CredentialsInBaseUrl`, so a leaked
+credential keeps both tools listed rather than hiding them; invoking either
+then fails per-call with a credential-specific message instead of exiting a
+process (MCP has no exit code).
 **The latter two are preview-only and never touch the filesystem** — they
 return the generated skill/dataset as data, mirroring why capture is CLI-only
 (§15): an MCP client must not be able to make the server write to arbitrary
@@ -868,7 +908,14 @@ tracing output and no capture artifact, including when smuggled into a prompt.
   non-empty `username()` or a `password()`, closing the three egresses a
   userinfo-carrying URL previously reached — `LlmError::Request`'s `Display`
   (via reqwest), the matching `tracing` event, and `RunMetadata.base_url` on
-  disk — by construction rather than per-site sanitization. See §7 and
+  disk — by construction rather than per-site sanitization. `ResolvedLlmConfig`
+  and the `LlmError::Request`/`MalformedResponse` variants are
+  `#[non_exhaustive]`, so `resolve()` is the only way to build one from outside
+  the crate — a struct literal can't bypass the check. All four consumers
+  (`resolve_llm_client`, `probe_model_available`, and the two MCP call sites in
+  `commands/mcp.rs`) route the decision through the shared
+  `adept_cli::config::llm_available` predicate; the CLI paths exit `2`, the MCP
+  paths surface it as a per-call tool error (no exit code). See §7, §12, and
   `docs/BACKLOG.md`.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O
   error.

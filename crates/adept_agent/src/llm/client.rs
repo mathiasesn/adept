@@ -180,6 +180,7 @@ impl ChatResponse {
 pub enum LlmError {
     /// The underlying HTTP request failed (connection error, DNS, etc).
     #[error("request failed: {0}")]
+    #[non_exhaustive]
     Request(String),
 
     /// The request timed out.
@@ -200,6 +201,7 @@ pub enum LlmError {
 
     /// The response body could not be parsed as the expected JSON shape.
     #[error("malformed response: {0}")]
+    #[non_exhaustive]
     MalformedResponse(String),
 
     /// The response parsed as JSON but contained no choices.
@@ -248,7 +250,14 @@ pub struct LlmConfig {
 }
 
 /// Fully resolved configuration for [`OpenAiCompatClient`].
+///
+/// `#[non_exhaustive]`: [`LlmConfig::resolve`] is the sole gate that
+/// guarantees `base_url` is credential-free (it rejects embedded userinfo
+/// before returning). A struct literal built from outside this crate would
+/// bypass that check entirely, so external code may only obtain one via
+/// `resolve()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ResolvedLlmConfig {
     /// The base URL of the OpenAI-compatible endpoint, e.g.
     /// `https://api.openai.com/v1`. Requests are sent to

@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use adept::{sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
 use adept_agent::{create_skill, CreateOptions};
-use adept_agent::{EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatClient};
+use adept_agent::{ConfigError, EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatClient};
 use adept_fmt::{format_str, FmtConfig};
 use serde_json::{json, Value};
 
@@ -579,12 +579,7 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
             Ok(resolved) => resolved,
             Err(err) => {
                 return (
-                    json!({
-                        "error": format!(
-                            "no LLM model configured for eval_skill: {err} (set ADEPT_MODEL, or pass a `model` argument)"
-                        )
-                    })
-                    .to_string(),
+                    json!({ "error": llm_resolution_error_message("eval_skill", err) }).to_string(),
                     true,
                 );
             }
@@ -676,9 +671,45 @@ fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_agent::Resolved
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    llm_config.resolve().map_err(|err| {
-        format!("no LLM model configured: {err} (set ADEPT_MODEL, or pass a `model` argument)")
-    })
+    llm_config
+        .resolve()
+        .map_err(|err| llm_resolution_error_message("", err))
+}
+
+/// Build the MCP-tool error message for a failed [`adept_agent::LlmConfig::resolve`]
+/// call, distinguishing [`ConfigError::MissingModel`] (no model is
+/// configured at all — point at `ADEPT_MODEL`/`model`) from
+/// [`ConfigError::CredentialsInBaseUrl`] (a model *is* configured, but its
+/// `base_url` embeds a credential — pointing at `ADEPT_MODEL` there would be
+/// actively misleading, since the fix is `api_key`/`ADEPT_API_KEY`, not a
+/// model). `tool_name` is only used for the `MissingModel` wording, which
+/// names the calling tool (`eval_skill`) or is generic (empty context for
+/// `create_skill`/`generate_evals`, which share [`resolve_llm_from_arguments`]).
+///
+/// `err`'s `Display` never contains the `base_url`, so interpolating it here
+/// is safe — this only improves which remedy is suggested, it does not
+/// change what's redacted.
+///
+/// An exhaustive match, not a wildcard: a future [`ConfigError`] variant must
+/// be a compile error here, not a silent fallthrough to the wrong guidance.
+#[must_use]
+fn llm_resolution_error_message(tool_name: &str, err: ConfigError) -> String {
+    match err {
+        ConfigError::MissingModel => {
+            if tool_name.is_empty() {
+                format!(
+                    "no LLM model configured: {err} (set ADEPT_MODEL, or pass a `model` argument)"
+                )
+            } else {
+                format!(
+                    "no LLM model configured for {tool_name}: {err} (set ADEPT_MODEL, or pass a `model` argument)"
+                )
+            }
+        }
+        ConfigError::CredentialsInBaseUrl => {
+            format!("{err} (pass an `api_key` argument, or set ADEPT_API_KEY, instead of embedding it in base_url)")
+        }
+    }
 }
 
 /// `create_skill` MCP tool: runs the full `adept_agent::create_skill`
@@ -1448,6 +1479,46 @@ mod tests {
         assert!(
             text.contains("api_key") || text.contains("credentials"),
             "error must name the real problem: {text}"
+        );
+        assert!(
+            !text.contains("ADEPT_MODEL") && !text.contains("no LLM model configured"),
+            "a credential error must not be framed as a missing model: {text}"
+        );
+        assert!(
+            !text.contains("hunter2secret") && !text.contains("alice:hunter2secret@"),
+            "response must never contain the credential: {text}"
+        );
+    }
+
+    /// Sibling of the `eval_skill` case above, for the
+    /// `resolve_llm_from_arguments` path shared by `create_skill` and
+    /// `generate_evals`: a credential-bearing `base_url` must be reported as
+    /// an `api_key` problem, never as "no LLM model configured" pointing at
+    /// `ADEPT_MODEL`.
+    #[test]
+    fn create_skill_tool_with_credentials_in_base_url_names_api_key_not_a_missing_model() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+        std::env::remove_var("ADEPT_BASE_URL");
+        std::env::remove_var("ADEPT_API_KEY");
+
+        let arguments = json!({
+            "brief": "Extract PDF form data",
+            "model": "test-model",
+            "base_url": "https://alice:hunter2secret@gw.example/v1",
+        });
+        let (text, is_error) = create_skill_tool(&arguments);
+        assert!(
+            is_error,
+            "a credential-bearing base_url must be reported as an error: {text}"
+        );
+        assert!(
+            text.contains("api_key") || text.contains("credentials"),
+            "error must name the real problem: {text}"
+        );
+        assert!(
+            !text.contains("ADEPT_MODEL") && !text.contains("no LLM model configured"),
+            "a credential error must not be framed as a missing model: {text}"
         );
         assert!(
             !text.contains("hunter2secret") && !text.contains("alice:hunter2secret@"),
