@@ -37,19 +37,23 @@ Characterized against upstream at the vendored pin, the entire live FP set was
 two references (`word/document.xml`, `ppt/slides/slideN.xml`); `pdf` and
 `xlsx` produced zero. The corpus snapshot went 27 → 24.
 
-### Formatter limitations — open (#4)
-Each is visible to users as an unexpected diff; documented in `adept_fmt`:
+### Formatter limitations — closed (#4)
+Setext round-tripping, tight-list preservation for mixed items, and line-start
+escaping coverage all shipped (`5a40b61`, `8d5fe36`, `629f67b`). One item is
+still open under its own issue, and two coverage gaps remain from what shipped:
 
 - Reference-style link *definitions* are inlined at each use, not re-emitted.
   Tracked separately as a pre-publish decision (#5).
-- Setext headings are always converted to ATX (`HeadingStyle` has one
-  variant). `SL105 setext-heading` (Info) makes this the stated house style,
-  so it is no longer silent — but a second variant would mean deciding what
-  `SL105` does under it.
-- Tight-list preservation holds only when every item is a single bare-inline
-  block; items mixing text with a nested list print as loose. CommonMark-valid,
-  but it adds blank lines.
-- Text escaping covers a conservative subset, not every line-start ambiguity.
+- **`proptest_idempotency.rs`'s grammar generates no escapable punctuation
+  today**, so a line-start construct outside the four covered by `marker_like`
+  (table rows, HTML block starts, link-reference definitions, 4-space-indented
+  code) would surface to users before it surfaces in CI. Widening the grammar
+  to generate escapable punctuation is deferred, not done.
+- **The four-construct escaping scope is a closed decision, not a proof of
+  completeness.** The out-of-scope set (everything `marker_like` does not
+  recognize, and every character `escape_text` does not escape) is enumerated
+  with its rationale in `crates/adept_fmt/src/lib.rs`; expect follow-up reports
+  for constructs outside it.
 
 ### `adept fix` writes are not cross-file atomic — accepted
 `write_all_transactionally` writes all temp files before any rename, so no I/O
