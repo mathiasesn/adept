@@ -73,6 +73,7 @@ Config precedence is **CLI flag > `adept.toml` > built-in default**; `adept.toml
 - `Diagnostic` = something wrong with a parseable skill; `AdeptError` = I/O/parse failure. Discovery never aborts — errors become `SL001`/`SL002`/`SL003` diagnostics.
 - Sort output via `adept::sort_diagnostics` — never re-implement the `(path, line, column, code)` comparator.
 - Build the options structs via their `for_model` constructors (`EvalOptions`, `CreateOptions`, `FixOptions`) rather than struct literals, so defaults stay in one place. Bump `PROMPT_VERSION` in `adept_agent::eval::prompts` whenever template wording could shift scores.
+- **A credential-bearing `base_url` is rejected at config resolution, not scrubbed at each egress.** `LlmConfig::resolve` returns `ConfigError::CredentialsInBaseUrl` when the resolved `base_url` parses with a non-empty username or any password, closing by construction the three egresses userinfo previously reached.
 
 ## Adding a rule (all five steps required)
 
