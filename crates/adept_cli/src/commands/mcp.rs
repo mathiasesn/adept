@@ -24,6 +24,7 @@ use adept_fmt::{format_str, FmtConfig};
 use serde_json::{json, Value};
 
 use crate::commands::eval::{narrow_options, needs_llm, resolve_analyses};
+use crate::config::llm_available;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "adept";
@@ -260,7 +261,7 @@ fn handle_tools_list() -> Value {
     // agents don't discover a tool that's guaranteed to fail. Resolved once
     // and shared between the two — this is the one gate `eval_skill` above
     // deliberately no longer participates in, since grading doesn't need it.
-    let llm_configured = LlmConfig::default().resolve().is_ok();
+    let llm_configured = llm_available(&LlmConfig::default().resolve());
 
     // `create_skill`/`generate_evals` are also network-backed (same
     // `ADEPT_MODEL` resolution as `eval_skill`'s LLM analyses) and preview-only: neither
@@ -563,7 +564,7 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    let model_available = llm_config.resolve().is_ok();
+    let model_available = llm_available(&llm_config.resolve());
     let results_available = arguments.get("results").is_some();
 
     let selection = match resolve_analyses(&select, &ignore, model_available, results_available) {
@@ -1408,6 +1409,50 @@ mod tests {
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert!(parsed.get("triggering").is_none());
         assert_eq!(parsed["evals"]["pass_rate"], 1.0);
+    }
+
+    /// Regression test for the MCP counterpart of the CLI fix in commit
+    /// d6698ef: `eval_skill` with a credential-bearing `base_url` and no
+    /// `select` must not have `model_available` collapse to `false` (which
+    /// would make `needs_llm` false, `resolve()` never get called again at
+    /// `mcp.rs:577`, and the tool return a *successful* result that
+    /// silently ran only the offline analyses). It must instead reach the
+    /// real `resolve()` and report the credential error, without ever
+    /// putting the secret in the response.
+    #[test]
+    fn eval_skill_with_credentials_in_base_url_reports_the_error_not_a_silent_success() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+        std::env::remove_var("ADEPT_BASE_URL");
+        std::env::remove_var("ADEPT_API_KEY");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_skill(dir.path(), "demo", "Does a demo thing. Use when demoing.");
+        std::fs::create_dir_all(dir.path().join("demo").join("evals")).unwrap();
+        std::fs::write(
+            dir.path().join("demo").join("evals").join("evals.jsonl"),
+            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        )
+        .unwrap();
+
+        let arguments = json!({
+            "path": path.to_str().unwrap(),
+            "model": "test-model",
+            "base_url": "https://alice:hunter2secret@gw.example/v1",
+        });
+        let (text, is_error) = eval_skill_tool(&arguments);
+        assert!(
+            is_error,
+            "a credential-bearing base_url must be reported as an error, not silently downgraded: {text}"
+        );
+        assert!(
+            text.contains("api_key") || text.contains("credentials"),
+            "error must name the real problem: {text}"
+        );
+        assert!(
+            !text.contains("hunter2secret") && !text.contains("alice:hunter2secret@"),
+            "response must never contain the credential: {text}"
+        );
     }
 
     /// `eval_skill` with `content` (no real skill directory) must grade

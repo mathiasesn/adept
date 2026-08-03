@@ -18,6 +18,32 @@ use serde::Deserialize;
 
 const CONFIG_FILE_NAME: &str = "adept.toml";
 
+/// Whether an LLM should be treated as "configured" for the purposes of
+/// deciding whether LLM-backed work is even worth attempting — as opposed to
+/// whether [`LlmConfig::resolve`] actually succeeded.
+///
+/// A [`ConfigError::CredentialsInBaseUrl`] counts as configured even though
+/// resolution failed: the user clearly *did* point at an endpoint, just with
+/// the credential embedded in the URL instead of `ADEPT_API_KEY` or
+/// `[section] api_key`. Treating it as "unavailable" would silently narrow
+/// callers down to an offline-only path (or hide a tool from an MCP
+/// `tools/list`) and exit/return success without ever surfacing that a
+/// credential leaked into `base_url` — the exact "silent downgrade" hazard
+/// this predicate exists to close. Returning `true` here sends the caller
+/// down the real resolution path (e.g. [`resolve_llm_client`] or a second
+/// `resolve()` call), which reports the credential error properly.
+///
+/// An exhaustive match, not a wildcard: a future [`ConfigError`] variant must
+/// be a compile error here, not a silent fallthrough to either branch.
+#[must_use]
+pub fn llm_available(result: &Result<ResolvedLlmConfig, ConfigError>) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(ConfigError::CredentialsInBaseUrl) => true,
+        Err(ConfigError::MissingModel) => false,
+    }
+}
+
 /// Resolve an LLM client and its resolved configuration for `adept eval` or
 /// `adept fix`, given the CLI/config-file `base_url`/`model` overrides for
 /// that command's own section.

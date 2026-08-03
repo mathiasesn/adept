@@ -16,7 +16,7 @@ use std::sync::Arc;
 use adept::evals::EvalBenchmarkReport;
 use adept::{Skill, SkillSet};
 use adept_agent::{
-    CaptureSink, ConfigError, EvalOptions, EvalReport, LlmConfig, ResolvedLlmConfig, RunMetadata,
+    CaptureSink, EvalOptions, EvalReport, LlmConfig, ResolvedLlmConfig, RunMetadata,
 };
 
 use crate::cli::{EvalArgs, OutputFormat};
@@ -178,26 +178,18 @@ fn finalize(sink: &Option<Arc<CaptureSink>>, exit_code: i32) {
 /// environment, without printing anything. Used only to decide the
 /// *default* analysis selection — never gates a usage error by itself.
 ///
-/// A [`ConfigError::CredentialsInBaseUrl`] counts as "available" even though
-/// resolution failed: the user clearly *did* configure an LLM endpoint, just
-/// with the credential embedded in the URL instead of `ADEPT_API_KEY` or
-/// `[section] api_key`. Treating that as "unavailable" would
-/// silently downgrade the default selection to offline-only analyses and
-/// exit 0/1 without ever telling the user their credentials leaked into
-/// `--base-url`. Returning `true` here sends the LLM analyses down the real
-/// resolution path in [`crate::config::resolve_llm_client`], which reports
-/// the credential error and exits 2.
+/// Delegates to [`crate::config::llm_available`] — see its doc comment for
+/// why an [`adept_agent::ConfigError::CredentialsInBaseUrl`] counts as
+/// "available" even though resolution failed. Returning `true` here sends the LLM analyses
+/// down the real resolution path in [`crate::config::resolve_llm_client`],
+/// which reports the credential error and exits 2.
 fn probe_model_available(base_url: Option<String>, model: Option<String>) -> bool {
     let config = LlmConfig {
         base_url,
         api_key: None,
         model,
     };
-    match config.resolve() {
-        Ok(_) => true,
-        Err(ConfigError::CredentialsInBaseUrl) => true,
-        Err(ConfigError::MissingModel) => false,
-    }
+    crate::config::llm_available(&config.resolve())
 }
 
 /// Map an analysis name (rule-code-vocabulary style: exact, case-sensitive)
