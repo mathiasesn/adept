@@ -40,6 +40,31 @@ fn fix_without_model_exits_two() {
 }
 
 #[test]
+fn fix_credentials_in_base_url_exits_two_naming_api_key() {
+    // `--model` is passed so the credential error is the only resolution
+    // failure; otherwise this would also satisfy `ConfigError::MissingModel`
+    // and stop testing what it claims to.
+    adept()
+        .arg("fix")
+        .arg(fixture("clean-skill"))
+        .arg("--model")
+        .arg("test-model")
+        .arg("--base-url")
+        .arg("https://alice:hunter2secret@gw.example/v1")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("api_key")
+                .and(predicate::str::contains("could not resolve an LLM model").not())
+                .and(predicate::str::contains("alice:hunter2secret@").not())
+                .and(predicate::str::contains("hunter2secret").not()),
+        );
+}
+
+#[test]
 fn fix_help_lists_all_flags() {
     let assert = adept().arg("fix").arg("--help").assert().success();
     let output = assert.get_output();
