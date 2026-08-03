@@ -428,6 +428,14 @@ Recorded 2026-07-31.
   is in scope, so a future fifth consumer is covered by default. The other
   body-bearing variant, `MalformedResponse`, carries only `serde_json`'s
   message, which does not embed the input.
+
+  Hardened further: `Status.body` is now a `ScrubbedBody` newtype
+  (`crates/adept_agent/src/llm/client.rs`) instead of a plain `String`. Its
+  inner field is private and constructible only inside `adept-agent`, so
+  "this text has passed through `scrub`" is a guarantee the type carries —
+  external code cannot route an unscrubbed `String` into `Status` at all
+  (compile error), and in-crate code can only do so by writing a second,
+  deliberate `ScrubbedBody::new` call site, not silently.
 - **Resolved: a credential-bearing `base_url` leaked userinfo via three
   egresses.** `LlmError::Request(e.to_string())` embeds reqwest's URL
   serialization (including `user:password@`) via `Display`, reaching stderr

@@ -174,6 +174,46 @@ impl ChatResponse {
     }
 }
 
+/// A response body that has already passed through
+/// [`OpenAiCompatClient::scrub`].
+///
+/// The inner `String` is private and constructible only from within
+/// `adept-agent` (via [`ScrubbedBody::new`]), so "this text has been
+/// scrubbed of the API key" is a guarantee the type carries rather than
+/// something a doc comment merely asserts. `Display` renders the text
+/// verbatim — that impl *is* the stderr egress this type protects, since
+/// `LlmError::Status`'s `#[error(...)]` interpolates it.
+///
+/// `LlmError::Request` and `LlmError::MalformedResponse` do not use this
+/// type: they carry formatted error text (a reqwest error message, a
+/// `serde_json` message), not a backend response body, so there is nothing
+/// for `scrub` to have been run over. `#[non_exhaustive]` on those variants
+/// already blocks external construction; `ScrubbedBody` is additionally
+/// about *provenance* (has this text been scrubbed), which those variants'
+/// payloads don't need because they never echo the raw body back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrubbedBody(String);
+
+impl ScrubbedBody {
+    /// Wrap already-scrubbed text. Not `pub`: the only caller is
+    /// [`OpenAiCompatClient::send_once`], immediately after `scrub` runs, so
+    /// no unscrubbed text can reach this constructor from outside the crate.
+    pub(crate) fn new(scrubbed: impl Into<String>) -> Self {
+        Self(scrubbed.into())
+    }
+
+    /// Borrow the scrubbed text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ScrubbedBody {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Errors that can occur while talking to an LLM backend.
 #[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
@@ -195,8 +235,10 @@ pub enum LlmError {
         status: u16,
         /// The response body, scrubbed of the API key like every other
         /// consumer of it. `Display` puts this on stderr, so an endpoint that
-        /// echoes the key back must not be able to leak it here (#31).
-        body: String,
+        /// echoes the key back must not be able to leak it here (#31). Typed
+        /// as [`ScrubbedBody`] so that guarantee holds by construction, not
+        /// just by convention.
+        body: ScrubbedBody,
     },
 
     /// The response body could not be parsed as the expected JSON shape.
@@ -693,7 +735,7 @@ impl OpenAiCompatClient {
         // that last one ship unscrubbed (#31); past this line no unscrubbed
         // backend text exists in scope, so a future fifth consumer is covered
         // by default. Cheap: `scrub` borrows unless the key is really present.
-        let body_text = self.scrub(&raw_body).into_owned();
+        let body_text = ScrubbedBody::new(self.scrub(&raw_body).into_owned());
         // Emitted before parsing: a body that fails `parse_chat_response` is
         // exactly the one worth reading.
         tracing::debug!(
@@ -705,13 +747,13 @@ impl OpenAiCompatClient {
         );
 
         let outcome = if success {
-            match parse_chat_response(&body_text) {
+            match parse_chat_response(body_text.as_str()) {
                 Ok(response) => {
                     self.capture(recorder.finish(
                         Some(status.as_u16()),
                         request_headers,
                         response_headers,
-                        body_text,
+                        body_text.as_str().to_owned(),
                         "ok".to_string(),
                     ));
                     return Ok(response);
@@ -737,7 +779,7 @@ impl OpenAiCompatClient {
             Some(status.as_u16()),
             request_headers,
             response_headers,
-            body_text,
+            body_text.as_str().to_owned(),
             outcome_label,
         ));
         Err(outcome)
@@ -932,6 +974,13 @@ mod tests {
             model: "gpt-test".to_string(),
         });
         assert_eq!(anonymous.scrub("sk-leaky"), "sk-leaky");
+    }
+
+    #[test]
+    fn scrubbed_body_display_round_trips_verbatim() {
+        let body = ScrubbedBody::new(r#"{"error":"bad key **** (****)"}"#);
+        assert_eq!(body.as_str(), r#"{"error":"bad key **** (****)"}"#);
+        assert_eq!(body.to_string(), r#"{"error":"bad key **** (****)"}"#);
     }
 
     /// A `tracing` writer that appends every formatted event into a shared
