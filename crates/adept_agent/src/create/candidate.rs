@@ -95,31 +95,19 @@ const SLUG_MAX_LEN: usize = 40;
 /// A prompt that slugifies to nothing (e.g. all punctuation, or CJK text)
 /// falls back to `case-<ordinal>`.
 pub fn slugify_prompt(prompt: &str, ordinal: usize) -> String {
-    let mut slug = String::new();
-    let mut last_was_hyphen = true; // suppress a leading hyphen
-    for ch in prompt.chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch.to_ascii_lowercase());
-            last_was_hyphen = false;
-        } else if !last_was_hyphen {
-            slug.push('-');
-            last_was_hyphen = true;
-        }
-    }
-    while slug.ends_with('-') {
-        slug.pop();
-    }
+    // `to_kebab_case` is the shared definition of a kebab-case rewrite (the
+    // same one `SL005` suggests), and it guarantees a pure-ASCII result — so
+    // truncating on a byte offset below cannot split a character.
+    let mut slug = adept::text::to_kebab_case(prompt);
 
     if slug.len() > SLUG_MAX_LEN {
-        let mut truncated = &slug[..SLUG_MAX_LEN];
-        // Prefer not to cut mid-word: back up to the last hyphen boundary
-        // if one exists within the truncated slice.
-        if let Some(last_hyphen) = truncated.rfind('-') {
-            if last_hyphen > 0 {
-                truncated = &truncated[..last_hyphen];
-            }
-        }
-        slug = truncated.trim_matches('-').to_string();
+        // Prefer not to cut mid-word: back up to the last hyphen boundary if
+        // one exists within the truncated slice. `to_kebab_case` leaves no
+        // leading hyphen, so a hyphen at index 0 is impossible and the whole
+        // first word is never discarded.
+        let truncated = &slug[..SLUG_MAX_LEN];
+        let end = truncated.rfind('-').unwrap_or(SLUG_MAX_LEN);
+        slug.truncate(end);
     }
 
     if slug.is_empty() {

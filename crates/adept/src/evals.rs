@@ -536,25 +536,26 @@ pub struct EvalBenchmarkReport {
 pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport {
     let mut report = EvalBenchmarkReport::default();
 
-    let mut id_counts: HashMap<&str, usize> = HashMap::new();
-    for case in cases {
-        *id_counts.entry(case.id.as_str()).or_insert(0) += 1;
-    }
-    let ambiguous_ids: HashSet<&str> = id_counts
-        .iter()
-        .filter(|(id, count)| id.is_empty() || **count > 1)
-        .map(|(id, _)| *id)
-        .collect();
-    report.ambiguous_case_ids = ambiguous_ids.iter().map(|id| (*id).to_string()).collect();
-    report.ambiguous_case_ids.sort();
-    report.ambiguous_case_ids.dedup();
-
-    let mut id_to_index: HashMap<&str, usize> = HashMap::new();
+    // One pass builds the whole id table: `Some(index)` is a usable id,
+    // `None` is an ambiguous one (empty, or claimed by more than one case).
+    // Ambiguity is sticky — a second claim demotes the entry to `None` and
+    // nothing can promote it back, so no result is ever graded against an
+    // arbitrary member of a duplicate set.
+    let mut id_to_index: HashMap<&str, Option<usize>> = HashMap::new();
     for (idx, case) in cases.iter().enumerate() {
-        if !ambiguous_ids.contains(case.id.as_str()) {
-            id_to_index.insert(case.id.as_str(), idx);
-        }
+        let id = case.id.as_str();
+        let resolved = if id.is_empty() { None } else { Some(idx) };
+        id_to_index
+            .entry(id)
+            .and_modify(|slot| *slot = None)
+            .or_insert(resolved);
     }
+    report.ambiguous_case_ids = id_to_index
+        .iter()
+        .filter(|(_, slot)| slot.is_none())
+        .map(|(id, _)| (*id).to_string())
+        .collect();
+    report.ambiguous_case_ids.sort();
     let mut skill_seen = vec![false; cases.len()];
     let (mut skill_pass, mut skill_total) = (0usize, 0usize);
     let (mut baseline_pass, mut baseline_total) = (0usize, 0usize);
@@ -562,14 +563,15 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
     let mut any_tokens = false;
 
     for result in results {
-        if ambiguous_ids.contains(result.id.as_str()) {
-            // Already surfaced in `ambiguous_case_ids`; refuse to grade
-            // against an arbitrary member of the duplicate set.
-            continue;
-        }
-        let Some(&index) = id_to_index.get(result.id.as_str()) else {
-            report.unknown_result_ids.push(result.id.clone());
-            continue;
+        let index = match id_to_index.get(result.id.as_str()) {
+            Some(Some(index)) => *index,
+            // Ambiguous: already surfaced in `ambiguous_case_ids`, so refuse
+            // to grade against an arbitrary member of the duplicate set.
+            Some(None) => continue,
+            None => {
+                report.unknown_result_ids.push(result.id.clone());
+                continue;
+            }
         };
         let case = &cases[index];
         let (case_report, grading) = grade_case(case, result);
@@ -606,7 +608,9 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
     }
 
     for (idx, seen) in skill_seen.iter().enumerate() {
-        if !seen && !ambiguous_ids.contains(cases[idx].id.as_str()) {
+        // An ambiguous id is reported as ambiguous, not additionally as
+        // unmatched — `id_to_index` holds `None` for exactly those.
+        if !seen && id_to_index.get(cases[idx].id.as_str()) != Some(&None) {
             report.unmatched_cases.push(cases[idx].id.clone());
         }
     }
