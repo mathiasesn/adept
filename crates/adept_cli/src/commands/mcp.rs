@@ -19,12 +19,13 @@ use std::time::Duration;
 
 use adept::{sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
 use adept_agent::{create_skill, CreateOptions};
-use adept_agent::{ConfigError, EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatClient};
+use adept_agent::{
+    llm_available, ConfigError, EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatClient,
+};
 use adept_fmt::{format_str, FmtConfig};
 use serde_json::{json, Value};
 
 use crate::commands::eval::{narrow_options, needs_llm, resolve_analyses};
-use crate::config::llm_available;
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "adept";

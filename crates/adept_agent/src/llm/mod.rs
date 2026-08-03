@@ -13,8 +13,8 @@ mod mock;
 
 pub use capture::{CaptureSink, CapturedCall, RunMetadata};
 pub use client::{
-    ChatMessage, ChatRequest, ChatResponse, ChatRole, ConfigError, LlmClient, LlmConfig, LlmError,
-    OpenAiCompatClient, RedactedString, ResolvedLlmConfig, DEFAULT_BASE_URL, ENV_API_KEY,
-    ENV_BASE_URL, ENV_MODEL,
+    llm_available, ChatMessage, ChatRequest, ChatResponse, ChatRole, ConfigError, LlmClient,
+    LlmConfig, LlmError, OpenAiCompatClient, RedactedString, ResolvedLlmConfig, DEFAULT_BASE_URL,
+    ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
 };
 pub use mock::MockLlmClient;

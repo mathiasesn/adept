@@ -412,7 +412,7 @@ value that fails to parse at all is left alone and still fails downstream at
 `RequestBuilder::build`; the check targets userinfo only.
 
 Callers asking the yes/no question "is an LLM configured?" go through one shared
-predicate, `adept_cli::config::llm_available`: it maps `Ok(_)` and
+predicate, `adept_agent::llm_available`: it maps `Ok(_)` and
 `Err(ConfigError::CredentialsInBaseUrl)` both to `true` (the user did point at
 an endpoint; only `MissingModel` means "no model"). Callers that instead need to
 *report* the failure match `ConfigError` directly to choose their wording. Both
@@ -692,7 +692,7 @@ footprint and the risk of an SDK writing to stdout at zero.
 
 Five tools. `check_skill`, `format_skill`, and `eval_skill` are advertised
 unconditionally; `create_skill` and `generate_evals` only when
-`adept_cli::config::llm_available` reports a model configured — see §7 for what
+`adept_agent::llm_available` reports a model configured — see §7 for what
 that predicate treats as configured and why a credential error keeps both tools
 listed rather than hiding them.
 **The latter two are preview-only and never touch the filesystem** — they

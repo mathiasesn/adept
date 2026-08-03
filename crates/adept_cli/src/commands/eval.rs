@@ -178,7 +178,7 @@ fn finalize(sink: &Option<Arc<CaptureSink>>, exit_code: i32) {
 /// environment, without printing anything. Used only to decide the
 /// *default* analysis selection — never gates a usage error by itself.
 ///
-/// Delegates to [`crate::config::llm_available`] — see its doc comment for
+/// Delegates to [`adept_agent::llm_available`] — see its doc comment for
 /// why an [`adept_agent::ConfigError::CredentialsInBaseUrl`] counts as
 /// "available" even though resolution failed. Returning `true` here sends the LLM analyses
 /// down the real resolution path in [`crate::config::resolve_llm_client`],
@@ -189,7 +189,7 @@ fn probe_model_available(base_url: Option<String>, model: Option<String>) -> boo
         api_key: None,
         model,
     };
-    crate::config::llm_available(&config.resolve())
+    adept_agent::llm_available(&config.resolve())
 }
 
 /// Map an analysis name (rule-code-vocabulary style: exact, case-sensitive)
