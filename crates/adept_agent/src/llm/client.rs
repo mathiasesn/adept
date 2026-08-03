@@ -190,7 +190,9 @@ pub enum LlmError {
     Status {
         /// The HTTP status code.
         status: u16,
-        /// The response body (truncated if very large).
+        /// The response body, scrubbed of the API key like every other
+        /// consumer of it. `Display` puts this on stderr, so an endpoint that
+        /// echoes the key back must not be able to leak it here (#31).
         body: String,
     },
 
@@ -611,7 +613,7 @@ impl OpenAiCompatClient {
         // payload; naming *why* right here keeps that case distinguishable
         // from a genuinely empty error body in the artifact's `outcome`,
         // without carrying the fact eighty lines to its use site.
-        let (body_text, outcome_override) = match body_result {
+        let (raw_body, outcome_override) = match body_result {
             Ok(text) => (text, None),
             Err(e) if !success => (String::new(), Some(format!("StatusBodyUnreadable({e})"))),
             Err(e) => {
@@ -628,15 +630,20 @@ impl OpenAiCompatClient {
             }
         };
 
-        // Verbatim apart from the defensive key scrub, and emitted before
-        // parsing: a body that fails `parse_chat_response` is exactly the
-        // one worth reading.
-        let recorded_response_body = self.scrub(&body_text).into_owned();
+        // Scrub once, here, rather than at each egress. This body fans out to
+        // a log event, a capture artifact, the parser, and `LlmError::Status`
+        // — whose `Display` reaches stderr. Scrubbing per-consumer is what let
+        // that last one ship unscrubbed (#31); past this line no unscrubbed
+        // backend text exists in scope, so a future fifth consumer is covered
+        // by default. Cheap: `scrub` borrows unless the key is really present.
+        let body_text = self.scrub(&raw_body).into_owned();
+        // Emitted before parsing: a body that fails `parse_chat_response` is
+        // exactly the one worth reading.
         tracing::debug!(
             endpoint = %endpoint,
             attempt,
             status = status.as_u16(),
-            body = %recorded_response_body,
+            body = %body_text,
             "received chat-completions response"
         );
 
@@ -647,7 +654,7 @@ impl OpenAiCompatClient {
                         Some(status.as_u16()),
                         request_headers,
                         response_headers,
-                        recorded_response_body,
+                        body_text,
                         "ok".to_string(),
                     ));
                     return Ok(response);
@@ -659,12 +666,12 @@ impl OpenAiCompatClient {
                 endpoint = %endpoint,
                 attempt,
                 status = status.as_u16(),
-                body = %recorded_response_body,
+                body = %body_text,
                 "chat-completions returned a non-success status"
             );
             LlmError::Status {
                 status: status.as_u16(),
-                body: body_text,
+                body: body_text.clone(),
             }
         };
 
@@ -673,7 +680,7 @@ impl OpenAiCompatClient {
             Some(status.as_u16()),
             request_headers,
             response_headers,
-            recorded_response_body,
+            body_text,
             outcome_label,
         ));
         Err(outcome)

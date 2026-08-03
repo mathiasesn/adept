@@ -417,13 +417,17 @@ Recorded 2026-07-31.
   §12): capture is CLI-only, so the tool schema stays unchanged and an MCP
   client cannot make the server write to arbitrary paths.
   `crates/adept_cli/tests/tracing.rs` pins the schema half.
-- **`LlmError::Status` carries an unscrubbed response body (#31).** The
-  capture layer's scrub covers every body reaching a tracing event or
-  artifact, but `Status { body }` holds the response verbatim — a backend
-  echoing the API key in an error body would leak it to stderr via
-  `Display`. Left alone deliberately (it changes the contents of a returned
-  error), not folded into the capture work. Requires a misbehaving endpoint;
-  the fix is cheap.
+- **Resolved (#31): `LlmError::Status` carried an unscrubbed response body.**
+  The capture layer's scrub covered every body reaching a tracing event or
+  artifact, but `Status { body }` held the response verbatim — a backend
+  echoing the API key in an error body leaked it to stderr via `Display`.
+  Fixed by hoisting the scrub to where `send_once` reads the body, rather than
+  adding a fourth per-egress scrub: that body fans out to a log event, a
+  capture artifact, the parser and this error, and scrubbing per-consumer is
+  what let this one ship unscrubbed. Past the read no unscrubbed backend text
+  is in scope, so a future fifth consumer is covered by default. The other
+  body-bearing variant, `MalformedResponse`, carries only `serde_json`'s
+  message, which does not embed the input.
 
 ## Pre-publish checklist
 
