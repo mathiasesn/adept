@@ -17,8 +17,10 @@
 //! through verbatim), hard line breaks, block quotes (recursively
 //! reformatted, but quoting itself preserved), thematic breaks.
 //!
-//! Known limitations: Setext headings are always normalized to ATX
-//! (`HeadingStyle` currently has no other variant); list "tightness" is not
+//! Known limitations: Setext headings round-trip only when configured via
+//! `HeadingStyle::Setext` (h1/h2 only; h3+ always print as ATX) — the
+//! default `HeadingStyle::Atx` normalizes every heading to ATX regardless of
+//! source form, same as before; list "tightness" is not
 //! preserved distinctly from looseness (blank lines are always inserted
 //! between an item's blocks when it contains more than one); reference-style
 //! link *definitions* are not currently preserved as such by the printer —

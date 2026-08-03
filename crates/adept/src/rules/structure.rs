@@ -205,9 +205,12 @@ impl SkillRule for SetextHeading {
     fn check(
         &self,
         skill: &Skill,
-        _config: &LintConfig,
+        config: &LintConfig,
         _tokens: &crate::token::TokenCounter,
     ) -> Vec<Diagnostic> {
+        if config.heading_style != crate::rules::HeadingStyle::Atx {
+            return Vec::new();
+        }
         markdown::headings(&skill.body)
             .into_iter()
             .filter(|h| h.value.is_setext)
@@ -215,7 +218,7 @@ impl SkillRule for SetextHeading {
                 Diagnostic::new(
                     self.code(),
                     format!(
-                        "heading \"{}\" uses setext form; `adept fmt` will rewrite it to ATX (h{})",
+                        "heading \"{}\" is setext form, but the configured heading style is ATX (h{})",
                         h.value.text, h.value.level
                     ),
                     self.default_severity(),

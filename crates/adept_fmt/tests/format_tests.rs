@@ -12,7 +12,7 @@ use std::fs;
 use std::path::Path;
 
 use adept::{AnthropicSkillParser, SkillParser};
-use adept_fmt::{format_str, FmtConfig};
+use adept_fmt::{format_str, FmtConfig, HeadingStyle};
 use pulldown_cmark::{CodeBlockKind, Event, Tag};
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -191,6 +191,54 @@ fn already_formatted_fixture_is_byte_identical() {
     );
 }
 
+/// `setext_headings.md` under `heading-style = "setext"`: h1/h2 setext
+/// headings must round-trip byte-identically, and h3+ must still print as
+/// ATX. This is a separate test (not folded into
+/// `snapshots_and_invariants_hold_for_every_fixture`, which only ever runs
+/// `FmtConfig::default()`) so both configured styles get their own
+/// reviewed snapshot for the same source.
+#[test]
+fn setext_fixture_round_trips_under_setext_heading_style() {
+    let source = fs::read_to_string(fixtures_dir().join("setext_headings.md")).unwrap();
+    let cfg = FmtConfig {
+        heading_style: HeadingStyle::Setext,
+        ..FmtConfig::default()
+    };
+    let formatted =
+        format_str(&source, &cfg).unwrap_or_else(|e| panic!("setext fixture failed: {e}"));
+
+    insta::assert_snapshot!("setext_headings__setext_style", formatted);
+
+    // Idempotency under the setext style specifically.
+    let formatted_twice = format_str(&formatted, &cfg)
+        .unwrap_or_else(|e| panic!("setext fixture failed on second pass: {e}"));
+    assert_eq!(
+        formatted, formatted_twice,
+        "setext fixture is not idempotent under heading-style = setext"
+    );
+
+    // The h1/h2 setext headings must be byte-identical to the source lines;
+    // check by re-extracting them rather than asserting the whole file,
+    // since prose reflow may still touch other lines.
+    assert!(
+        formatted.contains("Top Setext\n=="),
+        "h1 should stay setext:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("Sub Setext\n--"),
+        "h2 should stay setext:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("### Atx H3"),
+        "h3 should still print as ATX:\n{formatted}"
+    );
+}
+
+/// The default `heading-style = "atx"` fixture snapshot
+/// (`format_tests__setext_headings.snap`, produced by the shared
+/// `snapshots_and_invariants_hold_for_every_fixture` loop) exercises the
+/// same source under the default style, so both configured styles have a
+/// reviewed snapshot for it.
 #[test]
 fn crlf_input_is_handled() {
     let lf = fs::read_to_string(fixtures_dir().join("headings.md")).unwrap();

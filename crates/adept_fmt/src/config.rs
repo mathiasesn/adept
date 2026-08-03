@@ -72,16 +72,17 @@ impl StrongMarker {
     }
 }
 
-/// The heading style to print. Only ATX (`# Heading`) is currently
-/// implemented; Setext (`Heading\n=======`) headings are always normalized
-/// to ATX regardless of this setting (see the crate-level docs).
+/// The heading style to print.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum HeadingStyle {
-    /// `#`-prefixed headings (the default, and currently the only supported
-    /// style).
+    /// `#`-prefixed headings (the default).
     #[default]
     Atx,
+    /// `Heading\n=======` / `Heading\n-------` underlined headings, for h1
+    /// and h2 only — h3 and deeper have no setext form and are always
+    /// printed as ATX regardless of this setting.
+    Setext,
 }
 
 /// The character used for fenced code blocks.

@@ -326,6 +326,32 @@ pub enum ConfigLoadError {
     /// stop applying the user's `model`/`capture_dir`/`num_prompts`.
     #[error("{path}: `[score]` is no longer read; rename it to `[eval]`")]
     LegacyScoreSection { path: PathBuf },
+    /// `[fmt] heading-style` and `[lint] heading_style` are both present but
+    /// name different styles. `adept` cannot depend on `adept_fmt`, so the
+    /// setting is duplicated across the two sections (see
+    /// `docs/ARCHI.md`); silently picking one would let `fmt` and `check`
+    /// disagree about the house style, so this fails closed instead.
+    #[error(
+        "{path}: `[fmt] heading-style = \"{fmt_value}\"` and `[lint] heading_style = \"{lint_value}\"` disagree; make them match"
+    )]
+    HeadingStyleMismatch {
+        path: PathBuf,
+        fmt_value: String,
+        lint_value: String,
+    },
+    /// Exactly one of `[fmt] heading-style` / `[lint] heading_style` is
+    /// present. Rather than silently defaulting the other to ATX (which
+    /// could disagree with the one the user did set), this is a hard error
+    /// naming the exact line to add.
+    #[error(
+        "{path}: `[fmt] heading-style` and `[lint] heading_style` must both be set or both be absent; add `{missing_key} = \"{value}\"` to the `[{missing_section}]` section"
+    )]
+    HeadingStyleOnlyOnePresent {
+        path: PathBuf,
+        missing_section: &'static str,
+        missing_key: &'static str,
+        value: String,
+    },
 }
 
 /// Walk upward from `start` (a file or directory) looking for `adept.toml`,
@@ -364,6 +390,33 @@ pub fn load_config_file(path: &Path) -> Result<AdeptConfig, ConfigLoadError> {
             path: path.to_path_buf(),
         });
     }
+    let (fmt_heading_style, lint_heading_style) = heading_style_values(&text);
+    match (fmt_heading_style, lint_heading_style) {
+        (Some(fmt_value), Some(lint_value)) if fmt_value != lint_value => {
+            return Err(ConfigLoadError::HeadingStyleMismatch {
+                path: path.to_path_buf(),
+                fmt_value,
+                lint_value,
+            });
+        }
+        (Some(value), None) => {
+            return Err(ConfigLoadError::HeadingStyleOnlyOnePresent {
+                path: path.to_path_buf(),
+                missing_section: "lint",
+                missing_key: "heading_style",
+                value,
+            });
+        }
+        (None, Some(value)) => {
+            return Err(ConfigLoadError::HeadingStyleOnlyOnePresent {
+                path: path.to_path_buf(),
+                missing_section: "fmt",
+                missing_key: "heading-style",
+                value,
+            });
+        }
+        _ => {}
+    }
     let mut config: AdeptConfig =
         toml::from_str(&text).map_err(|source| ConfigLoadError::Parse {
             path: path.to_path_buf(),
@@ -385,6 +438,30 @@ fn contains_legacy_score_section(text: &str) -> bool {
         text.parse::<toml::Value>(),
         Ok(toml::Value::Table(table)) if table.contains_key("score")
     )
+}
+
+/// The raw string values of `[fmt] heading-style` and `[lint] heading_style`
+/// in `text`, if present, inspected via `toml::Value` rather than the
+/// deserialized `AdeptConfig` — `#[serde(default)]` cannot distinguish
+/// "absent" from "explicitly set to the default", which is exactly the
+/// distinction the cross-validation above needs. A malformed document is
+/// not this function's concern: `toml::from_str` on `AdeptConfig` still
+/// reports that.
+fn heading_style_values(text: &str) -> (Option<String>, Option<String>) {
+    let Ok(toml::Value::Table(table)) = text.parse::<toml::Value>() else {
+        return (None, None);
+    };
+    let fmt_value = table
+        .get("fmt")
+        .and_then(|v| v.get("heading-style"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+    let lint_value = table
+        .get("lint")
+        .and_then(|v| v.get("heading_style"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+    (fmt_value, lint_value)
 }
 
 /// Resolve the effective config: `--config` forces a specific file;
@@ -585,5 +662,111 @@ mod tests {
             value_source(false, false, "ADEPT_DEFINITELY_UNSET_FOR_TESTS"),
             SOURCE_DEFAULT
         );
+    }
+
+    #[test]
+    fn heading_style_both_absent_defaults_to_atx_with_no_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("adept.toml"),
+            "[lint]\nbody_max_tokens = 42\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(None, dir.path()).unwrap();
+        assert_eq!(config.lint.heading_style, adept::HeadingStyle::default());
+        assert_eq!(config.fmt.heading_style, adept_fmt::HeadingStyle::default());
+    }
+
+    #[test]
+    fn heading_style_both_present_and_equal_is_fine() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("adept.toml"),
+            "[fmt]\nheading-style = \"setext\"\n[lint]\nheading_style = \"setext\"\n",
+        )
+        .unwrap();
+
+        let config = resolve_config(None, dir.path()).unwrap();
+        assert_eq!(config.lint.heading_style, adept::HeadingStyle::Setext);
+        assert_eq!(config.fmt.heading_style, adept_fmt::HeadingStyle::Setext);
+    }
+
+    #[test]
+    fn heading_style_present_and_different_is_a_hard_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("adept.toml"),
+            "[fmt]\nheading-style = \"setext\"\n[lint]\nheading_style = \"atx\"\n",
+        )
+        .unwrap();
+
+        let err = resolve_config(None, dir.path()).unwrap_err();
+        match &err {
+            ConfigLoadError::HeadingStyleMismatch {
+                fmt_value,
+                lint_value,
+                ..
+            } => {
+                assert_eq!(fmt_value, "setext");
+                assert_eq!(lint_value, "atx");
+            }
+            other => panic!("expected HeadingStyleMismatch, got {other:?}"),
+        }
+        let message = err.to_string();
+        assert!(message.contains("heading-style"));
+        assert!(message.contains("heading_style"));
+        assert!(message.contains("setext"));
+        assert!(message.contains("atx"));
+    }
+
+    #[test]
+    fn heading_style_exactly_one_present_is_a_hard_error_naming_the_missing_key() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("adept.toml"),
+            "[fmt]\nheading-style = \"setext\"\n",
+        )
+        .unwrap();
+
+        let err = resolve_config(None, dir.path()).unwrap_err();
+        match &err {
+            ConfigLoadError::HeadingStyleOnlyOnePresent {
+                missing_section,
+                missing_key,
+                value,
+                ..
+            } => {
+                assert_eq!(*missing_section, "lint");
+                assert_eq!(*missing_key, "heading_style");
+                assert_eq!(value, "setext");
+            }
+            other => panic!("expected HeadingStyleOnlyOnePresent, got {other:?}"),
+        }
+        let message = err.to_string();
+        assert!(message.contains("heading_style = \"setext\""));
+        assert!(message.contains("[lint]"));
+
+        // And the reverse direction: only `[lint]` set.
+        let dir2 = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir2.path().join("adept.toml"),
+            "[lint]\nheading_style = \"setext\"\n",
+        )
+        .unwrap();
+        let err2 = resolve_config(None, dir2.path()).unwrap_err();
+        match &err2 {
+            ConfigLoadError::HeadingStyleOnlyOnePresent {
+                missing_section,
+                missing_key,
+                value,
+                ..
+            } => {
+                assert_eq!(*missing_section, "fmt");
+                assert_eq!(*missing_key, "heading-style");
+                assert_eq!(value, "setext");
+            }
+            other => panic!("expected HeadingStyleOnlyOnePresent, got {other:?}"),
+        }
     }
 }

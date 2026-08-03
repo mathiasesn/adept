@@ -31,7 +31,9 @@ pub struct ListItem {
 /// A block-level Markdown node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
-    /// An ATX/Setext heading, normalized to ATX on output.
+    /// An ATX or Setext heading. Printed form is a function of the
+    /// printer's configured heading style and `level`; the AST does not
+    /// record which form the source used.
     Heading {
         /// Heading level, 1-6.
         level: u8,

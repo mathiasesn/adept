@@ -1,6 +1,6 @@
 //! Pretty-printing a Markdown AST back to normalized CommonMark text.
 
-use crate::config::FmtConfig;
+use crate::config::{FmtConfig, HeadingStyle};
 
 use adept::markdown::ast::{Alignment, Block, Inline, ListItem};
 use adept::markdown::MAX_NESTING_DEPTH;
@@ -51,11 +51,29 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
         Block::Heading { level, inline } => {
             let level = (*level).clamp(1, 6);
             let text = flatten_words(inline, cfg);
-            let hashes = "#".repeat(level as usize);
-            if text.is_empty() {
-                vec![hashes]
+            // Setext output is a pure function of the configured style and
+            // level, not of whether the source was setext — the same way
+            // Atx output today doesn't check the source form either. This
+            // both matches "today's behaviour is unchanged" under the
+            // (default) Atx style and makes the choice trivially
+            // idempotent.
+            if cfg.heading_style == HeadingStyle::Setext && level <= 2 {
+                let underline_char = if level == 1 { '=' } else { '-' };
+                if text.is_empty() {
+                    // An empty setext underline would parse back as a
+                    // thematic break / nothing at all; fall back to ATX.
+                    vec!["#".repeat(level as usize)]
+                } else {
+                    let underline = underline_char.to_string().repeat(text.chars().count());
+                    vec![text, underline]
+                }
             } else {
-                vec![format!("{hashes} {text}")]
+                let hashes = "#".repeat(level as usize);
+                if text.is_empty() {
+                    vec![hashes]
+                } else {
+                    vec![format!("{hashes} {text}")]
+                }
             }
         }
         Block::Paragraph(inline) => wrap_paragraph(inline, cfg),

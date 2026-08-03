@@ -84,10 +84,10 @@ Two further exemptions:
 
 ### SL105 `setext-heading` (Info)
 Flags a heading written in setext form — a `Title` line underlined with
-`===` (h1) or `---` (h2) — rather than ATX (`# Title`). Informational only:
-`adept fmt` rewrites setext to ATX, so leaving one in place means the linter
-and formatter disagree — but the formatter resolves it, so it should not fail
-CI.
+`===` (h1) or `---` (h2) — rather than ATX (`# Title`), but only when the
+configured heading style (`LintConfig::heading_style`, kept in sync with
+`adept.toml`'s `[fmt] heading-style`) is ATX. Under a `setext` configured
+style the rule does not fire at all. Informational only.
 **Fix:** run `adept fmt`, or write the heading as `# Title` / `## Title`.
 
 ## SL2xx — description / triggering heuristics
