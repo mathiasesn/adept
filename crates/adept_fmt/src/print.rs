@@ -3,7 +3,7 @@
 use crate::config::{FmtConfig, HeadingStyle};
 
 use adept::markdown::ast::{Alignment, Block, Inline, ListItem};
-use adept::markdown::MAX_NESTING_DEPTH;
+use adept::markdown::{heading_text_can_use_setext, MAX_NESTING_DEPTH};
 
 /// A single reflow-able output token: either an atomic word (which may
 /// itself be a whole inline code span, link, or image — never split
@@ -37,36 +37,6 @@ fn print_blocks(blocks: &[Block], cfg: &FmtConfig, depth: usize, tight: bool) ->
         lines.extend(print_block(b, cfg, depth));
     }
     lines
-}
-
-/// Whether `text` is safe to print as a setext heading's own line (no
-/// leading marker, unlike ATX's `# `). If it could instead be reparsed as
-/// opening a different block on the very next pass — with the underline
-/// then read as an unrelated thematic break — that would silently destroy
-/// the heading and break idempotency.
-///
-/// This is deliberately **not** `marker_like`, and must not be unified with
-/// it: `marker_like` was tuned for *wrapped* tokens, where
-/// `escape_line_start` also runs and a paragraph's genuine first token can
-/// never itself be marker-like — neither holds at a setext line start,
-/// where the text is arbitrary and nothing escapes it, so `marker_like`'s
-/// deliberate narrowness (e.g. only a lone `>`, only pure repeated-char
-/// runs) is a hole here. Widening `marker_like` to close it would also make
-/// ordinary reflow escape more than it needs to, which is exactly the
-/// unnecessary-diff problem setext support exists to avoid.
-///
-/// Instead this is a separate, conservative allowlist local to heading
-/// printing: setext is used only when the text is *provably* safe. Every
-/// CommonMark block-start construct is introduced by punctuation,
-/// whitespace/indentation, or a digit-run marker (`1.`, `123)`), so a text
-/// whose first character is a letter — ASCII alphabetic, or any non-ASCII
-/// alphabetic character — cannot itself open a block. Anything else
-/// (leading punctuation, leading whitespace, a leading digit, or an empty
-/// text) is rejected. A wrong "yes" here silently destroys a heading; a
-/// wrong "no" only costs a slightly different rendering of the same
-/// heading, so this errs toward rejecting whenever in doubt.
-fn heading_text_can_use_setext(text: &str) -> bool {
-    text.chars().next().is_some_and(char::is_alphabetic)
 }
 
 /// Print a single block. `depth` counts container nesting (block quotes,

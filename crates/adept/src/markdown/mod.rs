@@ -18,7 +18,9 @@ mod build;
 mod query;
 
 pub use build::parse_document;
-pub use query::{headings, inline_code_spans, link_destinations, Heading, Located};
+pub use query::{
+    heading_text_can_use_setext, headings, inline_code_spans, link_destinations, Heading, Located,
+};
 
 use pulldown_cmark::{Options, Parser};
 

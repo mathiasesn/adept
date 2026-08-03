@@ -83,12 +83,23 @@ Two further exemptions:
 **Fix:** fix the path, or add the missing file next to SKILL.md.
 
 ### SL105 `setext-heading` (Info)
-Flags a heading written in setext form — a `Title` line underlined with
-`===` (h1) or `---` (h2) — rather than ATX (`# Title`), but only when the
-configured heading style (`LintConfig::heading_style`, kept in sync with
-`adept.toml`'s `[fmt] heading-style`) is ATX. Under a `setext` configured
-style the rule does not fire at all. Informational only.
-**Fix:** run `adept fmt`, or write the heading as `# Title` / `## Title`.
+Flags a heading that is not written in the configured house heading style
+(`LintConfig::heading_style`, kept in sync with `adept.toml`'s `[fmt]
+heading-style`), symmetrically in both directions:
+- Configured style ATX: flags a heading written in setext form — a `Title`
+  line underlined with `===` (h1) or `---` (h2) — rather than `# Title`.
+- Configured style setext: flags an ATX h1/h2 heading (`# Title` / `##
+  Title`) whose text `adept fmt` would actually rewrite to setext, i.e.
+  text starting with a letter (per the same allowlist `adept_fmt` uses,
+  `heading_text_can_use_setext`). h3-h6 headings are never setext-eligible
+  and are never flagged, and an h1/h2 whose text starts with punctuation, a
+  digit, or is empty (e.g. `## 1. Numbered`, `## >Quoted`) is left alone
+  because the formatter would never rewrite it either — flagging it would
+  be a false positive.
+
+Informational only.
+**Fix:** run `adept fmt`, or rewrite the heading by hand to the configured
+form.
 
 ## SL2xx — description / triggering heuristics
 
