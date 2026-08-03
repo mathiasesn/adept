@@ -93,16 +93,6 @@ fn semantic_events(source: &str) -> Vec<String> {
                 flush(&mut buf, &mut out);
                 out.push(format!("TL:{checked}"));
             }
-            // Whether a list item's content is wrapped in an explicit
-            // `Paragraph` reflects only CommonMark tight/loose rendering,
-            // not the document's meaning (the spec defines tight/loose as
-            // purely a rendering concern) — adept_fmt does not attempt to
-            // reproduce tightness exactly for items with more than one
-            // block, so paragraph wrapper events are excluded here.
-            Event::Start(pulldown_cmark::Tag::Paragraph)
-            | Event::End(pulldown_cmark::TagEnd::Paragraph) => {
-                flush(&mut buf, &mut out);
-            }
             Event::Start(tag) => {
                 flush(&mut buf, &mut out);
                 out.push(format!("S:{}", tag_repr(&tag)));

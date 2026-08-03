@@ -16,16 +16,22 @@ enum Token {
 /// Print a full sequence of top-level blocks to a document string, ending
 /// in exactly one trailing newline.
 pub fn print_document(blocks: &[Block], cfg: &FmtConfig) -> String {
-    let lines = print_blocks(blocks, cfg, 0);
+    let lines = print_blocks(blocks, cfg, 0, false);
     let mut out = lines.join("\n");
     out.push('\n');
     out
 }
 
-fn print_blocks(blocks: &[Block], cfg: &FmtConfig, depth: usize) -> Vec<String> {
+/// Print a sequence of sibling blocks. When `tight` is true (only ever set
+/// for the contents of a list item whose own
+/// [`adept::markdown::ast::ListItem::content_tight`] is true), no blank
+/// line is inserted between the blocks — otherwise every other block
+/// nesting (block quotes, footnote definitions, loose list items) keeps the
+/// unconditional blank-line separation.
+fn print_blocks(blocks: &[Block], cfg: &FmtConfig, depth: usize, tight: bool) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for (i, b) in blocks.iter().enumerate() {
-        if i > 0 {
+        if i > 0 && !tight {
             lines.push(String::new());
         }
         lines.extend(print_block(b, cfg, depth));
@@ -57,7 +63,7 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
             if depth >= MAX_NESTING_DEPTH {
                 return vec!["> [nesting too deep, content omitted]".to_string()];
             }
-            let content = print_blocks(inner, cfg, depth + 1);
+            let content = print_blocks(inner, cfg, depth + 1, false);
             indent_block(&content, "> ", "> ")
         }
         Block::List {
@@ -84,7 +90,7 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
             if depth >= MAX_NESTING_DEPTH {
                 return vec![format!("[^{label}]: [nesting too deep, content omitted]")];
             }
-            let content = print_blocks(blocks, cfg, depth + 1);
+            let content = print_blocks(blocks, cfg, depth + 1, false);
             let first_prefix = format!("[^{label}]: ");
             let rest_prefix = " ".repeat(first_prefix.chars().count());
             indent_block(&content, &first_prefix, &rest_prefix)
@@ -112,7 +118,7 @@ fn print_list(
         };
         let rest_prefix = " ".repeat(first_prefix.chars().count());
 
-        let mut content = print_blocks(&item.blocks, cfg, depth + 1);
+        let mut content = print_blocks(&item.blocks, cfg, depth + 1, item.content_tight);
         if let Some(checked) = item.checked {
             let box_str = if checked { "[x] " } else { "[ ] " };
             if content.is_empty() {

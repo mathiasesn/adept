@@ -116,10 +116,21 @@ fn is_inline_tag(tag: &Tag<'_>) -> bool {
     )
 }
 
-/// Collect a list item's blocks, additionally reporting whether the item
-/// is "tight" (a single paragraph's worth of bare inline content, with no
-/// blank line before any following block) so the printer can preserve
-/// tight-list formatting instead of always inserting blank lines.
+/// Collect a list item's blocks, additionally reporting whether the item's
+/// own content is "tight" (see [`adept::markdown::ast::ListItem::content_tight`])
+/// so the printer can preserve tight-list formatting instead of always
+/// inserting blank lines.
+///
+/// `pulldown-cmark` signals a whole list's tightness uniformly across all
+/// its items: either every item's leading paragraph is emitted as bare
+/// inline events (list is tight, no blank line anywhere in it), or every
+/// item's leading paragraph is wrapped in `Tag::Paragraph` (list is loose,
+/// some item somewhere is blank-separated from a sibling or internally).
+/// So `leading_bare_inline == true` already means "no blank line exists
+/// anywhere in this list" — the only thing left to get right here is not
+/// to manufacture a false "not tight" for an item that has more than one
+/// block but whose extra blocks are just nested lists, which never
+/// introduce a blank line of their own between this item's blocks.
 fn collect_item_blocks(iter: &mut EventIter<'_>, depth: usize) -> (Vec<Block>, bool) {
     let mut blocks = Vec::new();
     let mut leading_bare_inline = false;
@@ -144,7 +155,10 @@ fn collect_item_blocks(iter: &mut EventIter<'_>, depth: usize) -> (Vec<Block>, b
         _ => {}
     }
     blocks.extend(collect_blocks(iter, depth));
-    let tight = leading_bare_inline && blocks.len() == 1;
+    let extra_blocks_are_lists = blocks
+        .get(1..)
+        .is_some_and(|rest| rest.iter().all(|b| matches!(b, Block::List { .. })));
+    let tight = leading_bare_inline && (blocks.len() == 1 || extra_blocks_are_lists);
     (blocks, tight)
 }
 
@@ -209,13 +223,16 @@ fn build_block(tag: Tag<'_>, iter: &mut EventIter<'_>, depth: usize) -> Option<B
                 } else {
                     None
                 };
-                let (blocks, item_tight) = collect_item_blocks(iter, depth + 1);
+                let (blocks, content_tight) = collect_item_blocks(iter, depth + 1);
                 expect_end(iter);
-                items.push((ListItem { checked, blocks }, item_tight));
+                items.push(ListItem {
+                    checked,
+                    content_tight,
+                    blocks,
+                });
             }
             expect_end(iter);
-            let tight = items.iter().all(|(_, t)| *t);
-            let items = items.into_iter().map(|(item, _)| item).collect();
+            let tight = items.iter().all(|item| item.content_tight);
             Some(Block::List {
                 ordered,
                 start: start_num,
@@ -412,4 +429,51 @@ fn flatten_text(inline: &[Inline]) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list_of(source: &str) -> (bool, Vec<bool>) {
+        let blocks = parse_document(source);
+        match blocks.into_iter().next() {
+            Some(Block::List { tight, items, .. }) => {
+                (tight, items.iter().map(|i| i.content_tight).collect())
+            }
+            other => panic!("expected a top-level list, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn item_with_text_plus_nested_list_and_no_blank_line_stays_tight() {
+        // A tight item mixing bare-inline text with a nested list (no blank
+        // line separating them) must not be downgraded to loose, and must
+        // not loosen its siblings either.
+        let source = "- one\n  - nested\n- two\n";
+        let (tight, item_tight) = list_of(source);
+        assert!(tight, "list should stay tight");
+        assert_eq!(item_tight, vec![true, true]);
+    }
+
+    #[test]
+    fn item_with_two_blocks_separated_by_blank_line_makes_list_loose() {
+        // Genuinely loose source (a blank line between two blocks inside one
+        // item) is a whole-list property per CommonMark: pulldown-cmark
+        // itself reports every item's leading paragraph as wrapped once any
+        // item is loose, so the whole list (and every item.content_tight)
+        // must report loose here — this is not the bug being fixed.
+        let source = "- one\n\n  more\n- two\n";
+        let (tight, item_tight) = list_of(source);
+        assert!(!tight, "list should become loose");
+        assert!(item_tight.iter().all(|t| !t));
+    }
+
+    #[test]
+    fn plain_tight_list_is_unaffected() {
+        let source = "- one\n- two\n- three\n";
+        let (tight, item_tight) = list_of(source);
+        assert!(tight);
+        assert_eq!(item_tight, vec![true, true, true]);
+    }
 }
