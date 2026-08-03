@@ -346,8 +346,10 @@ pub async fn generate_evals(
     let cases: Vec<evals::EvalCase> = parsed
         .cases
         .into_iter()
-        .map(|c| evals::EvalCase {
+        .enumerate()
+        .map(|(i, c)| evals::EvalCase {
             schema_version: evals::SCHEMA_VERSION,
+            id: candidate::slugify_prompt(&c.prompt, i + 1),
             prompt: c.prompt,
             assertions: c.assertions,
         })
@@ -881,6 +883,47 @@ mod tests {
             "expected SL401 duplicate-skill-name to be reported: {all_diagnostics:?}"
         );
         assert_eq!(report.skill_name, "existing-skill");
+    }
+
+    /// Acceptance test for #29 / the content-addressed eval case ids spec:
+    /// a dataset written by `create_skill` (via the existing `MockLlmClient`
+    /// path, no network I/O) must be `schema_version: 2` with unique,
+    /// non-empty ids, and must pass `adept::evals::validate` byte-for-byte —
+    /// not just the in-memory `validate_cases` check `generate_evals` already
+    /// runs internally.
+    #[tokio::test]
+    async fn generated_dataset_is_schema_v2_and_passes_validate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("demo-skill");
+
+        let good = valid_generate_json(
+            "demo-skill",
+            "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs.",
+            clean_body(),
+        );
+        let eval = valid_eval_json(5);
+        let mock = MockLlmClient::with_texts(vec![good, eval]);
+
+        let options = base_options();
+        let report = create_skill(&mock, "Extract PDF form data", &out_dir, &options)
+            .await
+            .unwrap();
+
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(report.eval_cases.len(), 5);
+        assert!(report
+            .eval_cases
+            .iter()
+            .all(|c| c.schema_version == evals::SCHEMA_VERSION));
+        assert!(report.eval_cases.iter().all(|c| !c.id.is_empty()));
+        let unique_ids: HashSet<&str> = report.eval_cases.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(unique_ids.len(), report.eval_cases.len());
+
+        let jsonl = report
+            .files
+            .get(&out_dir.join("evals").join("evals.jsonl"))
+            .expect("evals.jsonl written");
+        evals::validate(jsonl).expect("generated dataset must satisfy adept::evals::validate");
     }
 
     /// Regression test for the `--name` fix: when the override is applied

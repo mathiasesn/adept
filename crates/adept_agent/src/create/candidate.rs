@@ -82,6 +82,53 @@ impl EvalGenerationResponse {
     }
 }
 
+/// The bounded length a slug's word portion is truncated to, before the
+/// `-<ordinal>` suffix is appended. Chosen to keep ids short but still
+/// legible; not itself part of the published schema.
+const SLUG_MAX_LEN: usize = 40;
+
+/// Derive a deterministic kebab-case id for eval case `ordinal` (1-based)
+/// from its `prompt`: lowercase, non-alphanumerics collapsed to single
+/// hyphens, truncated to [`SLUG_MAX_LEN`] without cutting mid-word where
+/// possible, with no leading/trailing hyphen, suffixed with `-<ordinal>` so
+/// uniqueness is guaranteed by construction regardless of prompt content.
+/// A prompt that slugifies to nothing (e.g. all punctuation, or CJK text)
+/// falls back to `case-<ordinal>`.
+pub fn slugify_prompt(prompt: &str, ordinal: usize) -> String {
+    let mut slug = String::new();
+    let mut last_was_hyphen = true; // suppress a leading hyphen
+    for ch in prompt.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_hyphen = false;
+        } else if !last_was_hyphen {
+            slug.push('-');
+            last_was_hyphen = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+
+    if slug.len() > SLUG_MAX_LEN {
+        let mut truncated = &slug[..SLUG_MAX_LEN];
+        // Prefer not to cut mid-word: back up to the last hyphen boundary
+        // if one exists within the truncated slice.
+        if let Some(last_hyphen) = truncated.rfind('-') {
+            if last_hyphen > 0 {
+                truncated = &truncated[..last_hyphen];
+            }
+        }
+        slug = truncated.trim_matches('-').to_string();
+    }
+
+    if slug.is_empty() {
+        format!("case-{ordinal}")
+    } else {
+        format!("{slug}-{ordinal}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +166,41 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.cases.len(), 1);
         assert_eq!(parsed.cases[0].prompt, "do it");
+    }
+
+    #[test]
+    fn slugify_normal_prose_prompt() {
+        let id = slugify_prompt("Summarize the attached report", 1);
+        assert_eq!(id, "summarize-the-attached-report-1");
+    }
+
+    #[test]
+    fn slugify_truncates_long_prompt_without_leaving_a_trailing_hyphen() {
+        let prompt = "This is a very long prompt that goes on and on and on describing a task in exhaustive detail for no good reason at all";
+        let id = slugify_prompt(prompt, 7);
+        assert!(id.ends_with("-7"));
+        assert!(!id.contains("--"));
+        let slug_part = id.strip_suffix("-7").unwrap();
+        assert!(slug_part.len() <= SLUG_MAX_LEN);
+        assert!(!slug_part.starts_with('-'));
+        assert!(!slug_part.ends_with('-'));
+    }
+
+    #[test]
+    fn slugify_identical_prompts_disambiguated_by_ordinal() {
+        let a = slugify_prompt("Extract action items", 3);
+        let b = slugify_prompt("Extract action items", 4);
+        assert_ne!(a, b);
+        assert_eq!(a, "extract-action-items-3");
+        assert_eq!(b, "extract-action-items-4");
+    }
+
+    #[test]
+    fn slugify_falls_back_when_prompt_has_no_ascii_alphanumerics() {
+        let id = slugify_prompt("!!! ??? ...", 5);
+        assert_eq!(id, "case-5");
+
+        let cjk_id = slugify_prompt("要約してください", 2);
+        assert_eq!(cjk_id, "case-2");
     }
 }
