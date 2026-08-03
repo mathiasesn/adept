@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use adept::{sibling_root, AnthropicSkillParser, LintConfig, Linter, Skill, SkillParser, SkillSet};
 use adept_agent::{create_skill, CreateOptions};
-use adept_agent::{EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatClient};
+use adept_agent::{
+    llm_available, ConfigError, EvalOptions, EvalReport, LlmClient, LlmConfig, OpenAiCompatClient,
+};
 use adept_fmt::{format_str, FmtConfig};
 use serde_json::{json, Value};
 
@@ -260,7 +262,7 @@ fn handle_tools_list() -> Value {
     // agents don't discover a tool that's guaranteed to fail. Resolved once
     // and shared between the two — this is the one gate `eval_skill` above
     // deliberately no longer participates in, since grading doesn't need it.
-    let llm_configured = LlmConfig::default().resolve().is_ok();
+    let llm_configured = llm_available(&LlmConfig::default().resolve());
 
     // `create_skill`/`generate_evals` are also network-backed (same
     // `ADEPT_MODEL` resolution as `eval_skill`'s LLM analyses) and preview-only: neither
@@ -563,7 +565,7 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    let model_available = llm_config.resolve().is_ok();
+    let model_available = llm_available(&llm_config.resolve());
     let results_available = arguments.get("results").is_some();
 
     let selection = match resolve_analyses(&select, &ignore, model_available, results_available) {
@@ -578,12 +580,8 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
             Ok(resolved) => resolved,
             Err(err) => {
                 return (
-                    json!({
-                        "error": format!(
-                            "no LLM model configured for eval_skill: {err} (set ADEPT_MODEL, or pass a `model` argument)"
-                        )
-                    })
-                    .to_string(),
+                    json!({ "error": llm_resolution_error_message(Some("eval_skill"), err) })
+                        .to_string(),
                     true,
                 );
             }
@@ -675,9 +673,40 @@ fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_agent::Resolved
             .and_then(Value::as_str)
             .map(str::to_string),
     };
-    llm_config.resolve().map_err(|err| {
-        format!("no LLM model configured: {err} (set ADEPT_MODEL, or pass a `model` argument)")
-    })
+    llm_config
+        .resolve()
+        .map_err(|err| llm_resolution_error_message(None, err))
+}
+
+/// Build the MCP-tool error message for a failed [`adept_agent::LlmConfig::resolve`]
+/// call, distinguishing [`ConfigError::MissingModel`] (no model is
+/// configured at all — point at `ADEPT_MODEL`/`model`) from
+/// [`ConfigError::CredentialsInBaseUrl`] (a model *is* configured, but its
+/// `base_url` embeds a credential — pointing at `ADEPT_MODEL` there would be
+/// actively misleading, since the fix is `api_key`/`ADEPT_API_KEY`, not a
+/// model). `tool_name` is only used for the `MissingModel` wording, which
+/// names the calling tool (`eval_skill`) or is generic (empty context for
+/// `create_skill`/`generate_evals`, which share [`resolve_llm_from_arguments`]).
+///
+/// `err`'s `Display` never contains the `base_url`, so interpolating it here
+/// is safe — this only improves which remedy is suggested, it does not
+/// change what's redacted.
+///
+/// An exhaustive match, not a wildcard: a future [`ConfigError`] variant must
+/// be a compile error here, not a silent fallthrough to the wrong guidance.
+#[must_use]
+fn llm_resolution_error_message(tool_name: Option<&str>, err: ConfigError) -> String {
+    match err {
+        ConfigError::MissingModel => {
+            let for_tool = tool_name.map_or_else(String::new, |name| format!(" for {name}"));
+            format!(
+                "no LLM model configured{for_tool}: {err} (set ADEPT_MODEL, or pass a `model` argument)"
+            )
+        }
+        ConfigError::CredentialsInBaseUrl => {
+            format!("{err} (pass an `api_key` argument, or set ADEPT_API_KEY, instead of embedding it in base_url)")
+        }
+    }
 }
 
 /// `create_skill` MCP tool: runs the full `adept_agent::create_skill`
@@ -1250,6 +1279,49 @@ mod tests {
         path
     }
 
+    /// [`write_skill`] plus a one-case `evals/evals.jsonl` sidecar, so the
+    /// grading path has something to grade. Shared by the tests that drive
+    /// `eval_skill` — the dataset is schema-versioned, so a bump should not
+    /// need editing in several places.
+    fn write_skill_with_evals(
+        dir: &std::path::Path,
+        name: &str,
+        description: &str,
+    ) -> std::path::PathBuf {
+        let path = write_skill(dir, name, description);
+        let evals_dir = dir.join(name).join("evals");
+        std::fs::create_dir_all(&evals_dir).unwrap();
+        std::fs::write(
+            evals_dir.join("evals.jsonl"),
+            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        )
+        .unwrap();
+        path
+    }
+
+    /// The four properties every credential-error response must have: it is
+    /// an error, it names the real remedy, it is not mis-framed as a missing
+    /// model, and it never echoes the credential. Shared so a new tool's
+    /// coverage cannot accidentally assert only three of the four.
+    fn assert_credential_error(text: &str, is_error: bool) {
+        assert!(
+            is_error,
+            "a credential-bearing base_url must be reported as an error, not silently downgraded: {text}"
+        );
+        assert!(
+            text.contains("api_key") || text.contains("credentials"),
+            "error must name the real problem: {text}"
+        );
+        assert!(
+            !text.contains("ADEPT_MODEL") && !text.contains("no LLM model configured"),
+            "a credential error must not be framed as a missing model: {text}"
+        );
+        assert!(
+            !text.contains("hunter2secret") && !text.contains("alice:hunter2secret@"),
+            "response must never contain the credential: {text}"
+        );
+    }
+
     #[test]
     fn overlap_skillset_discovers_siblings_from_path_parent() {
         let root = tempfile::tempdir().unwrap();
@@ -1391,13 +1463,8 @@ mod tests {
         std::env::remove_var("ADEPT_API_KEY");
 
         let dir = tempfile::tempdir().unwrap();
-        let path = write_skill(dir.path(), "demo", "Does a demo thing. Use when demoing.");
-        std::fs::create_dir_all(dir.path().join("demo").join("evals")).unwrap();
-        std::fs::write(
-            dir.path().join("demo").join("evals").join("evals.jsonl"),
-            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
-        )
-        .unwrap();
+        let path =
+            write_skill_with_evals(dir.path(), "demo", "Does a demo thing. Use when demoing.");
 
         let arguments = json!({
             "path": path.to_str().unwrap(),
@@ -1408,6 +1475,55 @@ mod tests {
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert!(parsed.get("triggering").is_none());
         assert_eq!(parsed["evals"]["pass_rate"], 1.0);
+    }
+
+    /// Regression test for the MCP counterpart of the CLI fix in commit
+    /// d6698ef: `eval_skill` with a credential-bearing `base_url` and no
+    /// `select` must not have `model_available` collapse to `false` (which
+    /// would make `needs_llm` false, `resolve()` never get called again at
+    /// `mcp.rs:577`, and the tool return a *successful* result that
+    /// silently ran only the offline analyses). It must instead reach the
+    /// real `resolve()` and report the credential error, without ever
+    /// putting the secret in the response.
+    #[test]
+    fn eval_skill_with_credentials_in_base_url_reports_the_error_not_a_silent_success() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+        std::env::remove_var("ADEPT_BASE_URL");
+        std::env::remove_var("ADEPT_API_KEY");
+
+        let dir = tempfile::tempdir().unwrap();
+        let path =
+            write_skill_with_evals(dir.path(), "demo", "Does a demo thing. Use when demoing.");
+
+        let arguments = json!({
+            "path": path.to_str().unwrap(),
+            "model": "test-model",
+            "base_url": "https://alice:hunter2secret@gw.example/v1",
+        });
+        let (text, is_error) = eval_skill_tool(&arguments);
+        assert_credential_error(&text, is_error);
+    }
+
+    /// Sibling of the `eval_skill` case above, for the
+    /// `resolve_llm_from_arguments` path shared by `create_skill` and
+    /// `generate_evals`: a credential-bearing `base_url` must be reported as
+    /// an `api_key` problem, never as "no LLM model configured" pointing at
+    /// `ADEPT_MODEL`.
+    #[test]
+    fn create_skill_tool_with_credentials_in_base_url_names_api_key_not_a_missing_model() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("ADEPT_MODEL");
+        std::env::remove_var("ADEPT_BASE_URL");
+        std::env::remove_var("ADEPT_API_KEY");
+
+        let arguments = json!({
+            "brief": "Extract PDF form data",
+            "model": "test-model",
+            "base_url": "https://alice:hunter2secret@gw.example/v1",
+        });
+        let (text, is_error) = create_skill_tool(&arguments);
+        assert_credential_error(&text, is_error);
     }
 
     /// `eval_skill` with `content` (no real skill directory) must grade

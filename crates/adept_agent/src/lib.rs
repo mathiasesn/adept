@@ -35,9 +35,10 @@ pub use create::{
 pub use eval::{eval_skill, EvalError, EvalOptions, EvalReport};
 pub use fix::{fix_skill, FixError, FixOptions, FixOutcome, FixReport, DEFAULT_MAX_ROUNDS};
 pub use llm::{
-    CaptureSink, CapturedCall, ChatMessage, ChatRequest, ChatResponse, ChatRole, ConfigError,
-    LlmClient, LlmConfig, LlmError, MockLlmClient, OpenAiCompatClient, RedactedString,
-    ResolvedLlmConfig, RunMetadata, DEFAULT_BASE_URL, ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
+    llm_available, CaptureSink, CapturedCall, ChatMessage, ChatRequest, ChatResponse, ChatRole,
+    ConfigError, LlmClient, LlmConfig, LlmError, MockLlmClient, OpenAiCompatClient, RedactedString,
+    ResolvedLlmConfig, RunMetadata, ScrubbedBody, DEFAULT_BASE_URL, ENV_API_KEY, ENV_BASE_URL,
+    ENV_MODEL,
 };
 pub use prompts::{
     BODY_FIX_SYSTEM, BODY_FIX_USER_TEMPLATE, CREATE_AUTHORING_PROMPT_VERSION,

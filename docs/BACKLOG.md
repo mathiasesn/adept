@@ -417,13 +417,61 @@ Recorded 2026-07-31.
   §12): capture is CLI-only, so the tool schema stays unchanged and an MCP
   client cannot make the server write to arbitrary paths.
   `crates/adept_cli/tests/tracing.rs` pins the schema half.
-- **`LlmError::Status` carries an unscrubbed response body (#31).** The
-  capture layer's scrub covers every body reaching a tracing event or
-  artifact, but `Status { body }` holds the response verbatim — a backend
-  echoing the API key in an error body would leak it to stderr via
-  `Display`. Left alone deliberately (it changes the contents of a returned
-  error), not folded into the capture work. Requires a misbehaving endpoint;
-  the fix is cheap.
+- **Resolved (#31): `LlmError::Status` carried an unscrubbed response body.**
+  The capture layer's scrub covered every body reaching a tracing event or
+  artifact, but `Status { body }` held the response verbatim — a backend
+  echoing the API key in an error body leaked it to stderr via `Display`.
+  Fixed by hoisting the scrub to where `send_once` reads the body, rather than
+  adding a fourth per-egress scrub: that body fans out to a log event, a
+  capture artifact, the parser and this error, and scrubbing per-consumer is
+  what let this one ship unscrubbed. Past the read no unscrubbed backend text
+  is in scope, so a future fifth consumer is covered by default. The other
+  body-bearing variant, `MalformedResponse`, carries only `serde_json`'s
+  message, which does not embed the input.
+
+  Hardened further: `Status.body` is now a `ScrubbedBody` newtype instead of a
+  plain `String`, so "this text has passed through `scrub`" is carried by the
+  type rather than by a comment. See the rustdoc on `ScrubbedBody` in
+  `crates/adept_agent/src/llm/client.rs`.
+- **Resolved: a credential-bearing `base_url` leaked userinfo via three
+  egresses.** `LlmError::Request(e.to_string())` embeds reqwest's URL
+  serialization (including `user:password@`) via `Display`, reaching stderr
+  and a `tracing` event; `RunMetadata.base_url` wrote the same value verbatim
+  into capture artifacts on disk. Per-egress sanitization was considered and
+  rejected for the same reason as the fix for `LlmError::Status` above (#31):
+  it is the exact shape that let that one ship unscrubbed, and it cannot cover
+  URL logging performed by `reqwest` or a
+  transitive dependency, which is not adept's code to scrub. Fixed by
+  rejecting credentials at `LlmConfig::resolve` instead — a `base_url` whose
+  parsed `username()`/`password()` is non-empty now returns
+  `ConfigError::CredentialsInBaseUrl` before it can reach any egress, making
+  `resolved.base_url` credential-free by construction rather than sanitized at
+  each of the three sites. `LlmError` also gained `#[non_exhaustive]` so it can
+  no longer be constructed or exhaustively matched from outside `adept-agent`.
+  Breaking on both counts: a previously-working `base_url` now exits 2, and
+  external code matching on `LlmError` needs a wildcard arm.
+
+  Two limits of that fix, deliberately left in place:
+
+  - **The check is partial by design.** A `base_url` that does not parse as a
+    URL at all is accepted and still fails later at `RequestBuilder::build`.
+    Gating on parse success instead would newly reject base URLs that work
+    today, since `Url::parse` is stricter than the string concatenation the
+    endpoint is actually built with. So "credential-free by construction" means
+    *no userinfo in a parseable URL*, not *validated URL*.
+  - **The guarantee is enforced at one gate, not by type.** `resolve()` is the
+    only way for external code to obtain a `ResolvedLlmConfig`, but its fields
+    are `pub`, so a caller can still overwrite `base_url` afterwards, and the
+    request endpoint is built by string concatenation
+    (`base_url.trim_end_matches('/')`) rather than from the `Url` that
+    resolution parsed — two notions of "the base URL" that can disagree.
+- **A validated `BaseUrl` newtype would collapse both limits above.** A private
+  `Url` with a `TryFrom<&str>` that rejects userinfo, exposing
+  `endpoint("chat/completions")` via `Url::join`, would carry the guarantee in
+  the type (following the `RedactedString` precedent), parse once instead of
+  twice, and remove the mutate-after-resolve hole. Deferred because it changes
+  `ResolvedLlmConfig`'s public shape and every consumer of `resolved.base_url`,
+  and the one-gate check already closes the actual leak.
 
 ## Pre-publish checklist
 

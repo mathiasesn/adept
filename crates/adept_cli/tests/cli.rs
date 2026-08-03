@@ -182,6 +182,35 @@ fn eval_select_triggering_without_model_exits_two_naming_model() {
 }
 
 #[test]
+fn eval_credentials_in_base_url_exits_two_not_silently_downgraded() {
+    // Regression test: probe_model_available must not treat a credential
+    // error as "no model configured", or `adept eval` with no `--select`
+    // silently narrows to the offline analyses. Note the exit code alone
+    // does not catch that — the downgraded path also exits 2, via "nothing
+    // to evaluate" — so the assertion that stderr names `api_key` is the
+    // part doing the work here.
+    //
+    // `--model` is passed so the credential error is the *only* resolution
+    // failure; without it this would also satisfy `ConfigError::MissingModel`
+    // and would silently start passing for the wrong reason if the order of
+    // the two checks in `LlmConfig::resolve` ever changed.
+    adept()
+        .arg("eval")
+        .arg(fixture("clean-skill").join("SKILL.md"))
+        .arg("--model")
+        .arg("test-model")
+        .arg("--base-url")
+        .arg("https://alice:hunter2secret@gw.example/v1")
+        .assert()
+        .code(2)
+        .stderr(
+            predicate::str::contains("api_key")
+                .and(predicate::str::contains("alice:hunter2secret@").not())
+                .and(predicate::str::contains("hunter2secret").not()),
+        );
+}
+
+#[test]
 fn eval_select_unknown_analysis_is_rejected() {
     adept()
         .arg("eval")

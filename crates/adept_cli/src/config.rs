@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use adept::LintConfig;
 use adept_agent::{
-    CaptureSink, LlmConfig, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata, ENV_API_KEY,
-    ENV_BASE_URL, ENV_MODEL,
+    CaptureSink, ConfigError, LlmConfig, OpenAiCompatClient, ResolvedLlmConfig, RunMetadata,
+    ENV_API_KEY, ENV_BASE_URL, ENV_MODEL,
 };
 use adept_fmt::FmtConfig;
 use serde::Deserialize;
@@ -27,8 +27,10 @@ const CONFIG_FILE_NAME: &str = "adept.toml";
 /// independently (no cross-fallback between them), only sharing the
 /// `ADEPT_*` environment variables via [`LlmConfig::resolve`].
 ///
-/// On failure, prints the same three-line guidance both commands used to
-/// print separately (naming `section`) and returns `None`.
+/// On failure, prints guidance specific to the resolution error (naming
+/// `section`) and returns `None`: the original three-line model guidance for
+/// [`ConfigError::MissingModel`], or credential-specific guidance for
+/// [`ConfigError::CredentialsInBaseUrl`].
 #[must_use]
 pub fn resolve_llm_client(
     section: &str,
@@ -42,7 +44,7 @@ pub fn resolve_llm_client(
     };
     let resolved = match llm_config.resolve() {
         Ok(resolved) => resolved,
-        Err(_) => {
+        Err(ConfigError::MissingModel) => {
             eprintln!("adept: error: could not resolve an LLM model to {section} with.");
             eprintln!(
                 "  set one of: --model <MODEL>, config file `[{section}] model = \"...\"`, or the {ENV_MODEL} environment variable"
@@ -50,6 +52,16 @@ pub fn resolve_llm_client(
             eprintln!(
                 "  optionally also set {ENV_BASE_URL} (defaults to the OpenAI API) and {ENV_API_KEY}"
             );
+            return None;
+        }
+        Err(ConfigError::CredentialsInBaseUrl) => {
+            eprintln!(
+                "adept: error: base_url must not embed credentials (user:pass@host) for {section}."
+            );
+            eprintln!(
+                "  set the credential separately: config file `[{section}] api_key = \"...\"`, or the {ENV_API_KEY} environment variable"
+            );
+            eprintln!("  then pass --base-url without the embedded userinfo");
             return None;
         }
     };

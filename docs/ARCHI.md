@@ -400,9 +400,48 @@ LLM-backed commands only, resolved in `adept_agent::LlmConfig::resolve`):
 | Var | Flag | Purpose |
 |---|---|---|
 | `ADEPT_MODEL` | `--model` | Required by the `triggering`/`token-bloat`/`overlap` analyses, which exit 2 without it; grading alone needs no model. Over MCP its absence fails those analyses per-call rather than hiding the tool — §12. |
-| `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1` |
+| `ADEPT_BASE_URL` | `--base-url` | Defaults to `https://api.openai.com/v1`. Rejects an embedded credential — see below. |
 | `ADEPT_API_KEY` | *(none)* | Bearer token. Never accepted as a flag. Held as a `RedactedString` — §15. |
 | `ADEPT_LOG` | `-v`/`-vv`/`-vvv` | `EnvFilter` syntax (e.g. `adept_agent::llm::client=trace`). Overrides the `-v` count wholesale. Adept's own namespace, not `RUST_LOG`. |
+
+**`ADEPT_BASE_URL` credential rejection.** `LlmConfig::resolve` parses the
+resolved value with `reqwest::Url` and returns `ConfigError::CredentialsInBaseUrl`
+if `username()` is non-empty or `password()` is `Some` — a `base_url` carrying
+credentials is rejected at resolution, never accepted and scrubbed later. A
+value that fails to parse at all is left alone and still fails downstream at
+`RequestBuilder::build`; the check targets userinfo only.
+
+Callers asking the yes/no question "is an LLM configured?" go through one shared
+predicate, `adept_agent::llm_available`: it maps `Ok(_)` and
+`Err(ConfigError::CredentialsInBaseUrl)` both to `true` (the user did point at
+an endpoint; only `MissingModel` means "no model"). Callers that instead need to
+*report* the failure match `ConfigError` directly to choose their wording. Both
+kinds match exhaustively, so a future `ConfigError` variant is a compile error
+rather than a silent fallthrough. Four consumers, three of them sharing the
+predicate:
+
+- `resolve_llm_client` (`adept_cli::config`) — used by the `eval`/`fix` CLI
+  commands. The one consumer that does *not* use the predicate: it matches the
+  variants directly, because it reports rather than classifies. On
+  `CredentialsInBaseUrl` it prints credential-specific guidance naming
+  `api_key` instead of the generic model-guidance text, and exits `2`.
+- `probe_model_available` (`adept_cli::commands::eval`) — the CLI's
+  triggering/token-bloat/overlap precondition check. Also exits `2` on
+  `CredentialsInBaseUrl`, via the same path as `resolve_llm_client`.
+- The `create_skill`/`generate_evals` tool-advertisement gate
+  (`adept_cli::commands::mcp`) — calls `llm_available` to decide
+  whether to list those tools in `tools/list`. A `CredentialsInBaseUrl` counts
+  as configured, so the tools stay **advertised** rather than vanishing
+  indistinguishably from "no model configured"; the actual credential error
+  then surfaces per-call when the tool is invoked.
+- `eval_skill`'s model-availability check (`adept_cli::commands::mcp`) — same
+  treatment: `CredentialsInBaseUrl` selects the LLM-backed
+  analyses as available, and the real `resolve()` failure is reported as a
+  structured per-call tool error naming the problem.
+
+MCP has no exit code, so unlike the two CLI paths above, both MCP consumers
+surface `CredentialsInBaseUrl` as a JSON-RPC tool-call error, not a process
+exit — see §12.
 
 No compile-time feature flags. `LintConfig`'s numeric thresholds each carry a
 doc comment justifying the number — **keep that rationale attached if you
@@ -652,7 +691,10 @@ deliberately not used: a direct implementation keeps both the dependency
 footprint and the risk of an SDK writing to stdout at zero.
 
 Five tools. `check_skill`, `format_skill`, and `eval_skill` are advertised
-unconditionally; `create_skill` and `generate_evals` only when a model resolves.
+unconditionally; `create_skill` and `generate_evals` only when
+`adept_agent::llm_available` reports a model configured — see §7 for what
+that predicate treats as configured and why a credential error keeps both tools
+listed rather than hiding them.
 **The latter two are preview-only and never touch the filesystem** — they
 return the generated skill/dataset as data, mirroring why capture is CLI-only
 (§15): an MCP client must not be able to make the server write to arbitrary
@@ -862,6 +904,34 @@ tracing output and no capture artifact, including when smuggled into a prompt.
 - **The API key never leaves `RedactedString`.** `Debug` and `Display` both
   render `****`. `Authorization` is omitted entirely from captured metadata;
   `run_metadata.json` carries only `api_key_present: bool`.
+- **A credential-bearing `base_url` is rejected at config resolution, not
+  scrubbed at each egress.** `LlmConfig::resolve` returns
+  `ConfigError::CredentialsInBaseUrl` when the resolved `base_url` parses with
+  non-empty `username()` or a `password()`, closing the three egresses a
+  userinfo-carrying URL previously reached — `LlmError::Request`'s `Display`
+  (via reqwest), the matching `tracing` event, and `RunMetadata.base_url` on
+  disk — by construction rather than per-site sanitization. Its four consumers
+  and how each surfaces the error are listed once, in §7.
+
+  `ResolvedLlmConfig` is `#[non_exhaustive]`, so external code cannot build one
+  with a struct literal and must go through `resolve()`. Its fields are still
+  `pub`, so this stops construction, not later mutation — a validated `BaseUrl`
+  newtype is what would make it hold by type, and is deferred in
+  `docs/BACKLOG.md`.
+
+  `LlmError` carries `#[non_exhaustive]` on the enum *and* on each variant
+  holding backend-derived text (`Request`, `Status`, `MalformedResponse`), which
+  is what blocks external construction — the enum-level attribute alone only
+  blocks exhaustive matching. **A new variant carrying text from the backend
+  needs the attribute too**; `Timeout`, `EmptyChoices` and `RetriesExhausted` go
+  without because their payloads are adept's own.
+
+  `LlmError::Status.body` is typed as `ScrubbedBody`, not `String`: a private
+  inner field with a `pub(crate)` constructor, built once at the scrub site in
+  `OpenAiCompatClient::send_once`, so "scrubbed of the API key" is a property
+  the type carries. Why the other variants opt out, and why there is no public
+  way back to `String`, are on the type's rustdoc in
+  `crates/adept_agent/src/llm/client.rs` — don't restate it here.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O
   error.
 - **Rule codes are permanent and never reused.** Retired codes stay retired and
