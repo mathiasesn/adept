@@ -598,14 +598,42 @@ Setext round-tripping, tight-list preservation for mixed items, and line-start
 escaping coverage (issue #4) all shipped:
 
 - **`HeadingStyle::Setext`** (`adept_fmt::config::HeadingStyle`) is a second
-  variant alongside `Atx`. The printer decides the emitted form from
-  `(FmtConfig::heading_style, level)`: under `Setext`, h1/h2 print as
-  underlined headings and h3–h6 fall back to ATX (setext has no form past h2).
-  No flag was added to `Block::Heading` in `adept`'s AST — the printer is
-  config-driven and canonicalizing (symmetric with the pre-existing ATX path,
-  idempotent by construction), so there is nothing for an AST flag to be read
-  by. `docs/RULES.md`'s `SL105` entry and `crates/adept/src/rules/mod.rs`
-  document the mirrored `LintConfig::heading_style` this forced — see §7.
+  variant alongside `Atx`. The printer emits setext only when **all three**
+  hold: the configured style is `Setext`, the level is 1 or 2 (setext has no
+  form past h2), and `heading_text_can_use_setext` accepts the heading's
+  text — an **allowlist**, not a blocklist: it requires the first character
+  to be alphabetic, since every CommonMark block start is introduced by
+  punctuation, indentation, or a digit-run marker, so a leading letter can
+  never open one. This was tightened from an earlier `marker_like`-based gate
+  that missed inputs `marker_like` was never meant to catch (`>quoted` with
+  no space, `~~~fence`) because that predicate is tuned for wrapped tokens,
+  where `escape_line_start` also runs as a second line of defense; widening
+  it would have made reflow escape more than necessary. Enumerating what is
+  provably safe rather than what is unsafe is deliberate here: a wrong
+  "safe" answer silently destroys a heading, while an unnecessary ATX
+  fallback only renders the same heading differently. Headings failing the
+  check fall back to ATX (the same fallback path h3–h6 already take) rather
+  than printing a form that would reparse as a different block structure.
+  This fallback is *why* the printer's idempotent-by-construction claim
+  holds — without it, disallowed heading text would round-trip through a
+  different block structure on a second pass. No flag was added to
+  `Block::Heading` in `adept`'s AST — the printer is config-driven and
+  canonicalizing (symmetric with the pre-existing ATX path), so there is
+  nothing for an AST flag to be read by.
+  `heading_text_can_use_setext` (`crates/adept/src/markdown/query.rs`,
+  re-exported from `markdown/mod.rs`) lives in the core crate and is called
+  by both `adept_fmt`'s printer and `SL105`, so the two can't drift into
+  independently wrong answers about the same heading — that drift is exactly
+  how the original setext defect shipped. This is the mirror image of the
+  `heading_style` duplication below: that value is *mirrored* into
+  `LintConfig` because `adept` cannot depend on `adept_fmt`, whereas this
+  predicate is *shared* in the other direction, because `adept_fmt` already
+  depends on `adept` and nothing prevents putting it there. Duplicate only
+  when the dependency direction forces it; share when it doesn't.
+  `docs/RULES.md`'s `SL105` entry (now symmetric — it flags whichever form
+  isn't the configured one, in both directions) and
+  `crates/adept/src/rules/mod.rs` document the mirrored
+  `LintConfig::heading_style` this forced — see §7.
 - **`ListItem::content_tight`** (`crates/adept/src/markdown/ast.rs`) records
   whether an item's *own* blocks were free of blank-line separation in the
   source. `Block::List::tight` is still folded with `items.iter().all(...)`
