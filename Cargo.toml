@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/mathiasesn/adept"
@@ -19,9 +19,9 @@ categories = ["development-tools"]
 homepage = "https://github.com/mathiasesn/adept"
 
 [workspace.dependencies]
-adept-core  = { path = "crates/adept", version = "0.2.0" }
-adept-fmt   = { path = "crates/adept_fmt", version = "0.2.0" }
-adept-agent = { path = "crates/adept_agent", version = "0.2.0" }
+adept-core  = { path = "crates/adept", version = "0.3.0" }
+adept-fmt   = { path = "crates/adept_fmt", version = "0.3.0" }
+adept-agent = { path = "crates/adept_agent", version = "0.3.0" }
 
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"

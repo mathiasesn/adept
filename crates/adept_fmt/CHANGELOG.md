@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/mathiasesn/adept/compare/adept-fmt-v0.2.0...adept-fmt-v0.3.0) - 2026-08-03
+
+### Fixed
+
+- [**breaking**] stop credentials leaking through LlmError and base_url ([#47](https://github.com/mathiasesn/adept/pull/47))
+
 ## [0.2.0](https://github.com/mathiasesn/adept/compare/adept-fmt-v0.1.1...adept-fmt-v0.2.0) - 2026-08-03
 
 ### Added
