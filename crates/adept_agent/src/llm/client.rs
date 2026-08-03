@@ -195,9 +195,10 @@ impl ChatResponse {
 pub struct ScrubbedBody(String);
 
 impl ScrubbedBody {
-    /// Wrap already-scrubbed text. Not `pub`: the only caller is
-    /// [`OpenAiCompatClient::send_once`], immediately after `scrub` runs, so
-    /// no unscrubbed text can reach this constructor from outside the crate.
+    /// Wrap already-scrubbed text. Not `pub`: the only production caller is
+    /// [`OpenAiCompatClient::send_once`], immediately after `scrub` runs (the
+    /// tests below also construct one directly), so no unscrubbed text can
+    /// reach this constructor from outside the crate.
     pub(crate) fn new(scrubbed: impl Into<String>) -> Self {
         Self(scrubbed.into())
     }
