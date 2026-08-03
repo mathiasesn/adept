@@ -692,11 +692,9 @@ footprint and the risk of an SDK writing to stdout at zero.
 
 Five tools. `check_skill`, `format_skill`, and `eval_skill` are advertised
 unconditionally; `create_skill` and `generate_evals` only when
-`adept_cli::config::llm_available` reports a model configured (§7) — which
-also holds true for a `ConfigError::CredentialsInBaseUrl`, so a leaked
-credential keeps both tools listed rather than hiding them; invoking either
-then fails per-call with a credential-specific message instead of exiting a
-process (MCP has no exit code).
+`adept_cli::config::llm_available` reports a model configured — see §7 for what
+that predicate treats as configured and why a credential error keeps both tools
+listed rather than hiding them.
 **The latter two are preview-only and never touch the filesystem** — they
 return the generated skill/dataset as data, mirroring why capture is CLI-only
 (§15): an MCP client must not be able to make the server write to arbitrary
@@ -912,16 +910,21 @@ tracing output and no capture artifact, including when smuggled into a prompt.
   non-empty `username()` or a `password()`, closing the three egresses a
   userinfo-carrying URL previously reached — `LlmError::Request`'s `Display`
   (via reqwest), the matching `tracing` event, and `RunMetadata.base_url` on
-  disk — by construction rather than per-site sanitization. `ResolvedLlmConfig`
-  and the `LlmError::Request`/`MalformedResponse` variants are
-  `#[non_exhaustive]`, so `resolve()` is the only way to build one from outside
-  the crate — a struct literal can't bypass the check. Of the four consumers,
-  `probe_model_available` and the two MCP call sites in `commands/mcp.rs` share
-  the `adept_cli::config::llm_available` predicate, while `resolve_llm_client`
-  matches the variants directly to pick its guidance text; the CLI paths exit
-  `2`, the MCP paths surface it as a per-call tool error (no exit code). Every
-  one of these matches is exhaustive. See §7, §12, and
+  disk — by construction rather than per-site sanitization. Its four consumers
+  and how each surfaces the error are listed once, in §7.
+
+  `ResolvedLlmConfig` is `#[non_exhaustive]`, so external code cannot build one
+  with a struct literal and must go through `resolve()`. Its fields are still
+  `pub`, so this stops construction, not later mutation — a validated `BaseUrl`
+  newtype is what would make it hold by type, and is deferred in
   `docs/BACKLOG.md`.
+
+  `LlmError` carries `#[non_exhaustive]` on the enum *and* on each variant
+  holding backend-derived text (`Request`, `Status`, `MalformedResponse`), which
+  is what blocks external construction — the enum-level attribute alone only
+  blocks exhaustive matching. **A new variant carrying text from the backend
+  needs the attribute too**; `Timeout`, `EmptyChoices` and `RetriesExhausted` go
+  without because their payloads are adept's own.
 - **Exit codes are a public contract**: `0` clean, `1` findings, `2` usage/I/O
   error.
 - **Rule codes are permanent and never reused.** Retired codes stay retired and

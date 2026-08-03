@@ -579,7 +579,8 @@ fn eval_skill_tool(arguments: &Value) -> (String, bool) {
             Ok(resolved) => resolved,
             Err(err) => {
                 return (
-                    json!({ "error": llm_resolution_error_message("eval_skill", err) }).to_string(),
+                    json!({ "error": llm_resolution_error_message(Some("eval_skill"), err) })
+                        .to_string(),
                     true,
                 );
             }
@@ -673,7 +674,7 @@ fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_agent::Resolved
     };
     llm_config
         .resolve()
-        .map_err(|err| llm_resolution_error_message("", err))
+        .map_err(|err| llm_resolution_error_message(None, err))
 }
 
 /// Build the MCP-tool error message for a failed [`adept_agent::LlmConfig::resolve`]
@@ -693,18 +694,13 @@ fn resolve_llm_from_arguments(arguments: &Value) -> Result<adept_agent::Resolved
 /// An exhaustive match, not a wildcard: a future [`ConfigError`] variant must
 /// be a compile error here, not a silent fallthrough to the wrong guidance.
 #[must_use]
-fn llm_resolution_error_message(tool_name: &str, err: ConfigError) -> String {
+fn llm_resolution_error_message(tool_name: Option<&str>, err: ConfigError) -> String {
     match err {
         ConfigError::MissingModel => {
-            if tool_name.is_empty() {
-                format!(
-                    "no LLM model configured: {err} (set ADEPT_MODEL, or pass a `model` argument)"
-                )
-            } else {
-                format!(
-                    "no LLM model configured for {tool_name}: {err} (set ADEPT_MODEL, or pass a `model` argument)"
-                )
-            }
+            let for_tool = tool_name.map_or_else(String::new, |name| format!(" for {name}"));
+            format!(
+                "no LLM model configured{for_tool}: {err} (set ADEPT_MODEL, or pass a `model` argument)"
+            )
         }
         ConfigError::CredentialsInBaseUrl => {
             format!("{err} (pass an `api_key` argument, or set ADEPT_API_KEY, instead of embedding it in base_url)")
@@ -1282,6 +1278,49 @@ mod tests {
         path
     }
 
+    /// [`write_skill`] plus a one-case `evals/evals.jsonl` sidecar, so the
+    /// grading path has something to grade. Shared by the tests that drive
+    /// `eval_skill` — the dataset is schema-versioned, so a bump should not
+    /// need editing in several places.
+    fn write_skill_with_evals(
+        dir: &std::path::Path,
+        name: &str,
+        description: &str,
+    ) -> std::path::PathBuf {
+        let path = write_skill(dir, name, description);
+        let evals_dir = dir.join(name).join("evals");
+        std::fs::create_dir_all(&evals_dir).unwrap();
+        std::fs::write(
+            evals_dir.join("evals.jsonl"),
+            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        )
+        .unwrap();
+        path
+    }
+
+    /// The four properties every credential-error response must have: it is
+    /// an error, it names the real remedy, it is not mis-framed as a missing
+    /// model, and it never echoes the credential. Shared so a new tool's
+    /// coverage cannot accidentally assert only three of the four.
+    fn assert_credential_error(text: &str, is_error: bool) {
+        assert!(
+            is_error,
+            "a credential-bearing base_url must be reported as an error, not silently downgraded: {text}"
+        );
+        assert!(
+            text.contains("api_key") || text.contains("credentials"),
+            "error must name the real problem: {text}"
+        );
+        assert!(
+            !text.contains("ADEPT_MODEL") && !text.contains("no LLM model configured"),
+            "a credential error must not be framed as a missing model: {text}"
+        );
+        assert!(
+            !text.contains("hunter2secret") && !text.contains("alice:hunter2secret@"),
+            "response must never contain the credential: {text}"
+        );
+    }
+
     #[test]
     fn overlap_skillset_discovers_siblings_from_path_parent() {
         let root = tempfile::tempdir().unwrap();
@@ -1423,13 +1462,8 @@ mod tests {
         std::env::remove_var("ADEPT_API_KEY");
 
         let dir = tempfile::tempdir().unwrap();
-        let path = write_skill(dir.path(), "demo", "Does a demo thing. Use when demoing.");
-        std::fs::create_dir_all(dir.path().join("demo").join("evals")).unwrap();
-        std::fs::write(
-            dir.path().join("demo").join("evals").join("evals.jsonl"),
-            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
-        )
-        .unwrap();
+        let path =
+            write_skill_with_evals(dir.path(), "demo", "Does a demo thing. Use when demoing.");
 
         let arguments = json!({
             "path": path.to_str().unwrap(),
@@ -1458,13 +1492,8 @@ mod tests {
         std::env::remove_var("ADEPT_API_KEY");
 
         let dir = tempfile::tempdir().unwrap();
-        let path = write_skill(dir.path(), "demo", "Does a demo thing. Use when demoing.");
-        std::fs::create_dir_all(dir.path().join("demo").join("evals")).unwrap();
-        std::fs::write(
-            dir.path().join("demo").join("evals").join("evals.jsonl"),
-            "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
-        )
-        .unwrap();
+        let path =
+            write_skill_with_evals(dir.path(), "demo", "Does a demo thing. Use when demoing.");
 
         let arguments = json!({
             "path": path.to_str().unwrap(),
@@ -1472,22 +1501,7 @@ mod tests {
             "base_url": "https://alice:hunter2secret@gw.example/v1",
         });
         let (text, is_error) = eval_skill_tool(&arguments);
-        assert!(
-            is_error,
-            "a credential-bearing base_url must be reported as an error, not silently downgraded: {text}"
-        );
-        assert!(
-            text.contains("api_key") || text.contains("credentials"),
-            "error must name the real problem: {text}"
-        );
-        assert!(
-            !text.contains("ADEPT_MODEL") && !text.contains("no LLM model configured"),
-            "a credential error must not be framed as a missing model: {text}"
-        );
-        assert!(
-            !text.contains("hunter2secret") && !text.contains("alice:hunter2secret@"),
-            "response must never contain the credential: {text}"
-        );
+        assert_credential_error(&text, is_error);
     }
 
     /// Sibling of the `eval_skill` case above, for the
@@ -1508,22 +1522,7 @@ mod tests {
             "base_url": "https://alice:hunter2secret@gw.example/v1",
         });
         let (text, is_error) = create_skill_tool(&arguments);
-        assert!(
-            is_error,
-            "a credential-bearing base_url must be reported as an error: {text}"
-        );
-        assert!(
-            text.contains("api_key") || text.contains("credentials"),
-            "error must name the real problem: {text}"
-        );
-        assert!(
-            !text.contains("ADEPT_MODEL") && !text.contains("no LLM model configured"),
-            "a credential error must not be framed as a missing model: {text}"
-        );
-        assert!(
-            !text.contains("hunter2secret") && !text.contains("alice:hunter2secret@"),
-            "response must never contain the credential: {text}"
-        );
+        assert_credential_error(&text, is_error);
     }
 
     /// `eval_skill` with `content` (no real skill directory) must grade

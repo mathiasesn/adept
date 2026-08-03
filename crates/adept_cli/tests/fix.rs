@@ -51,9 +51,6 @@ fn fix_credentials_in_base_url_exits_two_naming_api_key() {
         .arg("test-model")
         .arg("--base-url")
         .arg("https://alice:hunter2secret@gw.example/v1")
-        .env_remove("ADEPT_MODEL")
-        .env_remove("ADEPT_BASE_URL")
-        .env_remove("ADEPT_API_KEY")
         .assert()
         .code(2)
         .stderr(

@@ -446,6 +446,28 @@ Recorded 2026-07-31.
   Breaking on both counts: a previously-working `base_url` now exits 2, and
   external code matching on `LlmError` needs a wildcard arm.
 
+  Two limits of that fix, deliberately left in place:
+
+  - **The check is partial by design.** A `base_url` that does not parse as a
+    URL at all is accepted and still fails later at `RequestBuilder::build`.
+    Gating on parse success instead would newly reject base URLs that work
+    today, since `Url::parse` is stricter than the string concatenation the
+    endpoint is actually built with. So "credential-free by construction" means
+    *no userinfo in a parseable URL*, not *validated URL*.
+  - **The guarantee is enforced at one gate, not by type.** `resolve()` is the
+    only way for external code to obtain a `ResolvedLlmConfig`, but its fields
+    are `pub`, so a caller can still overwrite `base_url` afterwards, and the
+    request endpoint is built by string concatenation
+    (`base_url.trim_end_matches('/')`) rather than from the `Url` that
+    resolution parsed — two notions of "the base URL" that can disagree.
+- **A validated `BaseUrl` newtype would collapse both limits above.** A private
+  `Url` with a `TryFrom<&str>` that rejects userinfo, exposing
+  `endpoint("chat/completions")` via `Url::join`, would carry the guarantee in
+  the type (following the `RedactedString` precedent), parse once instead of
+  twice, and remove the mutate-after-resolve hole. Deferred because it changes
+  `ResolvedLlmConfig`'s public shape and every consumer of `resolved.base_url`,
+  and the one-gate check already closes the actual leak.
+
 ## Pre-publish checklist
 
 - **Decide the reference-link behaviour above (#5).** It changes observable

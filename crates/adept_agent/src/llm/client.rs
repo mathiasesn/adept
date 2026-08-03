@@ -251,11 +251,14 @@ pub struct LlmConfig {
 
 /// Fully resolved configuration for [`OpenAiCompatClient`].
 ///
-/// `#[non_exhaustive]`: [`LlmConfig::resolve`] is the sole gate that
-/// guarantees `base_url` is credential-free (it rejects embedded userinfo
-/// before returning). A struct literal built from outside this crate would
-/// bypass that check entirely, so external code may only obtain one via
-/// `resolve()`.
+/// `#[non_exhaustive]`: [`LlmConfig::resolve`] is the sole gate that rejects a
+/// `base_url` with embedded userinfo, so external code must go through it to
+/// obtain one of these rather than bypassing the check with a struct literal.
+///
+/// Note the limit of that: the fields are still `pub`, so external code can
+/// overwrite `base_url` *after* resolution. Making the guarantee hold by type
+/// rather than by convention needs a validated `BaseUrl` newtype owning a
+/// parsed `Url` — see `docs/BACKLOG.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ResolvedLlmConfig {
@@ -315,10 +318,10 @@ impl LlmConfig {
         // Reject userinfo credentials embedded in the URL (`user:pass@host`);
         // a `base_url` that merely fails to parse is left to fail later at
         // request-build time, not rejected here.
-        if let Ok(parsed) = reqwest::Url::parse(&base_url) {
-            if !parsed.username().is_empty() || parsed.password().is_some() {
-                return Err(ConfigError::CredentialsInBaseUrl);
-            }
+        if reqwest::Url::parse(&base_url)
+            .is_ok_and(|url| !url.username().is_empty() || url.password().is_some())
+        {
+            return Err(ConfigError::CredentialsInBaseUrl);
         }
         let api_key = self
             .api_key
@@ -1047,35 +1050,21 @@ mod tests {
 
     #[test]
     fn resolve_rejects_credentials_in_base_url() {
-        let username_only = LlmConfig {
-            base_url: Some("https://user@gw.example/v1".to_string()),
-            model: Some("m".to_string()),
-            ..Default::default()
-        };
-        assert!(matches!(
-            username_only.resolve(),
-            Err(ConfigError::CredentialsInBaseUrl)
-        ));
-
-        let password_only = LlmConfig {
-            base_url: Some("https://:sekret@gw.example/v1".to_string()),
-            model: Some("m".to_string()),
-            ..Default::default()
-        };
-        assert!(matches!(
-            password_only.resolve(),
-            Err(ConfigError::CredentialsInBaseUrl)
-        ));
-
-        let both = LlmConfig {
-            base_url: Some("https://user:sekret@gw.example/v1".to_string()),
-            model: Some("m".to_string()),
-            ..Default::default()
-        };
-        assert!(matches!(
-            both.resolve(),
-            Err(ConfigError::CredentialsInBaseUrl)
-        ));
+        for base_url in [
+            "https://user@gw.example/v1",        // username only
+            "https://:sekret@gw.example/v1",     // password only
+            "https://user:sekret@gw.example/v1", // both
+        ] {
+            let config = LlmConfig {
+                base_url: Some(base_url.to_string()),
+                model: Some("m".to_string()),
+                ..Default::default()
+            };
+            assert!(
+                matches!(config.resolve(), Err(ConfigError::CredentialsInBaseUrl)),
+                "expected {base_url} to be rejected"
+            );
+        }
     }
 
     #[test]
