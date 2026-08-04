@@ -195,8 +195,18 @@ impl SkillRule for BrokenFileReference {
     }
 }
 
-/// `SL105` `setext-heading`: a heading is written in setext form (`Title`
-/// underlined with `===` or `---`) rather than ATX form (`# Title`).
+/// `SL105` `setext-heading`: a heading is not written in the configured
+/// house heading style — setext form (`Title` underlined with `===` or
+/// `---`) when ATX (`# Title`) is configured, or vice versa.
+///
+/// The setext-configured direction only flags a heading
+/// [`markdown::heading_can_use_setext`] accepts — the same predicate
+/// `adept_fmt` uses to decide whether it would actually rewrite that
+/// heading to setext. An h1/h2 whose text fails the predicate (a leading
+/// punctuation character or a leading digit) stays ATX under any
+/// configured style, so flagging it would be a false positive: a lint
+/// firing on something `adept fmt` will never change. Levels h3 through h6
+/// are never setext-eligible at all and are never flagged.
 pub struct SetextHeading;
 
 impl_rule!(SetextHeading, "SL105", "setext-heading", Info);
@@ -205,17 +215,46 @@ impl SkillRule for SetextHeading {
     fn check(
         &self,
         skill: &Skill,
-        _config: &LintConfig,
+        config: &LintConfig,
         _tokens: &crate::token::TokenCounter,
     ) -> Vec<Diagnostic> {
+        let atx_configured = config.heading_style == crate::rules::HeadingStyle::Atx;
         markdown::headings(&skill.body)
             .into_iter()
-            .filter(|h| h.value.is_setext)
-            .map(|h| {
-                Diagnostic::new(
+            .filter_map(|h| {
+                let (found, configured, hint) = if atx_configured {
+                    if !h.value.is_setext {
+                        return None;
+                    }
+                    (
+                        "setext",
+                        "ATX",
+                        format!(
+                            "write it as `{} {}`, or run `adept fmt` to rewrite it",
+                            "#".repeat(h.value.level as usize),
+                            h.value.text
+                        ),
+                    )
+                } else {
+                    if h.value.is_setext
+                        || !markdown::heading_can_use_setext(h.value.level, &h.value.text)
+                    {
+                        return None;
+                    }
+                    let underline = markdown::setext_underline(h.value.level, &h.value.text);
+                    (
+                        "ATX",
+                        "setext",
+                        format!(
+                            "write it as `{}` underlined with `{underline}`, or run `adept fmt` to rewrite it",
+                            h.value.text
+                        ),
+                    )
+                };
+                Some(Diagnostic::new(
                     self.code(),
                     format!(
-                        "heading \"{}\" uses setext form; `adept fmt` will rewrite it to ATX (h{})",
+                        "heading \"{}\" is {found} form, but the configured heading style is {configured} (h{})",
                         h.value.text, h.value.level
                     ),
                     self.default_severity(),
@@ -223,11 +262,7 @@ impl SkillRule for SetextHeading {
                     skill.body_line_offset + h.line - 1,
                     1,
                 )
-                .with_fix_suggestion(format!(
-                    "write it as `{} {}`, or run `adept fmt` to rewrite it",
-                    "#".repeat(h.value.level as usize),
-                    h.value.text
-                ))
+                .with_fix_suggestion(hint))
             })
             .collect()
     }

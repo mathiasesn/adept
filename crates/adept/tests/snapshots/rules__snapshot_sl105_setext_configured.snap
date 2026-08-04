@@ -1,0 +1,10 @@
+---
+source: crates/adept/tests/rules.rs
+expression: strip_repo_root(& rendered)
+---
+crates/adept/tests/fixtures/rules/sl105_setext_configured/SKILL.md:2:1: SL004 frontmatter `name` ("sl105-setext-configured") does not match the containing directory name ("sl105_setext_configured")
+  fix: rename the `name` field to "sl105_setext_configured", or rename the directory to "sl105-setext-configured"
+crates/adept/tests/fixtures/rules/sl105_setext_configured/SKILL.md:5:1: SL105 heading "Alpha" is ATX form, but the configured heading style is setext (h1)
+  fix: write it as `Alpha` underlined with `=====`, or run `adept fmt` to rewrite it
+crates/adept/tests/fixtures/rules/sl105_setext_configured/SKILL.md:7:1: SL105 heading "Beta" is ATX form, but the configured heading style is setext (h2)
+  fix: write it as `Beta` underlined with `----`, or run `adept fmt` to rewrite it

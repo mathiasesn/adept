@@ -1,9 +1,9 @@
 //! Pretty-printing a Markdown AST back to normalized CommonMark text.
 
-use crate::config::FmtConfig;
+use crate::config::{FmtConfig, HeadingStyle};
 
 use adept::markdown::ast::{Alignment, Block, Inline, ListItem};
-use adept::markdown::MAX_NESTING_DEPTH;
+use adept::markdown::{heading_can_use_setext, setext_underline, MAX_NESTING_DEPTH};
 
 /// A single reflow-able output token: either an atomic word (which may
 /// itself be a whole inline code span, link, or image — never split
@@ -16,16 +16,22 @@ enum Token {
 /// Print a full sequence of top-level blocks to a document string, ending
 /// in exactly one trailing newline.
 pub fn print_document(blocks: &[Block], cfg: &FmtConfig) -> String {
-    let lines = print_blocks(blocks, cfg, 0);
+    let lines = print_blocks(blocks, cfg, 0, false);
     let mut out = lines.join("\n");
     out.push('\n');
     out
 }
 
-fn print_blocks(blocks: &[Block], cfg: &FmtConfig, depth: usize) -> Vec<String> {
+/// Print a sequence of sibling blocks. When `tight` is true (only ever set
+/// for the contents of a list item whose own
+/// [`adept::markdown::ast::ListItem::content_tight`] is true), no blank
+/// line is inserted between the blocks — otherwise every other block
+/// nesting (block quotes, footnote definitions, loose list items) keeps the
+/// unconditional blank-line separation.
+fn print_blocks(blocks: &[Block], cfg: &FmtConfig, depth: usize, tight: bool) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     for (i, b) in blocks.iter().enumerate() {
-        if i > 0 {
+        if i > 0 && !tight {
             lines.push(String::new());
         }
         lines.extend(print_block(b, cfg, depth));
@@ -45,11 +51,22 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
         Block::Heading { level, inline } => {
             let level = (*level).clamp(1, 6);
             let text = flatten_words(inline, cfg);
-            let hashes = "#".repeat(level as usize);
-            if text.is_empty() {
-                vec![hashes]
+            // Setext output is a pure function of the configured style and
+            // level, not of whether the source was setext — the same way
+            // Atx output today doesn't check the source form either. This
+            // both matches "today's behaviour is unchanged" under the
+            // (default) Atx style and makes the choice trivially
+            // idempotent.
+            if cfg.heading_style == HeadingStyle::Setext && heading_can_use_setext(level, &text) {
+                let underline = setext_underline(level, &text);
+                vec![text, underline]
             } else {
-                vec![format!("{hashes} {text}")]
+                let hashes = "#".repeat(level as usize);
+                if text.is_empty() {
+                    vec![hashes]
+                } else {
+                    vec![format!("{hashes} {text}")]
+                }
             }
         }
         Block::Paragraph(inline) => wrap_paragraph(inline, cfg),
@@ -57,7 +74,7 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
             if depth >= MAX_NESTING_DEPTH {
                 return vec!["> [nesting too deep, content omitted]".to_string()];
             }
-            let content = print_blocks(inner, cfg, depth + 1);
+            let content = print_blocks(inner, cfg, depth + 1, false);
             indent_block(&content, "> ", "> ")
         }
         Block::List {
@@ -84,7 +101,7 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
             if depth >= MAX_NESTING_DEPTH {
                 return vec![format!("[^{label}]: [nesting too deep, content omitted]")];
             }
-            let content = print_blocks(blocks, cfg, depth + 1);
+            let content = print_blocks(blocks, cfg, depth + 1, false);
             let first_prefix = format!("[^{label}]: ");
             let rest_prefix = " ".repeat(first_prefix.chars().count());
             indent_block(&content, &first_prefix, &rest_prefix)
@@ -112,7 +129,7 @@ fn print_list(
         };
         let rest_prefix = " ".repeat(first_prefix.chars().count());
 
-        let mut content = print_blocks(&item.blocks, cfg, depth + 1);
+        let mut content = print_blocks(&item.blocks, cfg, depth + 1, item.content_tight);
         if let Some(checked) = item.checked {
             let box_str = if checked { "[x] " } else { "[ ] " };
             if content.is_empty() {
@@ -264,23 +281,60 @@ fn wrap_paragraph(inline: &[Inline], cfg: &FmtConfig) -> Vec<String> {
 /// True when `word` would be interpreted as CommonMark block-starting syntax
 /// were it to appear as the first token on a line — a bullet/blockquote/ATX
 /// heading marker, an ordered-list marker, a thematic break (`---`, `***`,
-/// `___`), or a setext underline (`===`, or a lone `-`). Used by
-/// `wrap_tokens` to keep reflow idempotent: width-only line breaking can
-/// otherwise strand a mid-sentence marker-shaped token (e.g. a bare `-` or a
-/// `***` separator) at the start of a wrapped continuation line, silently
-/// turning prose into a list/heading/rule on the next pass (the "leaning
-/// toothpick" bug). Note this is intentionally unconditional — it does not
-/// matter whether more content follows on the line, since a paragraph's
-/// genuine first token can never itself be marker-like (the source would
-/// have parsed as a list/blockquote/heading/etc. instead, not a paragraph),
-/// so `wrap_tokens` only ever needs to keep marker-like tokens off of
-/// *wrapped* line starts — forbidding them unconditionally is simplest and
-/// only costs an occasional over-width line, same as long words/URLs.
+/// `___`), a setext underline (`===`, or a lone `-`), a GFM table row
+/// (`|...`), an HTML block start (`<div>`, `<!--`, `</p>`, ...), a
+/// link-reference definition (`[label]:...`), or a 4-space-indented code
+/// block. Used by `wrap_tokens` to keep reflow idempotent: width-only line
+/// breaking can otherwise strand a mid-sentence marker-shaped token (e.g. a
+/// bare `-` or a `***` separator) at the start of a wrapped continuation
+/// line, silently turning prose into a list/heading/rule/table/etc. on the
+/// next pass (the "leaning toothpick" bug). Note this is intentionally
+/// unconditional — it does not matter whether more content follows on the
+/// line, since a paragraph's genuine first token can never itself be
+/// marker-like (the source would have parsed as a list/blockquote/heading/
+/// etc. instead, not a paragraph), so `wrap_tokens` only ever needs to keep
+/// marker-like tokens off of *wrapped* line starts — forbidding them
+/// unconditionally is simplest and only costs an occasional over-width
+/// line, same as long words/URLs.
 fn marker_like(word: &str) -> bool {
     if word == ">" {
         return true;
     }
     if !word.is_empty() && word.len() <= 6 && word.bytes().all(|b| b == b'#') {
+        return true;
+    }
+    // GFM table row: a bare `|` opening a line reads as a table row (and,
+    // paired with a plausible delimiter row, a whole table) on reparse.
+    if word.starts_with('|') {
+        return true;
+    }
+    // HTML block start: CommonMark HTML blocks (types 1-7) can interrupt a
+    // paragraph, so a verbatim `Inline::Html` tag (emitted unescaped by
+    // `build_tokens`, see its match arm) that gets wrapped to a line start
+    // must not be reread as opening a block on the next pass. Matches an
+    // opening tag (`<div`), a closing tag (`</div`), a comment (`<!--`), or
+    // a processing instruction (`<?php`) — the CommonMark HTML-block
+    // start conditions — not a bare `<` used as a comparison operator.
+    if looks_like_html_start(word) {
+        return true;
+    }
+    // Link-reference definition: `[label]: destination` at a line start
+    // defines a reference rather than reading as inline text. `escape_text`
+    // already backslash-escapes bare `[`/`]` in plain text (see below), and
+    // no token `build_tokens` builds for a real link/image/footnote
+    // reference has this shape (they read `[text](dest)` / `[^label]`, never
+    // `[label]:`), so this arm is currently unreachable in practice — kept
+    // as a defensive backstop, matching the `'*'` arm below.
+    if word.starts_with('[') && word.contains("]:") {
+        return true;
+    }
+    // 4-space indented code: `wrap_tokens` never itself emits leading
+    // whitespace (words are glued with a single space or start a fresh line
+    // with none) and `indent_block`'s container prefixes never exceed the
+    // container's own established content width, so no token reaching this
+    // function can currently start with real leading spaces — kept as a
+    // defensive backstop, matching the `'*'` arm below.
+    if word.starts_with("    ") {
         return true;
     }
     // Ordered-list marker: 1-9 ASCII digits followed by a single `.` or `)`.
@@ -318,12 +372,33 @@ fn marker_like(word: &str) -> bool {
     }
 }
 
+/// True when `word` opens like an HTML tag, closing tag, comment, or
+/// processing instruction — the shapes CommonMark's HTML-block-start rule
+/// recognizes — as opposed to a bare `<` used as a comparison operator
+/// (`a < b`), which is not itself block-starting and shouldn't be forced off
+/// a line start.
+fn looks_like_html_start(word: &str) -> bool {
+    let mut chars = word.chars();
+    if chars.next() != Some('<') {
+        return false;
+    }
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || matches!(c, '/' | '!' | '?'))
+}
+
 /// Backslash-escape the punctuation in `word` that would otherwise trigger
-/// block-level reparsing if it started a line (see `marker_like`). All
-/// escaped characters are CommonMark-escapable, so this is
+/// block-level reparsing if it started a line (see `marker_like`). Most
+/// escaped characters are CommonMark-escapable, so escaping them is
 /// meaning-preserving: the escaped form re-parses as the literal character,
 /// e.g. `\-`, `\>`, `\##`, `\===` (escaping just the leading `=` already
-/// stops the rest from reading as a setext underline), `\***`, `\___`.
+/// stops the rest from reading as a setext underline), `\***`, `\___`,
+/// `\|`, `\<div>`, `\[label]:`. The 4-space-indent backstop is the one
+/// exception, and it is *not* meaning-preserving: a leading space is not
+/// itself CommonMark-escapable, so `\` + space renders as a literal
+/// backslash rather than disappearing. It still defuses the reparse hazard
+/// (the line no longer carries 4 columns of leading indentation), which is
+/// all this backstop is for — this arm is currently unreachable in practice
+/// (see `marker_like`'s 4-space-indent comment), kept only so the function
+/// stays total if that ever changes.
 fn escape_line_start(word: &str) -> String {
     if let Some(rest) = word.strip_suffix('.').or_else(|| word.strip_suffix(')')) {
         let marker = &word[rest.len()..];
@@ -507,5 +582,103 @@ fn render_code_span(s: &str) -> String {
         format!("{fence} {s} {fence}")
     } else {
         format!("{fence}{s}{fence}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adept::markdown::heading_text_can_use_setext;
+
+    // These two `marker_like` arms (4-space indent, link-reference
+    // definition) are defensive backstops: no token `build_tokens` can
+    // currently build has either shape (see the comments on those arms), so
+    // there is no full `adept_fmt::format_str` repro to drive through
+    // `crates/adept_fmt/tests/format_tests.rs`'s marker-guard helpers the
+    // way the reachable constructs (table row, HTML block start) are
+    // tested. These call `marker_like`/`escape_line_start` directly instead,
+    // pinning the recognition and its escape so a future token producer
+    // that *does* carry a leading-space or link-ref-def-shaped word is
+    // covered from day one rather than silently falling through.
+
+    #[test]
+    fn four_space_indent_is_marker_like_and_backstop_defuses_reparse_but_is_lossy() {
+        // This backstop is not meaning-preserving (see `escape_line_start`'s
+        // doc comment): a leading space isn't CommonMark-escapable, so
+        // `\` + space renders as a literal backslash rather than
+        // disappearing. What it actually guarantees is that the escaped
+        // line no longer opens with 4 columns of indentation, so it can't
+        // be misread as an indented code block on reparse — not that the
+        // rendered text is unchanged.
+        assert!(marker_like("    code"));
+        let escaped = escape_line_start("    code");
+        assert!(!escaped.starts_with("    "), "escaped form: {escaped}");
+        assert!(
+            escaped.starts_with('\\'),
+            "escaped form should visibly carry the lossy backslash: {escaped}"
+        );
+    }
+
+    #[test]
+    fn link_reference_definition_is_marker_like_and_escapes_to_non_bracket_start() {
+        assert!(marker_like("[foo]:"));
+        let escaped = escape_line_start("[foo]:");
+        assert!(!escaped.starts_with('['), "escaped form: {escaped}");
+    }
+
+    #[test]
+    fn bare_less_than_comparison_is_not_marker_like() {
+        // `a < b` mid-prose is a plain comparison, not an HTML tag start;
+        // `looks_like_html_start` must not flag a lone `<`.
+        assert!(!marker_like("<"));
+    }
+
+    #[test]
+    fn setext_is_capped_at_h2_regardless_of_text() {
+        // The level cap lives in `heading_can_use_setext` alongside the
+        // text predicate so the printer and `SL105` share both halves.
+        assert!(heading_can_use_setext(1, "Title"));
+        assert!(heading_can_use_setext(2, "Title"));
+        assert!(!heading_can_use_setext(3, "Title"));
+        assert!(!heading_can_use_setext(1, ">quoted"));
+    }
+
+    #[test]
+    fn heading_text_starting_with_a_letter_can_use_setext() {
+        assert!(heading_text_can_use_setext("Top Setext"));
+        assert!(heading_text_can_use_setext("多字节 heading"));
+    }
+
+    #[test]
+    fn heading_text_with_unsafe_first_character_cannot_use_setext() {
+        // `flatten_words` never actually produces leading whitespace (it
+        // splits on whitespace when building words), so the leading-space
+        // and leading-tab cases below can't arise through the normal
+        // `format_str` path today — same as `marker_like`'s 4-space-indent
+        // arm. They're pinned directly here as a defensive backstop, since
+        // `heading_text_can_use_setext` must reject them regardless of
+        // whether anything currently constructs such a `text`.
+        for text in [
+            "",
+            " leading space",
+            "\tleading tab",
+            ">quoted",
+            ">> nested quote",
+            "1. numbered",
+            "123) numbered",
+            "- dash",
+            "# hash",
+            "~~~fence",
+            "```fence",
+            "|table|",
+            "<div>hi",
+            "[label]: dest",
+            "9lives",
+        ] {
+            assert!(
+                !heading_text_can_use_setext(text),
+                "expected {text:?} to be rejected"
+            );
+        }
     }
 }

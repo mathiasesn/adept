@@ -17,13 +17,36 @@
 //! through verbatim), hard line breaks, block quotes (recursively
 //! reformatted, but quoting itself preserved), thematic breaks.
 //!
-//! Known limitations: Setext headings are always normalized to ATX
-//! (`HeadingStyle` currently has no other variant); list "tightness" is not
+//! Known limitations: Setext headings round-trip only when configured via
+//! `HeadingStyle::Setext` (h1/h2 only; h3+ always print as ATX) — the
+//! default `HeadingStyle::Atx` normalizes every heading to ATX regardless of
+//! source form, same as before; list "tightness" is not
 //! preserved distinctly from looseness (blank lines are always inserted
 //! between an item's blocks when it contains more than one); reference-style
 //! link *definitions* are not currently preserved as such by the printer —
 //! they are inlined at each use site (semantically equivalent, textually
 //! different).
+//!
+//! # Escaping scope
+//!
+//! Prose reflow keeps line-start hazards off of *wrapped* line starts (see
+//! `print::marker_like`) for: blockquote `>`, ATX `#` (1-6 of them),
+//! ordered-list markers, thematic-break/setext/bullet runs of
+//! `- = + * _ ~`, GFM table rows (`|`), HTML block starts (`<div>`,
+//! `</p>`, `<!--`, `<?...`), link-reference definitions (`[label]:`), and
+//! 4-space-indented code. `escape_text` separately backslash-escapes
+//! `\ ` `` ` `` `*` `_` `[` `]` in plain text unconditionally (not just at a
+//! line start).
+//!
+//! Deliberately **out of scope**, left unescaped even at a line start:
+//! `<` `>` `&` `!` `(` `)` `#` `:`, a digit followed by `)`, and `#` runs
+//! longer than six. These are only ambiguous in positions the formatter
+//! already controls — e.g. a lone `>` mid-line, or `#` runs beyond the ATX
+//! max — and each additional escape is itself a visible diff, which is
+//! exactly the defect this scope closes rather than reproduces. Widening
+//! `crates/adept_fmt/tests/proptest_idempotency.rs`'s grammar to generate
+//! this punctuation is tracked separately as a coverage gap, not attempted
+//! here.
 //!
 //! # Example
 //!

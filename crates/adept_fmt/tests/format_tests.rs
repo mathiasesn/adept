@@ -12,7 +12,7 @@ use std::fs;
 use std::path::Path;
 
 use adept::{AnthropicSkillParser, SkillParser};
-use adept_fmt::{format_str, FmtConfig};
+use adept_fmt::{format_str, FmtConfig, HeadingStyle};
 use pulldown_cmark::{CodeBlockKind, Event, Tag};
 
 fn fixtures_dir() -> std::path::PathBuf {
@@ -92,16 +92,6 @@ fn semantic_events(source: &str) -> Vec<String> {
             Event::TaskListMarker(checked) => {
                 flush(&mut buf, &mut out);
                 out.push(format!("TL:{checked}"));
-            }
-            // Whether a list item's content is wrapped in an explicit
-            // `Paragraph` reflects only CommonMark tight/loose rendering,
-            // not the document's meaning (the spec defines tight/loose as
-            // purely a rendering concern) — adept_fmt does not attempt to
-            // reproduce tightness exactly for items with more than one
-            // block, so paragraph wrapper events are excluded here.
-            Event::Start(pulldown_cmark::Tag::Paragraph)
-            | Event::End(pulldown_cmark::TagEnd::Paragraph) => {
-                flush(&mut buf, &mut out);
             }
             Event::Start(tag) => {
                 flush(&mut buf, &mut out);
@@ -198,6 +188,94 @@ fn already_formatted_fixture_is_byte_identical() {
     assert_eq!(
         source, formatted,
         "already_formatted.md should format to itself byte-for-byte"
+    );
+}
+
+/// `setext_headings.md` under `heading-style = "setext"`: h1/h2 setext
+/// headings must round-trip byte-identically, and h3+ must still print as
+/// ATX. This is a separate test (not folded into
+/// `snapshots_and_invariants_hold_for_every_fixture`, which only ever runs
+/// `FmtConfig::default()`) so both configured styles get their own
+/// reviewed snapshot for the same source. The default `heading-style =
+/// "atx"` fixture snapshot (`format_tests__setext_headings.snap`, produced
+/// by that shared loop) exercises the same source under the default style.
+#[test]
+fn setext_fixture_round_trips_under_setext_heading_style() {
+    let source = fs::read_to_string(fixtures_dir().join("setext_headings.md")).unwrap();
+    let cfg = FmtConfig {
+        heading_style: HeadingStyle::Setext,
+        ..FmtConfig::default()
+    };
+    let formatted =
+        format_str(&source, &cfg).unwrap_or_else(|e| panic!("setext fixture failed: {e}"));
+
+    insta::assert_snapshot!("setext_headings__setext_style", formatted);
+
+    // Idempotency under the setext style specifically.
+    let formatted_twice = format_str(&formatted, &cfg)
+        .unwrap_or_else(|e| panic!("setext fixture failed on second pass: {e}"));
+    assert_eq!(
+        formatted, formatted_twice,
+        "setext fixture is not idempotent under heading-style = setext"
+    );
+
+    // The h1/h2 setext headings must be byte-identical to the source lines;
+    // check by re-extracting them rather than asserting the whole file,
+    // since prose reflow may still touch other lines.
+    assert!(
+        formatted.contains("Top Setext\n=="),
+        "h1 should stay setext:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("Sub Setext\n--"),
+        "h2 should stay setext:\n{formatted}"
+    );
+    assert!(
+        formatted.contains("### Atx H3"),
+        "h3 should still print as ATX:\n{formatted}"
+    );
+
+    // Headings whose text could be reparsed as opening a different block on
+    // the next pass must fall back to ATX rather than being emitted in
+    // setext form: on setext's own line (no leading `# `), such text would
+    // be reparsed as a blockquote/list/table/HTML-block/code-fence/etc.
+    // opener, with the underline then read as an unrelated thematic break —
+    // silently destroying the heading and breaking idempotency (see
+    // `heading_text_can_use_setext` in `print.rs`). This deliberately
+    // includes cases `marker_like` itself would miss (`>quoted` with no
+    // space, `~~~fence` which isn't a pure tilde run) since the heading
+    // printer uses its own conservative allowlist, not `marker_like`.
+    // Assert both that the heading survives (level + text intact, as ATX)
+    // and that nothing upstream of it got misparsed.
+    for (text, expected_atx) in [
+        ("> quoted heading", "## > quoted heading"),
+        ("1. numbered heading", "## 1. numbered heading"),
+        ("- dashed heading", "## - dashed heading"),
+        ("# hash heading", "## # hash heading"),
+        (">quoted heading", "## >quoted heading"),
+        (">> nested quote heading", "## >> nested quote heading"),
+        ("~~~fence", "## ~~~fence"),
+        // Backtick and `[`/`]` are always backslash-escaped by `escape_text`
+        // regardless of heading style, so the ATX fallback carries that
+        // escaping too.
+        ("```fence", r"## \`\`\`fence"),
+        ("|table| heading", "## |table| heading"),
+        // `<div>` parses as a separate inline-HTML token from the following
+        // text, so a space is (re-)introduced between them on reflow.
+        ("<div>hi heading", "## <div> hi heading"),
+        ("[label]: dest heading", r"## \[label\]: dest heading"),
+    ] {
+        assert!(
+            formatted.contains(expected_atx),
+            "heading {text:?} should have fallen back to ATX (found no {expected_atx:?}):\n{formatted}"
+        );
+    }
+
+    // A multi-byte, alphabetic first character is safe and must stay
+    // setext, not fall back to ATX.
+    assert!(
+        formatted.contains("多字节 heading\n--"),
+        "multi-byte-first-char heading should stay setext:\n{formatted}"
     );
 }
 
@@ -533,6 +611,33 @@ fn wrapped_line_starting_with_blockquote_marker_is_not_reparsed_as_nested_quote(
 /// ```` ```rest ...``` ```` fenced code block); restored, it stays
 /// idempotent because `~~~` is forced back onto the prior (over-width)
 /// line.
+/// A mid-prose `|` (table-row pipe) placed right after a hard line break —
+/// exactly the case `wrap_tokens` cannot avoid by gluing onto a previous
+/// line — must hit the escape fallback rather than reach `wrap_tokens` as a
+/// bare `|` at a line start, which reads as (part of) a GFM table row on
+/// reparse.
+#[test]
+fn wrapped_line_starting_with_table_pipe_is_not_reparsed_as_table_row() {
+    assert_marker_idempotent(
+        "some text before the break  \n| a | b | and then some trailing prose after the marker\n",
+        "|",
+    );
+}
+
+/// A mid-prose `<div>` HTML tag is parsed as a genuine inline-HTML token
+/// (`Inline::Html`, emitted verbatim by `build_tokens`) regardless of where
+/// it sits in the paragraph. Forced to a wrapped line start via a hard
+/// break, it must not be reinterpreted as opening an HTML block on the next
+/// pass — CommonMark's HTML-block-start rule lets a tag like `<div>`
+/// interrupt a paragraph.
+#[test]
+fn wrapped_line_starting_with_html_tag_is_not_reparsed_as_html_block() {
+    assert_marker_idempotent(
+        "some text before the break  \n<div> and then some trailing prose after the marker\n",
+        "<div>",
+    );
+}
+
 #[test]
 fn wrapped_line_starting_with_tilde_fence_is_not_reparsed_as_code_block() {
     let filler = "x".repeat(53);

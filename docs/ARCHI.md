@@ -380,6 +380,32 @@ than relying on `deny_unknown_fields`, which the config structs deliberately
 lack — see `docs/BACKLOG.md`) and exits `2` naming the fix, because silently
 ignoring it would quietly drop the user's `model`/`capture_dir`.
 
+**`[fmt] heading-style` and `[lint] heading_style` are cross-validated the
+same way.** `adept` cannot depend on `adept_fmt` (§5), so `SL105` cannot read
+`FmtConfig::heading_style` directly; the setting is instead mirrored into
+`LintConfig::heading_style` (`crates/adept/src/rules/mod.rs`), and `SL105`
+fires only when that mirror says `Atx`. Two values that can silently drift are
+made safe by failing closed at config resolution, via the same raw-TOML
+presence check `contains_legacy_score_section` established (deserialization
+alone can't distinguish "absent" from "explicitly set to the default"):
+`config.rs::heading_style_values` inspects the parsed TOML directly, and
+`ConfigLoadError` gained two variants for it — `HeadingStyleMismatch` (both
+keys present, different values) and `HeadingStyleOnlyOnePresent` (exactly one
+key present, naming the missing key and section). Both keys absent, or both
+present and equal, is fine; both present and different, or exactly one
+present, is exit `2`. **This duplication is a deliberately accepted design
+smell, not a pattern to repeat**: it exists solely because of the one-way
+crate boundary, it is made safe only by this hard error, and if a second
+setting ever needs the same treatment the right fix is a shared config layer
+between `adept` and `adept_fmt`, not a second mirror — see `docs/BACKLOG.md`.
+
+This also sharpens the casing note above: `FmtConfig::heading_style` is
+`kebab-case` (`heading-style`, via `rename_all`) while
+`LintConfig::heading_style` is `snake_case` (`heading_style`, no
+`rename_all`) — the same pre-existing asymmetry, but here the two keys name
+the *same* setting, so the differing casing is easy to mistake for a bug
+rather than the established convention.
+
 **Capture directory resolution** (`config.rs::resolve_capture_dir`, used by
 `eval` and `fix`). Standard precedence, but the two layers anchor a *relative*
 path differently:
@@ -562,12 +588,85 @@ adversarial input. Keep it.
 Prefer `format_skill`/`check_skill` (already-parsed `Skill`) over
 `format_str`/`check_str` (re-parses). The CLI always has a `Skill` in hand.
 
-Documented limitations, each visible to users as an unexpected diff:
-reference-style link *definitions* are inlined at each use; Setext headings
-always become ATX; tight-list preservation is partial; text escaping covers a
-conservative subset. `HeadingStyle` and `StrongMarker` are single-variant
-placeholders kept so config files can express intent without a future breaking
-change — do not "simplify" them away.
+One documented limitation remains, visible to users as an unexpected diff:
+reference-style link *definitions* are inlined at each use, not re-emitted
+(#5, a deliberate pre-publish decision, untouched). `StrongMarker` is still a
+single-variant placeholder kept so config files can express intent without a
+future breaking change — do not "simplify" it away.
+
+Setext round-tripping, tight-list preservation for mixed items, and line-start
+escaping coverage (issue #4) all shipped:
+
+- **`HeadingStyle::Setext`** (`adept_fmt::config::HeadingStyle`) is a second
+  variant alongside `Atx`. The printer emits setext only when **all three**
+  hold: the configured style is `Setext`, the level is 1 or 2 (setext has no
+  form past h2), and `heading_text_can_use_setext` accepts the heading's
+  text — the latter two are bundled as `heading_can_use_setext(level, text)`
+  so neither half can drift between callers. The text predicate is an
+  **allowlist**, not a blocklist: it requires the first character
+  to be alphabetic, since every CommonMark block start is introduced by
+  punctuation, indentation, or a digit-run marker, so a leading letter can
+  never open one. This was tightened from an earlier `marker_like`-based gate
+  that missed inputs `marker_like` was never meant to catch (`>quoted` with
+  no space, `~~~fence`) because that predicate is tuned for wrapped tokens,
+  where `escape_line_start` also runs as a second line of defense; widening
+  it would have made reflow escape more than necessary. Enumerating what is
+  provably safe rather than what is unsafe is deliberate here: a wrong
+  "safe" answer silently destroys a heading, while an unnecessary ATX
+  fallback only renders the same heading differently. Headings failing the
+  check fall back to ATX (the same fallback path h3–h6 already take) rather
+  than printing a form that would reparse as a different block structure.
+  This fallback is *why* the printer's idempotent-by-construction claim
+  holds — without it, disallowed heading text would round-trip through a
+  different block structure on a second pass. No flag was added to
+  `Block::Heading` in `adept`'s AST — the printer is config-driven and
+  canonicalizing (symmetric with the pre-existing ATX path), so there is
+  nothing for an AST flag to be read by.
+  `heading_can_use_setext` and `setext_underline`
+  (`crates/adept/src/markdown/query.rs`, re-exported from `markdown/mod.rs`)
+  live in the core crate and are called by both `adept_fmt`'s printer and
+  `SL105` — the latter so `SL105`'s fix suggestion quotes the exact
+  underline the formatter would write — so the two can't drift into
+  independently wrong answers about the same heading — that drift is exactly
+  how the original setext defect shipped. This is the mirror image of the
+  `heading_style` duplication below: that value is *mirrored* into
+  `LintConfig` because `adept` cannot depend on `adept_fmt`, whereas this
+  predicate is *shared* in the other direction, because `adept_fmt` already
+  depends on `adept` and nothing prevents putting it there. Duplicate only
+  when the dependency direction forces it; share when it doesn't.
+  `docs/RULES.md`'s `SL105` entry (now symmetric — it flags whichever form
+  isn't the configured one, in both directions) and
+  `crates/adept/src/rules/mod.rs` document the mirrored
+  `LintConfig::heading_style` this forced — see §7.
+- **`ListItem::content_tight`** (`crates/adept/src/markdown/ast.rs`) records
+  whether an item's *own* blocks were free of blank-line separation in the
+  source. `Block::List::tight` is still folded with `items.iter().all(...)`
+  across the list — **this is correct, not a residual limitation**:
+  CommonMark makes a list loose if *any* item is loose, and pulldown-cmark
+  only ever reports tightness per list, not per item, so there is no finer
+  granularity to preserve. The defect that motivated this item was never the
+  fold; it was `markdown::build.rs` fabricating looseness for an item mixing
+  text with a nested list, then that fabricated looseness spreading via the
+  same `all()`. With the fabrication fixed, a text-plus-nested-list item
+  stays tight and `print_blocks`' new `tight` flag suppresses the blank line
+  between its blocks; a genuinely loose item still legitimately loosens its
+  siblings.
+- **Text escaping** (`marker_like`, `crates/adept_fmt/src/print.rs`) now also
+  recognizes GFM table rows (`|`), HTML block starts (`<div>`, `</p>`,
+  `<!--`, `<?`), link-reference definitions (`[label]:`), and 4-space-indented
+  code as line-start hazards it keeps off wrapped line starts. Table rows and
+  HTML block starts are reachable through `format_str` and covered by
+  full-pipeline idempotency tests; the other two have no reachable producer
+  today and are pinned by unit tests only, as defensive backstops. The
+  remaining out-of-scope escaping set — everything `marker_like` still does
+  not recognize, and every character `escape_text` still does not escape — is
+  a closed, documented decision, enumerated with its rationale in
+  `crates/adept_fmt/src/lib.rs`, not a proof of completeness. `docs/BACKLOG.md`
+  records the two things this leaves deferred: widening
+  `proptest_idempotency.rs`'s grammar (which generates no escapable
+  punctuation today) to catch a construct outside this list in CI rather than
+  in the field, and the closed-not-complete nature of the four-construct
+  scope itself.
 
 ### `adept_agent::eval`
 

@@ -297,6 +297,23 @@ impl Default for Registry {
     }
 }
 
+/// The house heading style `SL105` (`setext-heading`) checks against.
+///
+/// This mirrors `adept_fmt::config::HeadingStyle`: `adept` cannot depend on
+/// `adept_fmt` (see the workspace's crate layering), so the value is
+/// duplicated here rather than shared, and `adept_cli` cross-validates that
+/// `[fmt] heading-style` and `[lint] heading_style` agree at config
+/// resolution (see `docs/ARCHI.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeadingStyle {
+    /// `#`-prefixed headings (the default).
+    #[default]
+    Atx,
+    /// `Heading\n=======` / `Heading\n-------` underlined headings.
+    Setext,
+}
+
 /// Configuration for the [`Linter`]: per-rule enable/disable, severity
 /// overrides, and the numeric thresholds used by individual rules.
 ///
@@ -370,6 +387,12 @@ pub struct LintConfig {
     /// different downstream models tokenize differently and a mismatched
     /// tokenizer under- or over-counts against the real budget.
     pub tokenizer: crate::token::Tokenizer,
+
+    /// The house heading style. `SL105` (`setext-heading`) fires only when
+    /// this is [`HeadingStyle::Atx`]; kept in sync with `adept.toml`'s
+    /// `[fmt] heading-style` by a hard config-resolution error in
+    /// `adept_cli`, since the two settings live in independent crates.
+    pub heading_style: HeadingStyle,
 }
 
 impl Default for LintConfig {
@@ -384,6 +407,7 @@ impl Default for LintConfig {
             similar_description_threshold: 0.6,
             trigger_overlap_threshold: 0.5,
             tokenizer: crate::token::Tokenizer::default(),
+            heading_style: HeadingStyle::default(),
         }
     }
 }

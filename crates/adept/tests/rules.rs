@@ -65,9 +65,16 @@ macro_rules! assert_lint_snapshot {
 /// The raw diagnostics for a fixture, so tests can assert on line numbers
 /// and severities rather than only on rendered text.
 fn diagnostics_for(name: &str) -> Vec<Diagnostic> {
+    diagnostics_for_config(name, LintConfig::default())
+}
+
+/// Like [`diagnostics_for`], but with a caller-supplied config rather than
+/// the default — used by tests that need a non-default setting, e.g.
+/// `SL105` under a setext-configured heading style.
+fn diagnostics_for_config(name: &str, config: LintConfig) -> Vec<Diagnostic> {
     let path = fixture_dir(name).join("SKILL.md");
     let skill = parse_skill(&path).expect("fixture should parse");
-    let linter = Linter::new(LintConfig::default()).expect("default tokenizer should load");
+    let linter = Linter::new(config).expect("default tokenizer should load");
     linter.lint_skill(&skill)
 }
 
@@ -355,6 +362,62 @@ fn sl105_fires_on_setext_headings_only() {
     // ATX headings never produce SL105.
     assert_no_codes("sl103_heading_skip", &["SL105"]);
     assert_no_codes("pdf-extractor", &["SL105"]);
+}
+
+#[test]
+fn sl105_fires_on_eligible_atx_headings_under_setext_config() {
+    // Under a setext-configured house style, SL105 flips direction: it
+    // flags ATX h1/h2 headings whose text `adept_fmt` would actually
+    // rewrite to setext, and stays silent on everything the formatter
+    // would leave alone (h3+, and any h1/h2 whose text fails
+    // `heading_text_can_use_setext`).
+    let config = LintConfig {
+        heading_style: adept::HeadingStyle::Setext,
+        ..Default::default()
+    };
+    let found: Vec<_> = diagnostics_for_config("sl105_setext_configured", config)
+        .into_iter()
+        .filter(|d| d.code == "SL105")
+        .collect();
+    assert_eq!(found.len(), 2, "got:\n{found:#?}");
+    // File line 5 (`# Alpha`) and line 7 (`## Beta`).
+    assert_eq!(found[0].line, 5);
+    assert!(found[0].message.contains("Alpha"), "{}", found[0].message);
+    assert!(
+        found[0].message.contains("is ATX form"),
+        "{}",
+        found[0].message
+    );
+    assert!(
+        found[0]
+            .message
+            .contains("configured heading style is setext"),
+        "{}",
+        found[0].message
+    );
+    assert_eq!(found[1].line, 7);
+    assert!(found[1].message.contains("Beta"), "{}", found[1].message);
+    // `### Gamma` (h3), `## 1. Numbered` (digit-led text) and
+    // `## >Quoted` (punctuation-led text) are all left alone: the
+    // formatter would never rewrite them to setext.
+    for d in &found {
+        assert!(!d.message.contains("Gamma"), "{}", d.message);
+        assert!(!d.message.contains("Numbered"), "{}", d.message);
+        assert!(!d.message.contains("Quoted"), "{}", d.message);
+    }
+}
+
+#[test]
+fn snapshot_sl105_setext_configured() {
+    let config = LintConfig {
+        heading_style: adept::HeadingStyle::Setext,
+        ..Default::default()
+    };
+    let rendered = render_human_colored(
+        &diagnostics_for_config("sl105_setext_configured", config),
+        false,
+    );
+    assert_lint_snapshot!(rendered);
 }
 
 #[test]

@@ -13,6 +13,17 @@ pub struct ListItem {
     /// `Some(checked)` if this item started with a GFM task-list marker
     /// (`- [ ]` / `- [x]`).
     pub checked: Option<bool>,
+    /// Whether this item's own blocks were free of blank-line separation in
+    /// the source: a single bare-inline paragraph, optionally followed by
+    /// further blocks (e.g. a nested list) with no blank line between them.
+    /// This is a property of the item itself ("within-item" spacing),
+    /// distinct from [`Block::List::tight`], which records whether blank
+    /// lines separate this item from its siblings ("between-item" spacing).
+    /// CommonMark still derives a list's loose/tight rendering from the
+    /// list as a whole, so one item recording `false` here can make the
+    /// whole list loose (see `tight` on the containing `List`), but a
+    /// `true` here never by itself forces siblings loose.
+    pub content_tight: bool,
     /// The blocks contained in this item.
     pub blocks: Vec<Block>,
 }
@@ -20,7 +31,9 @@ pub struct ListItem {
 /// A block-level Markdown node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
-    /// An ATX/Setext heading, normalized to ATX on output.
+    /// An ATX or Setext heading. Printed form is a function of the
+    /// printer's configured heading style and `level`; the AST does not
+    /// record which form the source used.
     Heading {
         /// Heading level, 1-6.
         level: u8,
@@ -37,8 +50,11 @@ pub enum Block {
         ordered: bool,
         /// The starting number for ordered lists (ignored for unordered).
         start: u64,
-        /// Whether the list is "tight" (no blank lines between items);
-        /// tight lists print without blank-line separators between items.
+        /// Whether the list is "tight" (no blank lines between items, the
+        /// "between-item" spacing); tight lists print without blank-line
+        /// separators between items. Per CommonMark this is a whole-list
+        /// property: it is false if any item is blank-separated from a
+        /// sibling, or any item's own [`ListItem::content_tight`] is false.
         tight: bool,
         /// The list's items.
         items: Vec<ListItem>,

@@ -39,8 +39,8 @@ pub use error::AdeptError;
 pub use frontmatter::{ExtraField, Frontmatter};
 pub use parser::{AnthropicSkillParser, SkillParser};
 pub use rules::{
-    sort_diagnostics, FixKind, FixRegion, LintConfig, Linter, Registry, Rule, RuleMeta, SetRule,
-    SkillRule,
+    sort_diagnostics, FixKind, FixRegion, HeadingStyle, LintConfig, Linter, Registry, Rule,
+    RuleMeta, SetRule, SkillRule,
 };
 pub use skill::Skill;
 pub use skillset::{sibling_root, skill_directory, SkillSet};
