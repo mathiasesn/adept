@@ -121,7 +121,7 @@ crates/adept/              CORE LIBRARY — no dependency on any sibling crate
     error.rs               `AdeptError` — hard failures, distinct from lint findings
     reporting.rs           Human (colored) and JSON renderers
     token.rs               `TokenCounter`, `Tokenizer`, process-wide BPE cache
-    text.rs                `word_bag`, `words`, `jaccard` — shared similarity primitives
+    text.rs                `word_bag`/`words`/`jaccard` (similarity) + `to_kebab_case` (shared by SL005, `create`)
     companion.rs           `discover_companion_files` — shared by SL303 and eval's token-bloat view
     evals.rs               Dataset schema (`Assertion`/`EvalCase`/`SCHEMA_VERSION`) + offline `grade`
     markdown/              THE SHARED MARKDOWN LEXER — one pulldown-cmark parser, two views
@@ -513,7 +513,10 @@ exists to preserve the `Result` API. **Never construct BPE tables elsewhere.**
 
 **`text.rs`** owns the definition of a "word" (lowercased, split on
 non-alphanumeric) and `jaccard`. `word_bag` and `words` share one tokenizer so
-set-based and order-based callers cannot diverge.
+set-based and order-based callers cannot diverge. It also owns the canonical
+kebab-case rewrite, `to_kebab_case`, shared across the `adept`/`adept_agent`
+boundary by its two callers: `rules::frontmatter`'s `SL005` name suggestion,
+and `adept_agent::create`'s eval-case id generation.
 
 **`markdown`** is the shared lexer and the only markdown-aware code in the
 workspace, exposing two views over one document: `parse_document` builds the

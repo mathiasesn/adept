@@ -33,13 +33,13 @@ case object.
 ## The case object
 
 ```json
-{"schema_version": 2, "id": "summarize-the-attached-report-1", "prompt": "Summarize the attached report.", "assertions": [{"kind": "contains", "value": "summary"}, {"kind": "file_exists", "path": "out/summary.md"}, {"kind": "file_contains", "path": "out/summary.md", "value": "conclusion"}, {"kind": "command", "command": "test -s out/summary.md"}]}
+{"schema_version": 2, "id": "summarize-the-attached-report-49d9c4", "prompt": "Summarize the attached report.", "assertions": [{"kind": "contains", "value": "summary"}, {"kind": "file_exists", "path": "out/summary.md"}, {"kind": "file_contains", "path": "out/summary.md", "value": "conclusion"}, {"kind": "command", "command": "test -s out/summary.md"}]}
 ```
 
 | Field | Type | Meaning |
 |---|---|---|
 | `schema_version` | integer | Schema version this line was written against. Current: `2` (`adept::evals::SCHEMA_VERSION`). |
-| `id` | string | This case's identity, stable across reordering of the file. Must be non-empty and unique across the dataset (see [Validation](#validation)). `adept create` generates a deterministic kebab-case slug from the prompt's leading words, suffixed with the case's ordinal (`summarize-the-attached-report-1`); a hand-written dataset may use any non-empty string. |
+| `id` | string | This case's identity, stable across reordering of the file. Must be non-empty and unique across the dataset (see [Validation](#validation)). `adept create` generates a content-addressed id, `<prompt-slug>-<6-hex-digest>` (e.g. `summarize-the-attached-report-49d9c4`): a kebab-case slug of the prompt's leading words prefixing a 6-hex-char digest over the case's `prompt` and `assertions`. Identity is purely content-derived — identical `prompt`/`assertions` yield the same id regardless of position in the file or which generation run produced it — so `create` drops later duplicate cases before writing rather than emit two cases sharing one id. A hand-written dataset may use any non-empty string. |
 | `prompt` | string | The prompt the skill under test should handle. |
 | `assertions` | array | Deterministic checks run against the response. May be empty. |
 
@@ -181,6 +181,10 @@ companion-path sandboxing `adept_agent` uses elsewhere.
 
 `EvalBenchmarkReport` (in the spirit of upskill's `upskill eval`) reports:
 
+Each entry in `EvalBenchmarkReport::cases` is a `CaseReport`, whose `case`
+field carries the graded case's `id` (not a display label) — the same field
+name `CaseResult::id` uses on the input side.
+
 - **Pass rate** — fraction of `skill`-arm results that passed.
 - **Assertion success rate** — assertions met over assertions *checked*.
   Skipped assertions leave both numerator and denominator, and are reported
@@ -193,7 +197,8 @@ companion-path sandboxing `adept_agent` uses elsewhere.
 - **Unknown and unmatched cases** — a result naming an `id` absent from the
   dataset, or a dataset case with no `skill`-arm result, is reported
   explicitly (`unknown_result_ids` / `unmatched_cases`, both `id`-valued),
-  never silently ignored.
+  never silently ignored. `unknown_result_ids` is sorted and deduplicated, so
+  repeated results naming the same bad id collapse to one entry.
 - **Ambiguous case ids** — `grade` does not trust its caller to have run
   `validate` first. If `cases` itself contains an empty id, or an id shared
   by more than one case, that id is ambiguous: it is excluded from the
