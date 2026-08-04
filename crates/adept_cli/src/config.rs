@@ -385,12 +385,25 @@ pub fn load_config_file(path: &Path) -> Result<AdeptConfig, ConfigLoadError> {
         path: path.to_path_buf(),
         source,
     })?;
-    if contains_legacy_score_section(&text) {
+    // The two checks below both need the raw document rather than the
+    // deserialized `AdeptConfig`, so parse it once and share it. A
+    // malformed document is not their concern: they see an empty table and
+    // the `toml::from_str` below still reports the syntax error.
+    let raw = match text.parse::<toml::Value>() {
+        Ok(toml::Value::Table(table)) => table,
+        _ => toml::Table::new(),
+    };
+    // `[score]` is the pre-rename section name. Checked here rather than
+    // during deserialization because `AdeptConfig` has no
+    // `deny_unknown_fields` and would otherwise parse a stale `[score]`
+    // section, silently ignore it, and quietly drop the user's
+    // `model`/`capture_dir`/`num_prompts`.
+    if raw.contains_key("score") {
         return Err(ConfigLoadError::LegacyScoreSection {
             path: path.to_path_buf(),
         });
     }
-    let (fmt_heading_style, lint_heading_style) = heading_style_values(&text);
+    let (fmt_heading_style, lint_heading_style) = heading_style_values(&raw);
     match (fmt_heading_style, lint_heading_style) {
         (Some(fmt_value), Some(lint_value)) if fmt_value != lint_value => {
             return Err(ConfigLoadError::HeadingStyleMismatch {
@@ -426,31 +439,12 @@ pub fn load_config_file(path: &Path) -> Result<AdeptConfig, ConfigLoadError> {
     Ok(config)
 }
 
-/// Whether `text` (an `adept.toml`'s raw contents) declares a top-level
-/// `[score]` table — the pre-rename section name. Checked separately from
-/// (and before) the `AdeptConfig` deserialization itself, since
-/// `AdeptConfig` has no `deny_unknown_fields` and would otherwise parse a
-/// stale `[score]` section, silently ignore it, and quietly drop the user's
-/// `model`/`capture_dir`/`num_prompts`. A malformed document is not this
-/// function's concern — `toml::from_str` below still reports that.
-fn contains_legacy_score_section(text: &str) -> bool {
-    matches!(
-        text.parse::<toml::Value>(),
-        Ok(toml::Value::Table(table)) if table.contains_key("score")
-    )
-}
-
 /// The raw string values of `[fmt] heading-style` and `[lint] heading_style`
-/// in `text`, if present, inspected via `toml::Value` rather than the
-/// deserialized `AdeptConfig` — `#[serde(default)]` cannot distinguish
+/// in an `adept.toml`, if present, read from the raw document rather than
+/// the deserialized `AdeptConfig` — `#[serde(default)]` cannot distinguish
 /// "absent" from "explicitly set to the default", which is exactly the
-/// distinction the cross-validation above needs. A malformed document is
-/// not this function's concern: `toml::from_str` on `AdeptConfig` still
-/// reports that.
-fn heading_style_values(text: &str) -> (Option<String>, Option<String>) {
-    let Ok(toml::Value::Table(table)) = text.parse::<toml::Value>() else {
-        return (None, None);
-    };
+/// distinction the cross-validation above needs.
+fn heading_style_values(table: &toml::Table) -> (Option<String>, Option<String>) {
     let fmt_value = table
         .get("fmt")
         .and_then(|v| v.get("heading-style"))

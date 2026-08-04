@@ -182,6 +182,29 @@ pub fn heading_text_can_use_setext(text: &str) -> bool {
     text.chars().next().is_some_and(char::is_alphabetic)
 }
 
+/// Whether a heading of `level` carrying `text` can be printed in setext
+/// form at all.
+///
+/// Setext exists only for h1 and h2; beyond that cap the text must pass
+/// [`heading_text_can_use_setext`]. Both halves of the decision live here
+/// so the printer and `SL105` cannot drift on either one — a heading this
+/// rejects is one `adept fmt` will never rewrite to setext, which is
+/// exactly what `SL105` must not flag.
+pub fn heading_can_use_setext(level: u8, text: &str) -> bool {
+    level <= 2 && heading_text_can_use_setext(text)
+}
+
+/// The underline `adept_fmt` writes beneath a setext heading of `level`
+/// carrying `text`.
+///
+/// Shared with `SL105`, whose fix suggestion quotes the exact bytes the
+/// formatter would emit; deriving both from one function keeps the hint
+/// honest if the underline rule ever changes.
+pub fn setext_underline(level: u8, text: &str) -> String {
+    let underline_char = if level == 1 { "=" } else { "-" };
+    underline_char.repeat(text.chars().count())
+}
+
 /// The destinations of every link and image in `src`, in document order.
 ///
 /// Destinations inside fenced or indented code blocks are not reported:

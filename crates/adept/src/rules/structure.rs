@@ -199,8 +199,8 @@ impl SkillRule for BrokenFileReference {
 /// house heading style — setext form (`Title` underlined with `===` or
 /// `---`) when ATX (`# Title`) is configured, or vice versa.
 ///
-/// The setext-configured direction only flags an ATX h1/h2 whose text
-/// [`markdown::heading_text_can_use_setext`] accepts — the same predicate
+/// The setext-configured direction only flags a heading
+/// [`markdown::heading_can_use_setext`] accepts — the same predicate
 /// `adept_fmt` uses to decide whether it would actually rewrite that
 /// heading to setext. An h1/h2 whose text fails the predicate (a leading
 /// punctuation character or a leading digit) stays ATX under any
@@ -221,17 +221,11 @@ impl SkillRule for SetextHeading {
         let atx_configured = config.heading_style == crate::rules::HeadingStyle::Atx;
         markdown::headings(&skill.body)
             .into_iter()
-            .filter(|h| {
-                if atx_configured {
-                    h.value.is_setext
-                } else {
-                    !h.value.is_setext
-                        && h.value.level <= 2
-                        && markdown::heading_text_can_use_setext(&h.value.text)
-                }
-            })
-            .map(|h| {
+            .filter_map(|h| {
                 let (found, configured, hint) = if atx_configured {
+                    if !h.value.is_setext {
+                        return None;
+                    }
                     (
                         "setext",
                         "ATX",
@@ -242,10 +236,12 @@ impl SkillRule for SetextHeading {
                         ),
                     )
                 } else {
-                    let underline_char = if h.value.level == 1 { '=' } else { '-' };
-                    let underline = underline_char
-                        .to_string()
-                        .repeat(h.value.text.chars().count());
+                    if h.value.is_setext
+                        || !markdown::heading_can_use_setext(h.value.level, &h.value.text)
+                    {
+                        return None;
+                    }
+                    let underline = markdown::setext_underline(h.value.level, &h.value.text);
                     (
                         "ATX",
                         "setext",
@@ -255,7 +251,7 @@ impl SkillRule for SetextHeading {
                         ),
                     )
                 };
-                Diagnostic::new(
+                Some(Diagnostic::new(
                     self.code(),
                     format!(
                         "heading \"{}\" is {found} form, but the configured heading style is {configured} (h{})",
@@ -266,7 +262,7 @@ impl SkillRule for SetextHeading {
                     skill.body_line_offset + h.line - 1,
                     1,
                 )
-                .with_fix_suggestion(hint)
+                .with_fix_suggestion(hint))
             })
             .collect()
     }

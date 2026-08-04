@@ -601,7 +601,9 @@ escaping coverage (issue #4) all shipped:
   variant alongside `Atx`. The printer emits setext only when **all three**
   hold: the configured style is `Setext`, the level is 1 or 2 (setext has no
   form past h2), and `heading_text_can_use_setext` accepts the heading's
-  text — an **allowlist**, not a blocklist: it requires the first character
+  text — the latter two are bundled as `heading_can_use_setext(level, text)`
+  so neither half can drift between callers. The text predicate is an
+  **allowlist**, not a blocklist: it requires the first character
   to be alphabetic, since every CommonMark block start is introduced by
   punctuation, indentation, or a digit-run marker, so a leading letter can
   never open one. This was tightened from an earlier `marker_like`-based gate
@@ -620,9 +622,11 @@ escaping coverage (issue #4) all shipped:
   `Block::Heading` in `adept`'s AST — the printer is config-driven and
   canonicalizing (symmetric with the pre-existing ATX path), so there is
   nothing for an AST flag to be read by.
-  `heading_text_can_use_setext` (`crates/adept/src/markdown/query.rs`,
-  re-exported from `markdown/mod.rs`) lives in the core crate and is called
-  by both `adept_fmt`'s printer and `SL105`, so the two can't drift into
+  `heading_can_use_setext` and `setext_underline`
+  (`crates/adept/src/markdown/query.rs`, re-exported from `markdown/mod.rs`)
+  live in the core crate and are called by both `adept_fmt`'s printer and
+  `SL105` — the latter so `SL105`'s fix suggestion quotes the exact
+  underline the formatter would write — so the two can't drift into
   independently wrong answers about the same heading — that drift is exactly
   how the original setext defect shipped. This is the mirror image of the
   `heading_style` duplication below: that value is *mirrored* into

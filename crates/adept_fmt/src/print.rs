@@ -3,7 +3,7 @@
 use crate::config::{FmtConfig, HeadingStyle};
 
 use adept::markdown::ast::{Alignment, Block, Inline, ListItem};
-use adept::markdown::{heading_text_can_use_setext, MAX_NESTING_DEPTH};
+use adept::markdown::{heading_can_use_setext, setext_underline, MAX_NESTING_DEPTH};
 
 /// A single reflow-able output token: either an atomic word (which may
 /// itself be a whole inline code span, link, or image — never split
@@ -57,12 +57,8 @@ fn print_block(block: &Block, cfg: &FmtConfig, depth: usize) -> Vec<String> {
             // both matches "today's behaviour is unchanged" under the
             // (default) Atx style and makes the choice trivially
             // idempotent.
-            if cfg.heading_style == HeadingStyle::Setext
-                && level <= 2
-                && heading_text_can_use_setext(&text)
-            {
-                let underline_char = if level == 1 { '=' } else { '-' };
-                let underline = underline_char.to_string().repeat(text.chars().count());
+            if cfg.heading_style == HeadingStyle::Setext && heading_can_use_setext(level, &text) {
+                let underline = setext_underline(level, &text);
                 vec![text, underline]
             } else {
                 let hashes = "#".repeat(level as usize);
@@ -592,6 +588,7 @@ fn render_code_span(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adept::markdown::heading_text_can_use_setext;
 
     // These two `marker_like` arms (4-space indent, link-reference
     // definition) are defensive backstops: no token `build_tokens` can
@@ -634,6 +631,16 @@ mod tests {
         // `a < b` mid-prose is a plain comparison, not an HTML tag start;
         // `looks_like_html_start` must not flag a lone `<`.
         assert!(!marker_like("<"));
+    }
+
+    #[test]
+    fn setext_is_capped_at_h2_regardless_of_text() {
+        // The level cap lives in `heading_can_use_setext` alongside the
+        // text predicate so the printer and `SL105` share both halves.
+        assert!(heading_can_use_setext(1, "Title"));
+        assert!(heading_can_use_setext(2, "Title"));
+        assert!(!heading_can_use_setext(3, "Title"));
+        assert!(!heading_can_use_setext(1, ">quoted"));
     }
 
     #[test]
