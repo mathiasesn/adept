@@ -180,10 +180,35 @@ impl EvalReport {
                 ));
             }
             if !evals.ambiguous_case_ids.is_empty() {
-                out.push_str(&format!(
-                    "  ambiguous case ids (empty or duplicated, not graded): {:?}\n",
-                    evals.ambiguous_case_ids
-                ));
+                let empty_count = evals
+                    .ambiguous_case_ids
+                    .iter()
+                    .filter(|id| id.is_empty())
+                    .count();
+                let duplicated: Vec<&String> = evals
+                    .ambiguous_case_ids
+                    .iter()
+                    .filter(|id| !id.is_empty())
+                    .collect();
+                match (empty_count, duplicated.is_empty()) {
+                    (0, _) => {
+                        out.push_str(&format!(
+                            "  ambiguous case ids (duplicated, not graded): {duplicated:?}\n"
+                        ));
+                    }
+                    (n, true) => {
+                        let case_word = if n == 1 { "case" } else { "cases" };
+                        out.push_str(&format!(
+                            "  ambiguous case ids (not graded): {n} {case_word} with an empty id\n"
+                        ));
+                    }
+                    (n, false) => {
+                        let case_word = if n == 1 { "case" } else { "cases" };
+                        out.push_str(&format!(
+                            "  ambiguous case ids (not graded): {n} {case_word} with an empty id, and duplicated ids {duplicated:?}\n"
+                        ));
+                    }
+                }
             }
             if let (Some(tin), Some(tout)) = (evals.tokens_in, evals.tokens_out) {
                 out.push_str(&format!("tokens: {tin} in / {tout} out\n"));
@@ -266,5 +291,42 @@ mod tests {
         let json = serde_json::to_string(&report).unwrap();
         let parsed: EvalReport = serde_json::from_str(&json).unwrap();
         assert_eq!(report, parsed);
+    }
+
+    fn report_with_ambiguous_ids(ambiguous_case_ids: Vec<String>) -> EvalReport {
+        EvalReport {
+            evals: Some(adept::evals::EvalBenchmarkReport {
+                ambiguous_case_ids,
+                ..Default::default()
+            }),
+            ..EvalReport::new("demo")
+        }
+    }
+
+    /// An empty case id must not render as the unhelpful `[""]` (P3): it is
+    /// called out with explicit "empty id" wording. This also pins the
+    /// `ambiguous_case_ids` render branch itself (S3) — deleting that branch
+    /// makes this assertion fail.
+    #[test]
+    fn render_reports_only_empty_ambiguous_ids_with_count_not_quoted_empty_string() {
+        let out = report_with_ambiguous_ids(vec!["".to_string()]).render();
+        assert!(out.contains("1 case with an empty id"));
+        assert!(!out.contains("[\"\"]"));
+    }
+
+    #[test]
+    fn render_reports_only_duplicated_ambiguous_ids_without_empty_wording() {
+        let out = report_with_ambiguous_ids(vec!["dup".to_string()]).render();
+        assert!(out.contains("duplicated"));
+        assert!(out.contains("dup"));
+        assert!(!out.contains("empty id"));
+    }
+
+    #[test]
+    fn render_reports_both_empty_and_duplicated_ambiguous_ids() {
+        let out = report_with_ambiguous_ids(vec!["".to_string(), "dup".to_string()]).render();
+        assert!(out.contains("1 case with an empty id"));
+        assert!(out.contains("duplicated"));
+        assert!(out.contains("dup"));
     }
 }

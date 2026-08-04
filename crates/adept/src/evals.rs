@@ -497,7 +497,9 @@ pub struct EvalBenchmarkReport {
     pub tokens_out: Option<u64>,
     /// [`CaseResult::id`] values from results that named an id absent from
     /// the dataset. Such a result is reported here, not graded against an
-    /// arbitrary case.
+    /// arbitrary case. Sorted and deduplicated, so output is stable
+    /// regardless of `results` order and repeated bad ids collapse to one
+    /// entry.
     pub unknown_result_ids: Vec<String>,
     /// Dataset case ids that had no `skill`-arm result at all.
     pub unmatched_cases: Vec<String>,
@@ -634,6 +636,8 @@ pub fn grade(cases: &[EvalCase], results: &[CaseResult]) -> EvalBenchmarkReport 
         report.tokens_in = Some(tokens_in);
         report.tokens_out = Some(tokens_out);
     }
+    report.unknown_result_ids.sort();
+    report.unknown_result_ids.dedup();
 
     report
 }
@@ -1226,6 +1230,31 @@ mod tests {
         assert!(report.cases.is_empty());
         // Not graded against the one case that does exist either.
         assert_eq!(report.pass_rate, 0.0);
+    }
+
+    #[test]
+    fn grade_deduplicates_and_sorts_unknown_result_ids() {
+        // Ten results naming the same bad id must not yield ten identical
+        // entries, and entries must come back sorted regardless of the
+        // order results named them in — matching `ambiguous_case_ids`'s
+        // guarantee.
+        let cases = vec![contains_case("a", "hello")];
+        let results = vec![
+            skill_result("zzz", "hello"),
+            skill_result("nonexistent", "hello"),
+            skill_result("nonexistent", "hello"),
+            skill_result("aaa", "hello"),
+            skill_result("zzz", "hello"),
+        ];
+        let report = grade(&cases, &results);
+        assert_eq!(
+            report.unknown_result_ids,
+            vec![
+                "aaa".to_string(),
+                "nonexistent".to_string(),
+                "zzz".to_string()
+            ]
+        );
     }
 
     #[test]
