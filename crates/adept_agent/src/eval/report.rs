@@ -190,25 +190,18 @@ impl EvalReport {
                     .iter()
                     .filter(|id| !id.is_empty())
                     .collect();
-                match (empty_count, duplicated.is_empty()) {
-                    (0, _) => {
-                        out.push_str(&format!(
-                            "  ambiguous case ids (duplicated, not graded): {duplicated:?}\n"
-                        ));
-                    }
-                    (n, true) => {
-                        let case_word = if n == 1 { "case" } else { "cases" };
-                        out.push_str(&format!(
-                            "  ambiguous case ids (not graded): {n} {case_word} with an empty id\n"
-                        ));
-                    }
-                    (n, false) => {
-                        let case_word = if n == 1 { "case" } else { "cases" };
-                        out.push_str(&format!(
-                            "  ambiguous case ids (not graded): {n} {case_word} with an empty id, and duplicated ids {duplicated:?}\n"
-                        ));
-                    }
+                let mut parts: Vec<String> = Vec::with_capacity(2);
+                if empty_count > 0 {
+                    let case_word = if empty_count == 1 { "case" } else { "cases" };
+                    parts.push(format!("{empty_count} {case_word} with an empty id"));
                 }
+                if !duplicated.is_empty() {
+                    parts.push(format!("duplicated ids {duplicated:?}"));
+                }
+                out.push_str(&format!(
+                    "  ambiguous case ids (not graded): {}\n",
+                    parts.join(", and ")
+                ));
             }
             if let (Some(tin), Some(tout)) = (evals.tokens_in, evals.tokens_out) {
                 out.push_str(&format!("tokens: {tin} in / {tout} out\n"));

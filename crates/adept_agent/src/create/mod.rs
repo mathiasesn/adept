@@ -338,22 +338,29 @@ pub async fn generate_evals(
 /// `adept::evals::validate`'s uniqueness check. Returns the survivors plus
 /// how many were dropped.
 fn dedup_eval_cases(cases: Vec<evals::EvalCase>) -> (Vec<evals::EvalCase>, usize) {
+    // Deliberately compares `prompt` + `assertions` field-wise rather than
+    // keying on the (already-computed, content-addressed) `id`. Id equality is
+    // *digest* equality, and the digest is truncated to `DIGEST_HEX_LEN` hex
+    // chars — so id-keyed dedup would silently discard a genuinely distinct
+    // case that happened to collide. Comparing the content itself keeps
+    // collisions loud: two differing cases both survive to `validate_cases`,
+    // which rejects the dataset on the duplicate id.
+    //
     // `evals::Assertion` derives `PartialEq` but not `Hash`/`Eq`, and dataset
     // sizes here are small (bounded by `options.eval_cases`, tens of cases at
     // most), so a linear membership check against what's been kept so far is
     // simpler than introducing a hashable proxy key.
-    let mut kept: Vec<evals::EvalCase> = Vec::with_capacity(cases.len());
-    let mut dropped = 0usize;
+    let total = cases.len();
+    let mut kept: Vec<evals::EvalCase> = Vec::with_capacity(total);
     for case in cases {
         let is_duplicate = kept
             .iter()
             .any(|k| k.prompt == case.prompt && k.assertions == case.assertions);
-        if is_duplicate {
-            dropped += 1;
-        } else {
+        if !is_duplicate {
             kept.push(case);
         }
     }
+    let dropped = total - kept.len();
     (kept, dropped)
 }
 
