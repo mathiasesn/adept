@@ -248,7 +248,7 @@ impl SkillRule for InvalidNameFormat {
         )
         .with_fix_suggestion(format!(
             "use lowercase letters, digits, and hyphens only, e.g. \"{}\"",
-            to_kebab_case(name)
+            crate::text::to_kebab_case(name)
         ))]
     }
 }
@@ -259,22 +259,4 @@ fn is_kebab_case(s: &str) -> bool {
     }
     s.chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
-fn to_kebab_case(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_dash = false;
-    for c in s.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-            prev_dash = false;
-        } else if !prev_dash && !out.is_empty() {
-            out.push('-');
-            prev_dash = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    out
 }

@@ -273,6 +273,12 @@ fn render_human(report: &adept_agent::CreateReport) -> String {
         "{} eval case(s) generated\n",
         report.eval_cases.len()
     ));
+    if report.duplicate_eval_cases_dropped > 0 {
+        out.push_str(&format!(
+            "{} duplicate eval case(s) dropped\n",
+            report.duplicate_eval_cases_dropped
+        ));
+    }
     for case in &report.eval_cases {
         let kinds: Vec<&str> = case
             .assertions
@@ -519,6 +525,48 @@ mod tests {
             .unwrap()
             .keys()
             .any(|k| k.ends_with("SKILL.md")));
+    }
+
+    fn base_report() -> adept_agent::CreateReport {
+        adept_agent::CreateReport {
+            skill_name: "demo-skill".to_string(),
+            rounds_used: 1,
+            siblings_found: false,
+            candidate_diagnostics: Vec::new(),
+            new_sibling_diagnostics: Vec::new(),
+            eval_cases: Vec::new(),
+            duplicate_eval_cases_dropped: 0,
+            files: std::collections::BTreeMap::new(),
+            outcome: adept_agent::CreateOutcome::Clean,
+        }
+    }
+
+    #[test]
+    fn render_human_reports_duplicate_eval_cases_dropped() {
+        let mut report = base_report();
+        report.eval_cases = vec![adept::evals::EvalCase {
+            schema_version: 2,
+            id: "case-1".to_string(),
+            prompt: "do the thing".to_string(),
+            assertions: vec![],
+        }];
+        report.duplicate_eval_cases_dropped = 3;
+
+        let out = render_human(&report);
+        assert!(
+            out.contains("3 duplicate eval case(s) dropped\n"),
+            "expected drop count line, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn render_human_omits_drop_line_when_nothing_dropped() {
+        let report = base_report();
+        let out = render_human(&report);
+        assert!(
+            !out.contains("duplicate eval case(s) dropped"),
+            "clean run must not print a drop line, got:\n{out}"
+        );
     }
 
     #[test]

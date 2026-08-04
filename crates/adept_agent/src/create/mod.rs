@@ -131,6 +131,11 @@ pub struct CreateReport {
     pub new_sibling_diagnostics: Vec<Diagnostic>,
     /// The generated eval dataset, already validated.
     pub eval_cases: Vec<evals::EvalCase>,
+    /// How many generated cases were dropped because their `prompt` +
+    /// `assertions` duplicated an earlier case's (ids are content-addressed,
+    /// so two identical cases would otherwise mint the same id and fail
+    /// `adept::evals::validate`; see [`dedup_eval_cases`]).
+    pub duplicate_eval_cases_dropped: usize,
     /// Pending writes: the candidate's `SKILL.md`, every companion file, and
     /// `evals/evals.jsonl`, keyed by absolute path. Never written by this
     /// crate — pass to [`crate::writer::write_all_transactionally`] to
@@ -321,6 +326,57 @@ pub async fn generate_evals(
     brief: &str,
     options: &CreateOptions,
 ) -> Result<Vec<evals::EvalCase>, CreateError> {
+    let (cases, _dropped) = generate_evals_with_drop_count(client, skill, brief, options).await?;
+    Ok(cases)
+}
+
+/// Drop later cases whose `prompt` + `assertions` duplicate an earlier
+/// case's, preserving order and keeping the first occurrence. Two cases
+/// identical in both fields are the same case, not two tests — and since ids
+/// are now content-addressed (see [`candidate::slugify_prompt`]), letting
+/// both through would mint the same id twice and fail
+/// `adept::evals::validate`'s uniqueness check. Returns the survivors plus
+/// how many were dropped.
+fn dedup_eval_cases(cases: Vec<evals::EvalCase>) -> (Vec<evals::EvalCase>, usize) {
+    // Deliberately compares `prompt` + `assertions` field-wise rather than
+    // keying on the (already-computed, content-addressed) `id`. Id equality is
+    // *digest* equality, and the digest is truncated to `DIGEST_HEX_LEN` hex
+    // chars — so id-keyed dedup would silently discard a genuinely distinct
+    // case that happened to collide. Comparing the content itself keeps
+    // collisions loud: two differing cases both survive to `validate_cases`,
+    // which rejects the dataset on the duplicate id.
+    //
+    // `evals::Assertion` derives `PartialEq` but not `Hash`/`Eq`, and dataset
+    // sizes here are small (bounded by `options.eval_cases`, tens of cases at
+    // most), so a linear membership check against what's been kept so far is
+    // simpler than introducing a hashable proxy key.
+    let total = cases.len();
+    let mut kept: Vec<evals::EvalCase> = Vec::with_capacity(total);
+    for case in cases {
+        let is_duplicate = kept
+            .iter()
+            .any(|k| k.prompt == case.prompt && k.assertions == case.assertions);
+        if !is_duplicate {
+            kept.push(case);
+        }
+    }
+    let dropped = total - kept.len();
+    (kept, dropped)
+}
+
+/// The implementation behind [`generate_evals`], additionally reporting how
+/// many generated cases were dropped as content-duplicates (see
+/// [`dedup_eval_cases`]) so [`create_skill`] can surface the count on
+/// [`CreateReport::duplicate_eval_cases_dropped`]. [`generate_evals`] itself
+/// discards the count so its public signature stays unchanged for other
+/// callers (e.g. the `generate_evals` MCP tool) that have no report to put it
+/// on.
+async fn generate_evals_with_drop_count(
+    client: &dyn LlmClient,
+    skill: &Skill,
+    brief: &str,
+    options: &CreateOptions,
+) -> Result<(Vec<evals::EvalCase>, usize), CreateError> {
     let user = crate::eval::prompts::render(
         prompts::CREATE_EVAL_USER_TEMPLATE,
         &[
@@ -348,14 +404,17 @@ pub async fn generate_evals(
         .into_iter()
         .map(|c| evals::EvalCase {
             schema_version: evals::SCHEMA_VERSION,
+            id: candidate::slugify_prompt(&c.prompt, &c.assertions),
             prompt: c.prompt,
             assertions: c.assertions,
         })
         .collect();
 
+    let (cases, dropped) = dedup_eval_cases(cases);
+
     evals::validate_cases(&cases)?;
 
-    Ok(cases)
+    Ok((cases, dropped))
 }
 
 /// One round's screening result: the candidate itself, its own diagnostics,
@@ -571,7 +630,8 @@ pub async fn create_skill(
         CreateOutcome::BestEffort
     };
 
-    let eval_cases = generate_evals(client, &best.skill, brief, options).await?;
+    let (eval_cases, duplicate_eval_cases_dropped) =
+        generate_evals_with_drop_count(client, &best.skill, brief, options).await?;
     let eval_jsonl = evals::to_jsonl(&eval_cases);
 
     let mut files: BTreeMap<PathBuf, String> = BTreeMap::new();
@@ -588,6 +648,7 @@ pub async fn create_skill(
         candidate_diagnostics: best.candidate_diagnostics,
         new_sibling_diagnostics: best.new_sibling_diagnostics,
         eval_cases,
+        duplicate_eval_cases_dropped,
         files,
         outcome,
     })
@@ -881,6 +942,88 @@ mod tests {
             "expected SL401 duplicate-skill-name to be reported: {all_diagnostics:?}"
         );
         assert_eq!(report.skill_name, "existing-skill");
+    }
+
+    /// Acceptance test for #29 / the content-addressed eval case ids spec:
+    /// a dataset written by `create_skill` (via the existing `MockLlmClient`
+    /// path, no network I/O) must be `schema_version: 2` with unique,
+    /// non-empty ids, and must pass `adept::evals::validate` byte-for-byte —
+    /// not just the in-memory `validate_cases` check `generate_evals` already
+    /// runs internally.
+    #[tokio::test]
+    async fn generated_dataset_is_schema_v2_and_passes_validate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("demo-skill");
+
+        let good = valid_generate_json(
+            "demo-skill",
+            "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs.",
+            clean_body(),
+        );
+        let eval = valid_eval_json(5);
+        let mock = MockLlmClient::with_texts(vec![good, eval]);
+
+        let options = base_options();
+        let report = create_skill(&mock, "Extract PDF form data", &out_dir, &options)
+            .await
+            .unwrap();
+
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(report.eval_cases.len(), 5);
+        assert!(report
+            .eval_cases
+            .iter()
+            .all(|c| c.schema_version == evals::SCHEMA_VERSION));
+        assert!(report.eval_cases.iter().all(|c| !c.id.is_empty()));
+        let unique_ids: HashSet<&str> = report.eval_cases.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(unique_ids.len(), report.eval_cases.len());
+
+        let jsonl = report
+            .files
+            .get(&out_dir.join("evals").join("evals.jsonl"))
+            .expect("evals.jsonl written");
+        evals::validate(jsonl).expect("generated dataset must satisfy adept::evals::validate");
+    }
+
+    /// Content-addressed ids (issue #29): a generated response containing
+    /// two identical cases (same `prompt` and `assertions`) must not be
+    /// written as two eval cases sharing one id — `create` drops the
+    /// duplicate, reports the drop count on the report, and the written
+    /// dataset must still pass `adept::evals::validate`.
+    #[tokio::test]
+    async fn duplicate_generated_cases_are_deduped_and_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out_dir = tmp.path().join("demo-skill");
+
+        let good = valid_generate_json(
+            "demo-skill",
+            "Extracts structured data from PDF forms. Use when the user needs form fields pulled out programmatically. Do not use for scanned image-only PDFs.",
+            clean_body(),
+        );
+        let eval = serde_json::json!({
+            "cases": [
+                {"prompt": "extract the fields", "assertions": [{"kind": "contains", "value": "ok"}]},
+                {"prompt": "extract the fields", "assertions": [{"kind": "contains", "value": "ok"}]},
+                {"prompt": "summarize it", "assertions": [{"kind": "contains", "value": "ok"}]},
+            ]
+        })
+        .to_string();
+        let mock = MockLlmClient::with_texts(vec![good, eval]);
+
+        let options = base_options();
+        let report = create_skill(&mock, "Extract PDF form data", &out_dir, &options)
+            .await
+            .unwrap();
+
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(report.eval_cases.len(), 2);
+        assert_eq!(report.duplicate_eval_cases_dropped, 1);
+
+        let jsonl = report
+            .files
+            .get(&out_dir.join("evals").join("evals.jsonl"))
+            .expect("evals.jsonl written");
+        evals::validate(jsonl).expect("deduped dataset must satisfy adept::evals::validate");
     }
 
     /// Regression test for the `--name` fix: when the override is applied

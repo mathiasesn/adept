@@ -82,6 +82,108 @@ impl EvalGenerationResponse {
     }
 }
 
+/// The bounded length a slug's word portion is truncated to, before the
+/// `-<digest>` suffix is appended. Chosen to keep ids short but still
+/// legible; not itself part of the published schema.
+const SLUG_MAX_LEN: usize = 40;
+
+/// How many hex characters of the FNV-1a digest are kept in a generated id.
+const DIGEST_HEX_LEN: usize = 6;
+
+/// FNV-1a 64-bit offset basis (see the reference algorithm; this exact
+/// constant, not `DefaultHasher`, is what makes the digest stable across
+/// runs, platforms, and toolchain versions).
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// FNV-1a 64-bit prime.
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// A from-scratch FNV-1a 64-bit hash. `std::collections::hash_map::DefaultHasher`
+/// is unsuitable here: it is seeded per-process and its algorithm is not a
+/// stability guarantee, so the same input can hash differently across runs —
+/// exactly what a content-addressed id must not do. FNV-1a is simple enough
+/// to inline without pulling in a new dependency.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
+}
+
+/// Build the byte encoding fed to [`fnv1a64`] for a case's `prompt` +
+/// `assertions`.
+///
+/// **This encoding is part of the id contract**: changing it changes every
+/// id it produces. It length-prefixes the prompt (as a little-endian `u64`
+/// byte count) before appending its bytes, then does the same for the
+/// canonical JSON encoding of `assertions` — length-prefixing rather than
+/// using a delimiter means no byte sequence in either field, escaped or not,
+/// can shift bytes from one field into the other and collide two distinct
+/// `(prompt, assertions)` pairs on the same digest. `assertions`'s JSON
+/// encoding is deterministic because `Assertion`/`Vec` serialize fields in
+/// declaration/index order, never a map with unordered keys.
+fn digest_input(prompt: &str, assertions: &[adept::evals::Assertion]) -> Vec<u8> {
+    let assertions_json =
+        serde_json::to_vec(assertions).expect("Vec<Assertion> serialization is infallible");
+
+    let mut bytes = Vec::with_capacity(16 + prompt.len() + assertions_json.len());
+    bytes.extend_from_slice(&(prompt.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(prompt.as_bytes());
+    bytes.extend_from_slice(&(assertions_json.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&assertions_json);
+    bytes
+}
+
+/// Derive a short hex digest (first [`DIGEST_HEX_LEN`] hex chars of an
+/// FNV-1a 64-bit hash) over `prompt` + `assertions`, per [`digest_input`]'s
+/// byte encoding.
+fn content_digest(prompt: &str, assertions: &[adept::evals::Assertion]) -> String {
+    let hash = fnv1a64(&digest_input(prompt, assertions));
+    format!("{hash:016x}")[..DIGEST_HEX_LEN].to_string()
+}
+
+/// Derive a deterministic, content-addressed kebab-case id for an eval case
+/// from its `prompt` and `assertions`: a legible slug (lowercase,
+/// non-alphanumerics collapsed to single hyphens, truncated to
+/// [`SLUG_MAX_LEN`] — see the module docs on why that truncation can still
+/// land mid-word) prefixing a short hex digest of `prompt` + `assertions`
+/// (see [`content_digest`]), e.g. `summarize-the-attached-report-49d9c4`.
+///
+/// The id depends only on content, never on position: regenerating the same
+/// case at a different ordinal, or in a different dataset, yields the same
+/// id, and two cases differing anywhere in `prompt` or `assertions` yield
+/// different ids (barring a digest collision). A prompt that slugifies to
+/// nothing (e.g. all punctuation, or CJK text) falls back to
+/// `case-<digest>` — the digest, not a position, still makes it unique.
+pub fn slugify_prompt(prompt: &str, assertions: &[adept::evals::Assertion]) -> String {
+    // `to_kebab_case` is the shared definition of a kebab-case rewrite (the
+    // same one `SL005` suggests), and it guarantees a pure-ASCII result — so
+    // truncating on a byte offset below cannot split a character.
+    let mut slug = adept::text::to_kebab_case(prompt);
+
+    if slug.len() > SLUG_MAX_LEN {
+        // Back up to the last hyphen boundary within the truncated slice, if
+        // one exists, so the cut usually lands on a word boundary. When the
+        // first SLUG_MAX_LEN bytes contain no hyphen at all (one very long
+        // first word), this still cuts mid-word — harmless now that
+        // uniqueness comes from the digest suffix, not the slug. Both
+        // `to_kebab_case`'s pure-ASCII guarantee and the hyphen boundary
+        // itself mean this can never land on a multi-byte UTF-8 boundary.
+        let truncated = &slug[..SLUG_MAX_LEN];
+        let end = truncated.rfind('-').unwrap_or(SLUG_MAX_LEN);
+        slug.truncate(end);
+    }
+
+    let digest = content_digest(prompt, assertions);
+    if slug.is_empty() {
+        format!("case-{digest}")
+    } else {
+        format!("{slug}-{digest}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +221,77 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.cases.len(), 1);
         assert_eq!(parsed.cases[0].prompt, "do it");
+    }
+
+    #[test]
+    fn slugify_normal_prose_prompt() {
+        let id = slugify_prompt("Summarize the attached report", &[]);
+        assert_eq!(id, "summarize-the-attached-report-49d9c4");
+    }
+
+    #[test]
+    fn slugify_truncates_long_prompt_without_leaving_a_trailing_hyphen() {
+        let prompt = "This is a very long prompt that goes on and on and on describing a task in exhaustive detail for no good reason at all";
+        let id = slugify_prompt(prompt, &[]);
+        let digest = content_digest(prompt, &[]);
+        assert!(id.ends_with(&digest));
+        let slug_part = id.strip_suffix(&format!("-{digest}")).unwrap();
+        assert!(!slug_part.contains("--"));
+        assert!(slug_part.len() <= SLUG_MAX_LEN);
+        assert!(!slug_part.starts_with('-'));
+        assert!(!slug_part.ends_with('-'));
+    }
+
+    /// Same prompt, same assertions: regenerating a case at a different
+    /// ordinal or position must yield the same id — this is the whole point
+    /// of content-addressing (issue #29).
+    #[test]
+    fn slugify_is_stable_across_regeneration_at_a_different_position() {
+        let assertions = vec![adept::evals::Assertion::Contains {
+            value: "ok".to_string(),
+        }];
+        let a = slugify_prompt("Extract action items", &assertions);
+        let b = slugify_prompt("Extract action items", &assertions);
+        assert_eq!(a, b);
+        assert_eq!(a, "extract-action-items-".to_string() + &a[a.len() - 6..]);
+    }
+
+    /// Two cases with identical prompts but different assertions must not
+    /// collide on id.
+    #[test]
+    fn slugify_differs_when_only_assertions_differ() {
+        let a = slugify_prompt(
+            "Extract action items",
+            &[adept::evals::Assertion::Contains {
+                value: "ok".to_string(),
+            }],
+        );
+        let b = slugify_prompt(
+            "Extract action items",
+            &[adept::evals::Assertion::Contains {
+                value: "different".to_string(),
+            }],
+        );
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn slugify_falls_back_when_prompt_has_no_ascii_alphanumerics() {
+        let id = slugify_prompt("!!! ??? ...", &[]);
+        assert!(id.starts_with("case-"));
+        assert_eq!(id.len(), "case-".len() + DIGEST_HEX_LEN);
+
+        let cjk_id = slugify_prompt("要約してください", &[]);
+        assert!(cjk_id.starts_with("case-"));
+        // Different prompt content, so the fallback ids must still differ.
+        assert_ne!(id, cjk_id);
+    }
+
+    #[test]
+    fn digest_is_deterministic_for_a_fixed_input() {
+        assert_eq!(
+            content_digest("Summarize the attached report", &[]),
+            "49d9c4"
+        );
     }
 }

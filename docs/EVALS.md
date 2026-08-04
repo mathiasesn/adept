@@ -33,14 +33,23 @@ case object.
 ## The case object
 
 ```json
-{"schema_version": 1, "prompt": "Summarize the attached report.", "assertions": [{"kind": "contains", "value": "summary"}, {"kind": "file_exists", "path": "out/summary.md"}, {"kind": "file_contains", "path": "out/summary.md", "value": "conclusion"}, {"kind": "command", "command": "test -s out/summary.md"}]}
+{"schema_version": 2, "id": "summarize-the-attached-report-49d9c4", "prompt": "Summarize the attached report.", "assertions": [{"kind": "contains", "value": "summary"}, {"kind": "file_exists", "path": "out/summary.md"}, {"kind": "file_contains", "path": "out/summary.md", "value": "conclusion"}, {"kind": "command", "command": "test -s out/summary.md"}]}
 ```
 
 | Field | Type | Meaning |
 |---|---|---|
-| `schema_version` | integer | Schema version this line was written against. Current: `1` (`adept::evals::SCHEMA_VERSION`). |
+| `schema_version` | integer | Schema version this line was written against. Current: `2` (`adept::evals::SCHEMA_VERSION`). |
+| `id` | string | This case's identity, stable across reordering of the file. Must be non-empty and unique across the dataset (see [Validation](#validation)). `adept create` generates a content-addressed id, `<prompt-slug>-<6-hex-digest>` (e.g. `summarize-the-attached-report-49d9c4`): a kebab-case slug of the prompt's leading words prefixing a 6-hex-char digest over the case's `prompt` and `assertions`. Identity is purely content-derived — identical `prompt`/`assertions` yield the same id regardless of position in the file or which generation run produced it — so `create` drops later duplicate cases before writing rather than emit two cases sharing one id. A hand-written dataset may use any non-empty string. |
 | `prompt` | string | The prompt the skill under test should handle. |
 | `assertions` | array | Deterministic checks run against the response. May be empty. |
+
+`id` is deserialized with `#[serde(default)]`, so it is not a hard
+deserialization requirement — but it *is* required in practice: an absent or
+empty `id` fails validation (see below). The default exists only so a
+`schema_version: 1` line (which predates `id` and so never has it) still
+deserializes far enough for the `schema_version` check to run first and
+report the real reason the line is rejected — unsupported schema version, not
+a generic missing-field parse error.
 
 `schema_version` is **not** the same axis as adept's prompt versioning
 (`adept_agent::eval::prompts::PROMPT_VERSION`; see ARCHI §10). Prompt wording
@@ -118,7 +127,10 @@ adept validates that `command` is a non-empty string.
 1. every non-blank line parses as a case object (an unknown assertion `kind`
    surfaces here, naming the offending line);
 2. every `schema_version` is one this build understands;
-3. the dataset is non-empty.
+3. every `id` is non-empty;
+4. every `id` is unique across the dataset (a duplicate names the offending
+   line);
+5. the dataset is non-empty.
 
 It does not check whether assertions are *satisfiable* — that requires running
 them, which is the part adept does not do.
@@ -142,7 +154,7 @@ only. Also JSONL: one `adept::evals::CaseResult` per line, blank lines skipped.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `case` | yes | Which dataset case this is for — the 1-indexed line number in `evals/evals.jsonl`. |
+| `id` | yes | Which dataset case this is for, by `EvalCase::id`. An `id` absent from the dataset is reported in `unknown_result_ids`, never graded against an arbitrary case. An `id` that is empty or shared by more than one dataset case is *ambiguous* and is reported in `ambiguous_case_ids` instead — see below. |
 | `arm` | no | `"skill"` (default) or `"baseline"`. The baseline arm is what makes skill lift computable; a file that never mentions arms is graded as all-`skill`. |
 | `response` | yes | The agent's response text, graded by `contains`. |
 | `cwd` | no | Working directory the case ran in. `file_exists`/`file_contains` resolve against it; absent means those are `skipped`. |
@@ -169,6 +181,10 @@ companion-path sandboxing `adept_agent` uses elsewhere.
 
 `EvalBenchmarkReport` (in the spirit of upskill's `upskill eval`) reports:
 
+Each entry in `EvalBenchmarkReport::cases` is a `CaseReport`, whose `case`
+field carries the graded case's `id` (not a display label) — the same field
+name `CaseResult::id` uses on the input side.
+
 - **Pass rate** — fraction of `skill`-arm results that passed.
 - **Assertion success rate** — assertions met over assertions *checked*.
   Skipped assertions leave both numerator and denominator, and are reported
@@ -178,10 +194,23 @@ companion-path sandboxing `adept_agent` uses elsewhere.
   rather than zero when there is no baseline: a skill evaluated alone has no
   counterfactual.
 - **Token usage** — summed input/output across results reporting `tokens`.
-- **Out-of-range and unmatched cases** — a result naming a `case` outside the
+- **Unknown and unmatched cases** — a result naming an `id` absent from the
   dataset, or a dataset case with no `skill`-arm result, is reported
-  explicitly (`out_of_range_results` / `unmatched_cases`), never silently
-  ignored.
+  explicitly (`unknown_result_ids` / `unmatched_cases`, both `id`-valued),
+  never silently ignored. `unknown_result_ids` is sorted and deduplicated, so
+  repeated results naming the same bad id collapse to one entry.
+- **Ambiguous case ids** — `grade` does not trust its caller to have run
+  `validate` first. If `cases` itself contains an empty id, or an id shared
+  by more than one case, that id is ambiguous: it is excluded from the
+  id → case lookup entirely, and any result naming it is neither graded
+  against one arbitrary member of the duplicate set nor counted as
+  `unknown_result_ids` (it *is* a real id, just not a safe one to resolve).
+  Ambiguous ids are collected into `ambiguous_case_ids` (sorted,
+  deduplicated) so a dataset that skipped `validate` fails loud instead of
+  misgrading silently — this is the specific ambiguity content-addressed
+  case ids exist to remove. A case whose id is ambiguous never appears in
+  `unmatched_cases` either, since it was never a candidate for matching in
+  the first place.
 
 ### Skip semantics
 

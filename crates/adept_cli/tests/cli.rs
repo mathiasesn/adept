@@ -246,11 +246,15 @@ fn eval_select_evals_offline_runs_with_no_model_configured() {
     .unwrap();
     std::fs::write(
         skill_dir.join("evals").join("evals.jsonl"),
-        "{\"schema_version\":1,\"prompt\":\"demo\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        "{\"schema_version\":2,\"id\":\"demo-1\",\"prompt\":\"demo\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
     )
     .unwrap();
     let results_path = dir.path().join("results.jsonl");
-    std::fs::write(&results_path, "{\"case\":1,\"response\":\"it is ok\"}\n").unwrap();
+    std::fs::write(
+        &results_path,
+        "{\"id\":\"demo-1\",\"response\":\"it is ok\"}\n",
+    )
+    .unwrap();
 
     adept()
         .arg("eval")
@@ -279,17 +283,17 @@ fn eval_select_evals_omits_unselected_analysis_sections() {
     .unwrap();
     std::fs::write(
         skill_dir.join("evals").join("evals.jsonl"),
-        "{\"schema_version\":1,\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n\
-         {\"schema_version\":1,\"prompt\":\"two\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"},{\"kind\":\"command\",\"command\":\"true\"}]}\n",
+        "{\"schema_version\":2,\"id\":\"one\",\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n\
+         {\"schema_version\":2,\"id\":\"two\",\"prompt\":\"two\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"},{\"kind\":\"command\",\"command\":\"true\"}]}\n",
     )
     .unwrap();
     let results_path = dir.path().join("results.jsonl");
     std::fs::write(
         &results_path,
-        "{\"case\":1,\"response\":\"it is ok\"}\n\
-         {\"case\":2,\"response\":\"nope\"}\n\
-         {\"case\":1,\"response\":\"whatever\",\"arm\":\"baseline\"}\n\
-         {\"case\":2,\"response\":\"whatever\",\"arm\":\"baseline\"}\n",
+        "{\"id\":\"one\",\"response\":\"it is ok\"}\n\
+         {\"id\":\"two\",\"response\":\"nope\"}\n\
+         {\"id\":\"one\",\"response\":\"whatever\",\"arm\":\"baseline\"}\n\
+         {\"id\":\"two\",\"response\":\"whatever\",\"arm\":\"baseline\"}\n",
     )
     .unwrap();
 
@@ -355,14 +359,14 @@ fn eval_all_skill_cases_pass_with_failing_baseline_exits_zero() {
     .unwrap();
     std::fs::write(
         skill_dir.join("evals").join("evals.jsonl"),
-        "{\"schema_version\":1,\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        "{\"schema_version\":2,\"id\":\"one\",\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
     )
     .unwrap();
     let results_path = dir.path().join("results.jsonl");
     std::fs::write(
         &results_path,
-        "{\"case\":1,\"response\":\"it is ok\"}\n\
-         {\"case\":1,\"response\":\"nope\",\"arm\":\"baseline\"}\n",
+        "{\"id\":\"one\",\"response\":\"it is ok\"}\n\
+         {\"id\":\"one\",\"response\":\"nope\",\"arm\":\"baseline\"}\n",
     )
     .unwrap();
 
@@ -395,11 +399,11 @@ fn eval_one_failing_skill_case_exits_one() {
     .unwrap();
     std::fs::write(
         skill_dir.join("evals").join("evals.jsonl"),
-        "{\"schema_version\":1,\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        "{\"schema_version\":2,\"id\":\"one\",\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
     )
     .unwrap();
     let results_path = dir.path().join("results.jsonl");
-    std::fs::write(&results_path, "{\"case\":1,\"response\":\"nope\"}\n").unwrap();
+    std::fs::write(&results_path, "{\"id\":\"one\",\"response\":\"nope\"}\n").unwrap();
 
     adept()
         .arg("eval")
@@ -416,6 +420,54 @@ fn eval_one_failing_skill_case_exits_one() {
         .stdout(predicate::str::contains("pass rate: 0%"));
 }
 
+/// A result naming a case id absent from the dataset must be surfaced by the
+/// renderer, not silently dropped — the whole point of content-addressed
+/// case ids (spec: "A result naming an identity absent from the dataset is
+/// reported, not graded against an arbitrary case"). The dataset's only case
+/// still passes, so the exit-code contract (0 clean/1 findings/2 usage
+/// error) must still yield `0` even though an anomaly is reported.
+#[test]
+fn eval_result_with_unknown_case_id_is_reported_and_exit_code_contract_holds() {
+    let dir = tempfile::tempdir().unwrap();
+    let skill_dir = dir.path().join("demo");
+    std::fs::create_dir_all(skill_dir.join("evals")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: demo\ndescription: does a demo thing. Use when demoing things.\n---\nBody.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        skill_dir.join("evals").join("evals.jsonl"),
+        "{\"schema_version\":2,\"id\":\"demo-1\",\"prompt\":\"one\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+    )
+    .unwrap();
+    let results_path = dir.path().join("results.jsonl");
+    std::fs::write(
+        &results_path,
+        "{\"id\":\"demo-1\",\"response\":\"it is ok\"}\n\
+         {\"id\":\"does-not-exist\",\"response\":\"whatever\"}\n",
+    )
+    .unwrap();
+
+    adept()
+        .arg("eval")
+        .arg(skill_dir.join("SKILL.md"))
+        .arg("--results")
+        .arg(&results_path)
+        .arg("--select")
+        .arg("evals")
+        .env_remove("ADEPT_MODEL")
+        .env_remove("ADEPT_BASE_URL")
+        .env_remove("ADEPT_API_KEY")
+        .assert()
+        .code(0)
+        .stdout(
+            predicate::str::contains("pass rate: 100%")
+                .and(predicate::str::contains("results with unknown case id"))
+                .and(predicate::str::contains("does-not-exist")),
+        );
+}
+
 #[test]
 fn eval_accepts_skill_directory_path_not_just_skill_md() {
     let dir = tempfile::tempdir().unwrap();
@@ -428,11 +480,15 @@ fn eval_accepts_skill_directory_path_not_just_skill_md() {
     .unwrap();
     std::fs::write(
         skill_dir.join("evals").join("evals.jsonl"),
-        "{\"schema_version\":1,\"prompt\":\"demo\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
+        "{\"schema_version\":2,\"id\":\"demo-1\",\"prompt\":\"demo\",\"assertions\":[{\"kind\":\"contains\",\"value\":\"ok\"}]}\n",
     )
     .unwrap();
     let results_path = dir.path().join("results.jsonl");
-    std::fs::write(&results_path, "{\"case\":1,\"response\":\"it is ok\"}\n").unwrap();
+    std::fs::write(
+        &results_path,
+        "{\"id\":\"demo-1\",\"response\":\"it is ok\"}\n",
+    )
+    .unwrap();
 
     // Pass the skill *directory*, not the SKILL.md file, as the spec's
     // examples do (`adept eval ./my-skill`).
@@ -456,7 +512,11 @@ fn eval_rejects_directory_without_skill_md_with_exit_two() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("not-a-skill")).unwrap();
     let results_path = dir.path().join("results.jsonl");
-    std::fs::write(&results_path, "{\"case\":1,\"response\":\"it is ok\"}\n").unwrap();
+    std::fs::write(
+        &results_path,
+        "{\"id\":\"demo-1\",\"response\":\"it is ok\"}\n",
+    )
+    .unwrap();
 
     adept()
         .arg("eval")

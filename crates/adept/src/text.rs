@@ -1,10 +1,12 @@
-//! Shared cheap text-similarity primitives used by cross-skill heuristics.
+//! Shared cheap text primitives used across the crate stack.
 //!
-//! These are the tokenizer and Jaccard-similarity building blocks shared by
-//! `adept`'s own `SL4xx` cross-skill rules (`rules::cross`) and by
-//! `adept_agent`'s offline overlap shortlist (`adept_agent::eval::overlap`).
-//! Extracted here so the two crates can't silently drift apart on what
-//! counts as a "word" or how similarity is computed; each caller still
+//! These are the tokenizer, Jaccard-similarity, and kebab-casing building
+//! blocks shared by `adept`'s own rules (`rules::cross`'s `SL4xx`,
+//! `rules::frontmatter`'s name suggestions) and by `adept_agent`
+//! (`adept_agent::eval::overlap`'s offline shortlist,
+//! `adept_agent::create`'s eval-case ids). Extracted here so the crates
+//! can't silently drift apart on what counts as a "word", how similarity is
+//! computed, or what a kebab-case rewrite produces; each caller still
 //! chooses its own *input text* and *similarity threshold* independently
 //! (see each caller's docs for why).
 
@@ -46,9 +48,54 @@ pub fn jaccard(a: &HashSet<String>, b: &HashSet<String>) -> f64 {
     }
 }
 
+/// Rewrite `s` into kebab-case: ASCII-lowercased alphanumerics, every other
+/// character run collapsed to a single `-`, with no leading or trailing
+/// hyphen.
+///
+/// Non-ASCII characters are dropped rather than transliterated, so the result
+/// is always pure ASCII — which is what makes it safe for callers to slice on
+/// byte offsets. A string with no ASCII alphanumerics at all (punctuation
+/// only, or e.g. CJK text) kebab-cases to the empty string; callers decide
+/// what to substitute (`SL005` suggests it verbatim, `adept_agent::create`
+/// falls back to a positional id).
+#[must_use]
+pub fn to_kebab_case(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev_dash = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kebab_case_collapses_runs_and_trims_hyphens() {
+        assert_eq!(to_kebab_case("Fills PDF Forms!"), "fills-pdf-forms");
+        assert_eq!(
+            to_kebab_case("  __leading & trailing __ "),
+            "leading-trailing"
+        );
+        assert_eq!(to_kebab_case("already-kebab-2"), "already-kebab-2");
+    }
+
+    #[test]
+    fn kebab_case_of_text_with_no_ascii_alphanumerics_is_empty() {
+        assert_eq!(to_kebab_case("!!! ??? ..."), "");
+        assert_eq!(to_kebab_case("日本語"), "");
+    }
 
     #[test]
     fn identical_text_is_fully_similar() {

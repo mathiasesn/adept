@@ -55,14 +55,14 @@ fn roundtrip_fixture_is_byte_identical() {
 
 #[test]
 fn blank_lines_are_skipped_on_parse() {
-    let text = "\n\n{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[]}\n\n";
+    let text = "\n\n{\"schema_version\":2,\"id\":\"a\",\"prompt\":\"p\",\"assertions\":[]}\n\n";
     let cases = parse_jsonl(text).unwrap();
     assert_eq!(cases.len(), 1);
 }
 
 #[test]
 fn line_number_is_reported_for_bad_json() {
-    let text = "{\"schema_version\":1,\"prompt\":\"p\",\"assertions\":[]}\nnope\n";
+    let text = "{\"schema_version\":2,\"id\":\"a\",\"prompt\":\"p\",\"assertions\":[]}\nnope\n";
     match parse_jsonl(text) {
         Err(EvalError::Parse { line, .. }) => assert_eq!(line, 2),
         other => panic!("expected Parse error at line 2, got {other:?}"),

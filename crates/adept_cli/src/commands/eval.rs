@@ -625,13 +625,13 @@ mod tests {
         .unwrap();
         std::fs::write(
             skill_dir.join("evals").join("evals.jsonl"),
-            r#"{"schema_version":1,"prompt":"demo","assertions":[{"kind":"contains","value":"ok"}]}"#.to_string() + "\n",
+            r#"{"schema_version":2,"id":"demo-1","prompt":"demo","assertions":[{"kind":"contains","value":"ok"}]}"#.to_string() + "\n",
         )
         .unwrap();
         let results_path = dir.path().join("results.jsonl");
         std::fs::write(
             &results_path,
-            r#"{"case":1,"response":"it is ok"}"#.to_string() + "\n",
+            r#"{"id":"demo-1","response":"it is ok"}"#.to_string() + "\n",
         )
         .unwrap();
 
